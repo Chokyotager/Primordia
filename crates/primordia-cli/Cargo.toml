@@ -12,3 +12,7 @@ primordia-telemetry = { version = "0.1.0", path = "../primordia-telemetry" }
 primordia-view = { version = "0.1.0", path = "../primordia-view" }
 serde_json = "1.0.154"
 toml = "1.1.8"
+
+[[bin]]
+name = "primordia"
+path = "src/main.rs"
