@@ -44,6 +44,12 @@ enum Cmd {
         /// Print progress every N epochs
         #[arg(long, default_value_t = 100)]
         progress: u64,
+        /// Intervention log to apply (JSON lines {epoch, kind, params})
+        #[arg(long)]
+        events: Option<PathBuf>,
+        /// Start the viewer running instead of paused
+        #[arg(long)]
+        autorun: bool,
     },
     /// Grid sweep over config keys x seeds.
     Batch {
@@ -226,7 +232,7 @@ fn main() -> Result<()> {
                 println!("{n}");
             }
         }
-        Cmd::Run { config, seed, headless, epochs, out, cpu, set, progress } => {
+        Cmd::Run { config, seed, headless, epochs, out, cpu, set, progress, events, autorun } => {
             let cfg = load_config(&config, seed, &set)?;
             let epochs = epochs.unwrap_or(cfg.epochs);
             let dir = out.unwrap_or_else(|| default_dir(&cfg, &config));
@@ -235,12 +241,20 @@ fn main() -> Result<()> {
             println!("primordia run: {} cells, dims {}, backend {name}, out {}", p.geom.n, p.geom.dims, dir.display());
             let mut rd = RunDir::create(&dir, &cfg, &name, None)?;
             let mut sim = Sim::from_state(cfg.clone(), p.clone(), State::init(&cfg, &p), be)?;
+            if let Some(ev) = events {
+                for e in read_events(&ev)? {
+                    sim.push_event(e);
+                }
+            }
             if headless {
                 let s = run_headless(&mut sim, &mut rd, epochs, progress)?;
                 print_summary(&s);
                 println!("{}", serde_json::to_string_pretty(&s)?);
             } else {
                 let rec = Recorder::new(Some(&dir), &sim)?;
+                for e in &sim.events {
+                    rd.log_event(e)?;
+                }
                 primordia_view::run_viewer(sim, rec, Box::new(move |s: &Sim, ev: Option<&Event>, snap: bool| -> Result<Option<PathBuf>> {
                     if let Some(e) = ev {
                         rd.log_event(e)?;
@@ -250,7 +264,7 @@ fn main() -> Result<()> {
                         return Ok(Some(rd.snapshot(s)?));
                     }
                     Ok(None)
-                }))?;
+                }), autorun)?;
             }
         }
         Cmd::Replay { run_dir, to, cpu } => replay(&run_dir, to, cpu)?,

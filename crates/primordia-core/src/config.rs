@@ -405,7 +405,7 @@ impl Default for SunCfg {
             day_period: 2000,
             season_period: 0,
             season_amplitude: 0.0,
-            heat: 0.5,
+            heat: 0.02,
         }
     }
 }

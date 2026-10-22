@@ -80,9 +80,15 @@ pub fn sandbox_identity(p: &Params, genome: &[u8]) -> f64 {
     }
     let snap = flag_snapshot(&st);
     exec_slice(&mut st, p, &snap, 0, Some(1), None);
+    // identity over the genome's non-empty sites, so that mostly-empty tapes
+    // do not "match" the empty partner
     let plen = st.len(1);
-    let same = (0..n.min(plen)).filter(|&i| st.tapes[l + i] == genome[i]).count();
-    same as f64 / n as f64
+    let nz: Vec<usize> = (0..n).filter(|&i| genome[i] != 0).collect();
+    if nz.len() < 2 {
+        return 0.0;
+    }
+    let same = nz.iter().filter(|&&i| i < plen && st.tapes[l + i] == genome[i]).count();
+    same as f64 / nz.len() as f64
 }
 
 pub fn assay_genome(cfg: &Config, genome: &[u8], count: usize) -> AssayResult {

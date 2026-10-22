@@ -84,11 +84,11 @@ enum Cmd {
     Quit,
 }
 
-pub fn run_viewer(sim: Sim, rec: Recorder, hook: Hook) -> Result<()> {
+pub fn run_viewer(sim: Sim, rec: Recorder, hook: Hook, autorun: bool) -> Result<()> {
     let out = Arc::new(Mutex::new(Out::default()));
     let (tx, rx) = channel();
     let o2 = out.clone();
-    let worker = std::thread::spawn(move || worker(sim, rec, hook, rx, o2));
+    let worker = std::thread::spawn(move || worker(sim, rec, hook, rx, o2, autorun));
     let opts = eframe::NativeOptions { viewport: egui::ViewportBuilder::default().with_inner_size([1600.0, 1000.0]).with_title("Primordia"), ..Default::default() };
     let app = App::new(tx.clone(), out);
     let r = eframe::run_native("Primordia", opts, Box::new(|_cc| Ok(Box::new(app))));
@@ -99,8 +99,8 @@ pub fn run_viewer(sim: Sim, rec: Recorder, hook: Hook) -> Result<()> {
 
 // ------------------------------------------------------------------ worker
 
-fn worker(mut sim: Sim, mut rec: Recorder, mut hook: Hook, rx: Receiver<Cmd>, out: Arc<Mutex<Out>>) {
-    let mut running = false;
+fn worker(mut sim: Sim, mut rec: Recorder, mut hook: Hook, rx: Receiver<Cmd>, out: Arc<Mutex<Out>>, autorun: bool) {
+    let mut running = autorun;
     let mut pending_steps = 0u64;
     let mut redraw_every = 1u64;
     let mut view = ViewSettings::default(&sim.p);
@@ -710,7 +710,7 @@ impl eframe::App for App {
         }
 
         // ---------------- bottom: plots
-        egui::Panel::bottom("plots").default_size(230.0).resizable(true).show(ui, |ui| {
+        egui::Panel::bottom("plots").exact_size(250.0).show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
                 for (k, on) in self.plots.iter_mut() {
                     ui.checkbox(on, k);
@@ -724,7 +724,7 @@ impl eframe::App for App {
             let shown: Vec<String> = self.plots.iter().filter(|(_, on)| **on).map(|(k, _)| k.clone()).collect();
             let n = shown.len().max(1);
             let w = (ui.available_width() / n as f32).max(160.0) - 8.0;
-            let h = ui.available_height() - 4.0;
+            let h = 200.0;
             ui.horizontal(|ui| {
                 for k in shown {
                     ui.vertical(|ui| {
@@ -843,5 +843,48 @@ impl eframe::App for App {
                 }
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use primordia_core::{Config, CpuExec};
+
+    #[test]
+    fn render_all_modes_and_inspect() {
+        for dims in 0..=3u32 {
+            let mut c = Config::preset("primordia-2d-sun").unwrap();
+            c.world.dims = dims;
+            c.world.size = match dims {
+                0 => vec![300],
+                1 => vec![60],
+                2 => vec![30, 24],
+                _ => vec![9, 9, 9],
+            };
+            c.energy.vents.enabled = true;
+            let mut sim = Sim::new(c, Box::new(CpuExec)).unwrap();
+            for _ in 0..5 {
+                sim.step();
+            }
+            let mut v = ViewSettings::default(&sim.p);
+            let mut hist = vec![];
+            for m in Mode::all() {
+                v.mode = m;
+                let f = render::render(&sim.st, &sim.p, &v, &[], &mut hist);
+                assert!(!f.images.is_empty());
+                for im in &f.images {
+                    assert_eq!(im.rgba.len(), im.w * im.h * 4);
+                }
+            }
+            let c = (0..sim.st.n).find(|&c| sim.st.occupied(c)).unwrap();
+            let ins = inspect(&sim, c, &HashMap::new());
+            assert!(!ins.trace.is_empty(), "debugger trace for dims {dims}");
+            assert!(ins.text.contains("lineage"));
+            let empty = (0..sim.st.n).find(|&c| !sim.st.occupied(c));
+            if let Some(e) = empty {
+                inspect(&sim, e, &HashMap::new());
+            }
+        }
     }
 }
