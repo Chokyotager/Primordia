@@ -1,1 +1,263 @@
-pub fn constants() -> String { String::new() }
+//! Generates the WGSL constant block (layout, opcode-independent tables,
+//! rotation group) and the packed parameter buffer for the GPU interpreter,
+//! so CPU and GPU share one source of truth.
+
+use crate::geom::Orient;
+use crate::params::*;
+use crate::rng::phase;
+
+/// Indices into the packed u32 parameter buffer.
+pub mod pi {
+    pub const N: usize = 0;
+    pub const DIMS: usize = 1;
+    pub const SX: usize = 2;
+    pub const SY: usize = 3;
+    pub const SZ: usize = 4;
+    pub const LMAX: usize = 5;
+    pub const NF: usize = 6;
+    pub const K: usize = 7;
+    pub const S: usize = 8;
+    pub const BUDGET: usize = 9;
+    pub const FLAGS: usize = 10;
+    pub const SEED_LO: usize = 11;
+    pub const SEED_HI: usize = 12;
+    pub const EPOCH: usize = 13;
+    pub const MIRRORED: usize = 14;
+    pub const MOVE_OCC: usize = 15;
+    pub const PSUB: usize = 16;
+    pub const PINS: usize = 17;
+    pub const PDEL: usize = 18;
+    pub const SIGMA_MIN: usize = 19;
+    pub const ETA_MIN: usize = 20;
+    pub const CI: usize = 21;
+    pub const FOLD_W: usize = 22;
+    pub const NCAT_EV: usize = 23;
+    pub const HEAT: usize = 24;
+    pub const E_SCALE: usize = 25;
+    pub const F_SCALE: usize = 26;
+    pub const SIG_EMIT: usize = 27;
+    pub const NCAT: usize = 28;
+    pub const COLOR: usize = 29;
+    pub const NCOLOR_CELLS: usize = 30;
+    pub const EXT_X: usize = 31;
+    pub const EXT_Y: usize = 32;
+    pub const EXT_Z: usize = 33;
+    pub const NPAIRS: usize = 34;
+    pub const COSTS: usize = 64;
+    pub const PWRITE: usize = 320;
+    pub const CAT: usize = 384;
+    pub const CAT_STRIDE: usize = 6;
+    pub const MAX_CAT: usize = 16;
+    pub const LEN: usize = CAT + CAT_STRIDE * MAX_CAT;
+}
+
+pub mod flag {
+    pub const ENERGY: u32 = 1;
+    pub const CHEM: u32 = 2;
+    pub const MATTER: u32 = 4;
+    pub const SIG: u32 = 8;
+    pub const SHIELD: u32 = 16;
+    pub const BONDS: u32 = 32;
+    pub const STEREO: u32 = 64;
+    pub const STEREO_COPY: u32 = 128;
+    pub const SHIELD_BYTE: u32 = 256;
+    pub const PAIR_CONCAT: u32 = 512;
+    pub const PAIR_RANDOM: u32 = 1024;
+    pub const RANDOM_FACING: u32 = 2048;
+}
+
+/// Static (per-config) part of the parameter buffer. EPOCH, MIRRORED, COLOR
+/// and NPAIRS are patched per dispatch.
+pub fn param_words(p: &Params) -> Vec<u32> {
+    let mut w = vec![0u32; pi::LEN];
+    let g = &p.geom;
+    w[pi::N] = g.n as u32;
+    w[pi::DIMS] = g.dims;
+    w[pi::SX] = g.size[0];
+    w[pi::SY] = g.size[1];
+    w[pi::SZ] = g.size[2];
+    w[pi::LMAX] = p.lmax as u32;
+    w[pi::NF] = p.nf as u32;
+    w[pi::K] = p.k as u32;
+    w[pi::S] = p.s as u32;
+    w[pi::BUDGET] = p.budget;
+    let mut f = 0;
+    for (on, b) in [
+        (p.energy_on, flag::ENERGY),
+        (p.chem_on, flag::CHEM),
+        (p.matter_on, flag::MATTER),
+        (p.sig_on, flag::SIG),
+        (p.shield_on, flag::SHIELD),
+        (p.bonds_on, flag::BONDS),
+        (p.stereo, flag::STEREO),
+        (p.stereo_copy, flag::STEREO_COPY),
+        (p.shield_byte, flag::SHIELD_BYTE),
+        (p.pair_concat, flag::PAIR_CONCAT),
+        (p.pair_random, flag::PAIR_RANDOM),
+        (p.random_facing, flag::RANDOM_FACING),
+    ] {
+        if on {
+            f |= b;
+        }
+    }
+    w[pi::FLAGS] = f;
+    w[pi::SEED_LO] = p.seed as u32;
+    w[pi::SEED_HI] = (p.seed >> 32) as u32;
+    w[pi::MOVE_OCC] = p.move_occ_cost;
+    w[pi::PSUB] = p.p_sub;
+    w[pi::PINS] = p.p_ins;
+    w[pi::PDEL] = p.p_del;
+    w[pi::SIGMA_MIN] = p.sigma_min_q16 as u32;
+    w[pi::ETA_MIN] = p.eta_min_q16 as u32;
+    w[pi::CI] = p.ci_q16 as u32;
+    w[pi::FOLD_W] = p.fold_w;
+    w[pi::NCAT_EV] = p.n_cat;
+    w[pi::HEAT] = p.heat_q16 as u32;
+    w[pi::E_SCALE] = p.e_scale;
+    w[pi::F_SCALE] = p.f_scale;
+    w[pi::SIG_EMIT] = p.sig_emit;
+    let ncat = p.cat.len().min(pi::MAX_CAT);
+    w[pi::NCAT] = if p.chem_on { ncat as u32 } else { 0 };
+    w[pi::NCOLOR_CELLS] = g.cells_per_color() as u32;
+    let e = g.color_extent();
+    w[pi::EXT_X] = e[0];
+    w[pi::EXT_Y] = e[1];
+    w[pi::EXT_Z] = e[2];
+    w[pi::COSTS..pi::COSTS + 256].copy_from_slice(&p.costs);
+    w[pi::PWRITE..pi::PWRITE + 64].copy_from_slice(&p.pwrite);
+    for (i, &ri) in p.cat.iter().take(ncat).enumerate() {
+        let r = &p.reactions[ri as usize];
+        let b = pi::CAT + i * pi::CAT_STRIDE;
+        w[b] = r.r[0];
+        w[b + 1] = r.r[1];
+        w[b + 2] = r.p[0];
+        w[b + 3] = r.p[1];
+        w[b + 4] = r.energy_q16[0].max(0) as u32;
+        w[b + 5] = r.energy_q16[1].max(0) as u32;
+    }
+    w
+}
+
+fn arr(name: &str, v: &[u32]) -> String {
+    let body: Vec<String> = v.iter().map(|x| format!("{x}u")).collect();
+    format!("const {name}: array<u32, {}> = array<u32, {}>({});\n", v.len(), v.len(), body.join(", "))
+}
+
+/// WGSL constant block.
+pub fn constants() -> String {
+    let o = Orient::new();
+    let mut s = String::new();
+    s += "// ---- generated by primordia-core::wgsl ----\n";
+    s += &format!("const HDR: u32 = {}u;\nconst SITE: u32 = {}u;\n", HDR, SITE);
+    for (n, v) in [
+        ("H_LEN", H_LEN),
+        ("H_FLAGS", H_FLAGS),
+        ("H_E", H_E),
+        ("H_SLEEP", H_SLEEP),
+        ("H_LINEAGE", H_LINEAGE),
+        ("H_BIRTH", H_BIRTH),
+        ("H_PARENT", H_PARENT),
+        ("H_DEPTH", H_DEPTH),
+        ("H_ZERO", H_ZERO),
+        ("S_SPENT", S_SPENT),
+        ("S_VOTE", S_VOTE),
+        ("S_WALL", S_WALL),
+        ("S_RXN", S_RXN),
+    ] {
+        s += &format!("const {n}: u32 = {v}u;\n");
+    }
+    for (n, v) in [
+        ("FL_OCC", FL_OCC),
+        ("FL_HALT", FL_HALT),
+        ("FL_EXEC", FL_EXEC),
+        ("FL_NEWBORN", FL_NEWBORN),
+        ("ORIENT_SHIFT", ORIENT_SHIFT),
+        ("ORIENT_MASK", ORIENT_MASK),
+        ("BOND_SHIFT", BOND_SHIFT),
+        ("BOND_MASK", BOND_MASK),
+        ("PHASE_EXEC", phase::EXEC),
+        ("PHASE_LINEAGE", phase::LINEAGE),
+    ] {
+        s += &format!("const {n}: u32 = {v}u;\n");
+    }
+    for (n, v) in [
+        ("P_N", pi::N),
+        ("P_DIMS", pi::DIMS),
+        ("P_SX", pi::SX),
+        ("P_SY", pi::SY),
+        ("P_SZ", pi::SZ),
+        ("P_LMAX", pi::LMAX),
+        ("P_NF", pi::NF),
+        ("P_K", pi::K),
+        ("P_S", pi::S),
+        ("P_BUDGET", pi::BUDGET),
+        ("P_FLAGS", pi::FLAGS),
+        ("P_SEED_LO", pi::SEED_LO),
+        ("P_SEED_HI", pi::SEED_HI),
+        ("P_EPOCH", pi::EPOCH),
+        ("P_MIRRORED", pi::MIRRORED),
+        ("P_MOVE_OCC", pi::MOVE_OCC),
+        ("P_PSUB", pi::PSUB),
+        ("P_PINS", pi::PINS),
+        ("P_PDEL", pi::PDEL),
+        ("P_SIGMA_MIN", pi::SIGMA_MIN),
+        ("P_ETA_MIN", pi::ETA_MIN),
+        ("P_CI", pi::CI),
+        ("P_FOLD_W", pi::FOLD_W),
+        ("P_NCAT_EV", pi::NCAT_EV),
+        ("P_HEAT", pi::HEAT),
+        ("P_E_SCALE", pi::E_SCALE),
+        ("P_F_SCALE", pi::F_SCALE),
+        ("P_SIG_EMIT", pi::SIG_EMIT),
+        ("P_NCAT", pi::NCAT),
+        ("P_COLOR", pi::COLOR),
+        ("P_NCOLOR_CELLS", pi::NCOLOR_CELLS),
+        ("P_EXT_X", pi::EXT_X),
+        ("P_EXT_Y", pi::EXT_Y),
+        ("P_EXT_Z", pi::EXT_Z),
+        ("P_NPAIRS", pi::NPAIRS),
+        ("P_COSTS", pi::COSTS),
+        ("P_PWRITE", pi::PWRITE),
+        ("P_CAT", pi::CAT),
+        ("CAT_STRIDE", pi::CAT_STRIDE),
+    ] {
+        s += &format!("const {n}: u32 = {v}u;\n");
+    }
+    for (n, v) in [
+        ("F_ENERGY", flag::ENERGY),
+        ("F_CHEM", flag::CHEM),
+        ("F_MATTER", flag::MATTER),
+        ("F_SIG", flag::SIG),
+        ("F_SHIELD", flag::SHIELD),
+        ("F_BONDS", flag::BONDS),
+        ("F_STEREO", flag::STEREO),
+        ("F_STEREO_COPY", flag::STEREO_COPY),
+        ("F_SHIELD_BYTE", flag::SHIELD_BYTE),
+        ("F_PAIR_CONCAT", flag::PAIR_CONCAT),
+        ("F_PAIR_RANDOM", flag::PAIR_RANDOM),
+        ("F_RANDOM_FACING", flag::RANDOM_FACING),
+    ] {
+        s += &format!("const {n}: u32 = {v}u;\n");
+    }
+    s += &arr("OR_F", &o.f);
+    s += &arr("OR_LEFT", &o.left);
+    s += &arr("OR_RIGHT", &o.right);
+    s += &arr("OR_YAW_L", &o.yaw_l);
+    s += &arr("OR_YAW_D", &o.yaw_d);
+    s += &arr("OR_PITCH", &o.pitch);
+    s += &arr("OR_ROLL_L", &o.roll_l);
+    s += &arr("OR_ROLL_D", &o.roll_d);
+    s += &arr("OR_REVERSE", &o.reverse);
+    s += &arr("OR_MIRROR", &o.mirror);
+    let mut valid = vec![0u32; 4 * 24];
+    let mut nvalid = vec![0u32; 4];
+    for d in 0..4 {
+        nvalid[d] = o.valid[d].len() as u32;
+        for (i, &v) in o.valid[d].iter().enumerate() {
+            valid[d * 24 + i] = v;
+        }
+    }
+    s += &arr("OR_VALID", &valid);
+    s += &arr("OR_NVALID", &nvalid);
+    s
+}
