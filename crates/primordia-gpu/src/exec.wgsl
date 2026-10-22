@@ -173,6 +173,8 @@ var<private> g_err: bool;
 var<private> ls: u32;
 var<private> lp: u32;
 var<private> pt: u32;
+// set by every op that can change a tape length or the faced partner
+var<private> dirty: bool;
 
 fn rnd() -> u32 {
     let r = philox(P[P_SEED_LO], P[P_SEED_HI], vec4<u32>(canon_id, g_epoch, (PHASE_EXEC << 24u), draw)).x;
@@ -328,6 +330,7 @@ fn write_byte(addr: u32, v_in: u32, ipu: u32, total: u32) -> bool {
         }
     }
     let tl = tlen(t);
+    if (mode != 0u) { dirty = true; }
     if (mode == 2u) {
         let old = tb(t, off);
         release(t, old);
@@ -511,7 +514,10 @@ fn cat(h: u32, sel: i32, ipu: u32, total: u32) {
 
 // Execute one instruction; returns the IP delta or END.
 fn step() -> i32 {
-    lens();
+    if (dirty) {
+        lens();
+        dirty = false;
+    }
     let total = ls + lp;
     if (total == 0u) { return END; }
     let ti = i32(total);
@@ -550,7 +556,7 @@ fn step() -> i32 {
         if (!pay(cost + n)) { return END; }
         let t = nbw(me, facing());
         if (t != NONE) {
-            if (!occ(t)) { new_child(t, n, 0u); }
+            if (!occ(t)) { new_child(t, n, 0u); dirty = true; }
         }
         return 1;
     }
@@ -574,6 +580,7 @@ fn step() -> i32 {
                 let e = H(me, H_E) / 2u;
                 hdr[me * HDR + H_E] = H(me, H_E) - e;
                 new_child(t, n, e);
+                dirty = true;
                 for (var i = 0u; i < n; i = i + 1u) {
                     tset(t, i, tb(me, so + i));
                 }
@@ -737,11 +744,13 @@ fn step() -> i32 {
     } else if (b == 0x1Fu) {
         if (!push(i32(lp))) { return END; }
     } else if (b == 0x1Du) { // GROW
+        dirty = true;
         if (!fixed_len && ls < g_lmax) {
             tset(me, ls, 0u);
             hdr[me * HDR + H_LEN] = ls + 1u;
         }
     } else if (b == 0x1Eu) { // SHRINK
+        dirty = true;
         if (!fixed_len && ls > 0u) {
             let b2 = tb(me, ls - 1u);
             tset(me, ls - 1u, 0u);
@@ -750,6 +759,7 @@ fn step() -> i32 {
         }
     } else if (b >= 0x20u && b <= 0x25u) {
         turn(b);
+        dirty = true;
     } else if (b == 0x26u || b == 0x27u) {
         if (bonds_on && g_dims >= 2u) {
             let o = orient(me);
@@ -820,6 +830,7 @@ fn step() -> i32 {
             }
         }
     } else if (b == 0x6Au) { // TUMBLE
+        dirty = true;
         let r = rnd();
         if (g_dims >= 1u) {
             var o = OR_VALID[g_dims * 24u + r % OR_NVALID[g_dims]];
@@ -907,6 +918,7 @@ fn exec_slice(c: u32, fp: u32) {
         fixed_partner = nbw(c, facing());
     }
     lens();
+    dirty = false;
     if (partner_first) { h1 = i32(lp); } else { h1 = i32(ls); }
     var steps = 0u;
     let budget = P[P_BUDGET];
