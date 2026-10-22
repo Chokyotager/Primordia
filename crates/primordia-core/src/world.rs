@@ -14,6 +14,10 @@ pub trait ExecBackend: Send {
     fn name(&self) -> String;
     /// Called when Params change (live config edits).
     fn reconfigure(&mut self, _p: &Params) {}
+    /// Accumulated (upload, kernels, download) seconds, if the backend tracks it.
+    fn timing(&self) -> Option<[f64; 3]> {
+        None
+    }
 }
 
 pub struct CpuExec;

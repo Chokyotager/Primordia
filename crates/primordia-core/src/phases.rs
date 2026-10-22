@@ -198,22 +198,33 @@ pub struct FluxSpec {
 /// `vals[c*stride + off]`. Returns the net amount lost through absorbing
 /// boundaries.
 pub fn flux(vals: &mut [u32], stride: usize, off: usize, spec: FluxSpec, bonds: &[u8], walls: &[u8], p: &Params, rng: &Rng, mirrored: bool) -> i64 {
+    flux_batch(vals, stride, &[(off, spec, 0)], spec.stream, bonds, walls, p, rng, mirrored)[0]
+}
+
+/// Transport up to 8 quantities at once. Each entry is (offset, spec, dither
+/// slot); one Philox call per face supplies eight 16-bit dithers. Mirror twins
+/// pass the hand-swapped slot so both worlds draw the same dither for
+/// mirror-image fields.
+#[allow(clippy::too_many_arguments)]
+pub fn flux_batch(vals: &mut [u32], stride: usize, fl: &[(usize, FluxSpec, usize)], stream: u32, bonds: &[u8], walls: &[u8], p: &Params, rng: &Rng, mirrored: bool) -> Vec<i64> {
     let g = &p.geom;
     let dims = g.dims as usize;
-    if dims == 0 || spec.kappa == 0 {
-        return 0;
+    let nfld = fl.len();
+    if dims == 0 || nfld == 0 {
+        return vec![0; nfld];
     }
     let n = g.n;
-    let q = |c: usize| vals[c * stride + off] as i64;
     let canon = |c: usize| g.canon(c, mirrored);
+    let dith = |w: &[u32; 4], slot: usize| ((w[slot / 2] >> (16 * (slot % 2))) & 0xFFFF) as i64;
+    let any_out = fl.iter().any(|f| f.1.outside.is_some());
+    let fs = dims * nfld;
     // pass A: raw face fluxes and boundary outflows
-    let mut jf = vec![0i64; n * 3];
-    let mut bo = vec![0i64; n];
-    jf.par_chunks_mut(3).zip(bo.par_iter_mut()).enumerate().for_each(|(c, (j, b))| {
+    let mut jf = vec![0i32; n * fs];
+    let mut bo = vec![0i64; n * nfld];
+    jf.par_chunks_mut(fs).zip(bo.par_chunks_mut(nfld)).enumerate().for_each(|(c, (j, b))| {
         if walls[c] != 0 {
             return;
         }
-        let qc = q(c);
         for a in 0..dims {
             let t = p.nbr[c * 6 + 2 * a];
             if t == NONE || walls[t as usize] != 0 {
@@ -221,84 +232,105 @@ pub fn flux(vals: &mut [u32], stride: usize, off: usize, spec: FluxSpec, bonds: 
             }
             let t = t as usize;
             let bonded = bonds[c] & (1 << (2 * a)) != 0;
-            if spec.bonded_only && !bonded {
-                continue;
-            }
-            let k = match spec.gamma {
-                Some(gm) if bonded => (spec.kappa * gm) >> 16,
-                _ => spec.kappa,
-            };
             let (id, flip) = if mirrored && a == 0 { (canon(t) * 3, true) } else { (canon(c) * 3 + a as u32, false) };
-            let mut r = (rng.u32(id, spec.stream, 0) & 0xFFFF) as i64;
-            if flip {
-                r = 0xFFFF - r;
+            let w = rng.x4(id, stream, 0);
+            for (k, (off, spec, slot)) in fl.iter().enumerate() {
+                if spec.kappa == 0 || (spec.bonded_only && !bonded) {
+                    continue;
+                }
+                let kk = match spec.gamma {
+                    Some(gm) if bonded => (spec.kappa * gm) >> 16,
+                    _ => spec.kappa,
+                };
+                let mut r = dith(&w, *slot);
+                if flip {
+                    r = 0xFFFF - r;
+                }
+                let qc = vals[c * stride + off] as i64;
+                let qt = vals[t * stride + off] as i64;
+                j[a * nfld + k] = floor_div16(kk * (qc - qt) + r) as i32;
             }
-            j[a] = floor_div16(k * (qc - q(t)) + r);
         }
-        if let Some(out) = spec.outside {
+        if any_out {
             for d in 0..2 * dims as u32 {
                 let t = p.nbr[c * 6 + d as usize];
-                let absorbing = if t == NONE {
-                    g.boundary[(d / 2) as usize] == Boundary::Absorbing
-                } else {
-                    walls[t as usize] == WALL_ABSORB as u8
-                };
+                let absorbing = if t == NONE { g.boundary[(d / 2) as usize] == Boundary::Absorbing } else { walls[t as usize] == WALL_ABSORB as u8 };
                 if !absorbing {
                     continue;
                 }
                 let cd = if mirrored { mirror_dir(d) } else { d };
-                let r = (rng.u32(canon(c) * 8 + cd, spec.stream | 0x8000, 0) & 0xFFFF) as i64;
-                *b += floor_div16(spec.kappa * (qc - out as i64) + r);
+                let w = rng.x4(canon(c) * 8 + cd, stream | 0x8000, 0);
+                for (k, (off, spec, slot)) in fl.iter().enumerate() {
+                    if let Some(out) = spec.outside {
+                        let qc = vals[c * stride + off] as i64;
+                        b[k] += floor_div16(spec.kappa * (qc - out as i64) + dith(&w, *slot));
+                    }
+                }
             }
         }
     });
-    // pass B: total outflow per cell
+    // pass B: total outflow per cell and field
     let outs: Vec<i64> = (0..n)
         .into_par_iter()
-        .map(|c| {
-            let mut o = bo[c].max(0);
-            for a in 0..dims {
-                o += jf[c * 3 + a].max(0);
-                let s = p.nbr[c * 6 + 2 * a + 1];
-                if s != NONE {
-                    o += (-jf[s as usize * 3 + a]).max(0);
+        .flat_map_iter(|c| {
+            let jf = &jf;
+            let bo = &bo;
+            (0..nfld).map(move |k| {
+                let mut o = bo[c * nfld + k].max(0);
+                for a in 0..dims {
+                    o += (jf[c * fs + a * nfld + k] as i64).max(0);
+                    let s = p.nbr[c * 6 + 2 * a + 1];
+                    if s != NONE {
+                        o += (-(jf[s as usize * fs + a * nfld + k] as i64)).max(0);
+                    }
                 }
-            }
-            o
+                o
+            })
         })
         .collect();
     // pass C: limit outflows so no cell goes negative
     let lim = |j: i64, qq: i64, o: i64| -> i64 { if o > qq && o > 0 { (j as i128 * qq as i128 / o as i128) as i64 } else { j } };
-    jf.par_chunks_mut(3).zip(bo.par_iter_mut()).enumerate().for_each(|(c, (j, b))| {
-        for a in 0..dims {
-            if j[a] > 0 {
-                j[a] = lim(j[a], q(c), outs[c]);
-            } else if j[a] < 0 {
-                let t = p.nbr[c * 6 + 2 * a] as usize;
-                j[a] = -lim(-j[a], q(t), outs[t]);
+    {
+        let vals = &*vals;
+        jf.par_chunks_mut(fs).zip(bo.par_chunks_mut(nfld)).enumerate().for_each(|(c, (j, b))| {
+            for (k, (off, _, _)) in fl.iter().enumerate() {
+                let qc = vals[c * stride + off] as i64;
+                for a in 0..dims {
+                    let x = j[a * nfld + k] as i64;
+                    if x > 0 {
+                        j[a * nfld + k] = lim(x, qc, outs[c * nfld + k]) as i32;
+                    } else if x < 0 {
+                        let t = p.nbr[c * 6 + 2 * a] as usize;
+                        j[a * nfld + k] = (-lim(-x, vals[t * stride + off] as i64, outs[t * nfld + k])) as i32;
+                    }
+                }
+                if b[k] > 0 {
+                    b[k] = lim(b[k], qc, outs[c * nfld + k]);
+                }
             }
-        }
-        if *b > 0 {
-            *b = lim(*b, q(c), outs[c]);
-        }
-    });
+        });
+    }
     // pass D: apply
-    let lost: i64 = vals
+    let lost = vals
         .par_chunks_mut(stride)
         .enumerate()
         .map(|(c, v)| {
-            let mut d = -bo[c];
-            for a in 0..dims {
-                d -= jf[c * 3 + a];
-                let s = p.nbr[c * 6 + 2 * a + 1];
-                if s != NONE {
-                    d += jf[s as usize * 3 + a];
+            let mut l = vec![0i64; nfld];
+            for (k, (off, _, _)) in fl.iter().enumerate() {
+                let mut d = -bo[c * nfld + k];
+                for a in 0..dims {
+                    d -= jf[c * fs + a * nfld + k] as i64;
+                    let s = p.nbr[c * 6 + 2 * a + 1];
+                    if s != NONE {
+                        d += jf[s as usize * fs + a * nfld + k] as i64;
+                    }
                 }
+                v[*off] = (v[*off] as i64 + d).max(0) as u32;
+                l[k] = bo[c * nfld + k];
             }
-            v[off] = (v[off] as i64 + d).max(0) as u32;
-            bo[c]
+            l
         })
-        .sum();
+        .reduce(|| vec![0i64; nfld], |a, b| a.iter().zip(&b).map(|(x, y)| x + y).collect());
     lost
 }
 
@@ -343,18 +375,46 @@ pub fn transport(st: &mut State, p: &Params) {
             specs.push((i, FluxSpec { kappa: p.kappa_s, gamma: None, bonded_only: false, stream: i as u32, outside: Some(0) }, 4));
         }
     }
-    for (i, spec, kind) in specs {
-        // dither streams must match between twins: hand-swap the stream id
-        let mut spec = spec;
-        if mirrored {
-            spec.stream = swap_hand_field(p, i) as u32;
+    // Group fields into batches of <= 8 without splitting L/D pairs, so the
+    // hand-swapped dither slot of a field is always in its own batch.
+    let mut units: Vec<Vec<(usize, FluxSpec, u8)>> = vec![];
+    let mut i = 0;
+    while i < specs.len() {
+        let f = specs[i].0;
+        let paired = i + 1 < specs.len() && swap_hand_field(p, f) == specs[i + 1].0 && swap_hand_field(p, f) != f;
+        if paired {
+            units.push(vec![specs[i], specs[i + 1]]);
+            i += 2;
+        } else {
+            units.push(vec![specs[i]]);
+            i += 1;
         }
-        let lost = flux(&mut st.fields, nf, i, spec, &bonds, &walls, p, &rng, mirrored);
-        match kind {
-            0 => st.tally.energy_sink += lost,
-            2 => st.tally.atom_sink += lost * p.mass[(i - 2) / 2] as i64,
-            3 => st.tally.matter_sink[i - p.f_pool(0)] += lost,
-            _ => {}
+    }
+    let mut batches: Vec<Vec<(usize, FluxSpec, u8)>> = vec![vec![]];
+    for u in units {
+        if batches.last().unwrap().len() + u.len() > 8 {
+            batches.push(vec![]);
+        }
+        batches.last_mut().unwrap().extend(u);
+    }
+    for (bi, batch) in batches.iter().enumerate() {
+        let fields: Vec<usize> = batch.iter().map(|x| x.0).collect();
+        let fl: Vec<(usize, FluxSpec, usize)> = batch
+            .iter()
+            .map(|(f, spec, _)| {
+                let src = if mirrored { swap_hand_field(p, *f) } else { *f };
+                (*f, *spec, fields.iter().position(|&x| x == src).unwrap())
+            })
+            .collect();
+        let lost = flux_batch(&mut st.fields, nf, &fl, bi as u32, &bonds, &walls, p, &rng, mirrored);
+        for (k, (i, _, kind)) in batch.iter().enumerate() {
+            let l = lost[k];
+            match kind {
+                0 => st.tally.energy_sink += l,
+                2 => st.tally.atom_sink += l * p.mass[(i - 2) / 2] as i64,
+                3 => st.tally.matter_sink[i - p.f_pool(0)] += l,
+                _ => {}
+            }
         }
     }
     // dissipation, heat relaxation, signal decay

@@ -165,6 +165,9 @@ impl ExecBackend for GpuExec {
         self.words = wgsl::param_words(p);
         self.alloc(p);
     }
+    fn timing(&self) -> Option<[f64; 3]> {
+        Some(self.timing)
+    }
     fn exec(&mut self, st: &mut State, p: &Params) {
         let t0 = Instant::now();
         let b = self.bufs.as_ref().unwrap();

@@ -487,6 +487,10 @@ fn bench(epochs: u64, only: Option<&str>) -> Result<()> {
         for (i, n) in names.iter().enumerate() {
             println!("   {:<24} {:8.2} ms/epoch", n, 1000.0 * t[i] / epochs as f64);
         }
+        if let Some(gt) = sim.backend.timing() {
+            let k = (epochs + 1) as f64;
+            println!("   gpu: upload {:.2} ms, kernels {:.2} ms, download {:.2} ms per epoch", 1000.0 * gt[0] / k, 1000.0 * gt[1] / k, 1000.0 * gt[2] / k);
+        }
     }
     Ok(())
 }
