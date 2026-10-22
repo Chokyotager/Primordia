@@ -1,0 +1,11 @@
+[package]
+name = "primordia-view"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+eframe = "0.37.0"
+egui_plot = "0.38.0"
+primordia-core = { version = "0.1.0", path = "../primordia-core" }
+primordia-telemetry = { version = "0.1.0", path = "../primordia-telemetry" }

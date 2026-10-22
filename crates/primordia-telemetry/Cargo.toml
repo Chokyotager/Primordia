@@ -1,0 +1,13 @@
+[package]
+name = "primordia-telemetry"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+arrow = "60.0.0"
+brotli = "9.0.0"
+parquet = "60.0.0"
+primordia-core = { version = "0.1.0", path = "../primordia-core" }
+rayon = "1.12.0"
+serde_json = "1.0.154"
