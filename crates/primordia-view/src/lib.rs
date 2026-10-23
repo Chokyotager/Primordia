@@ -117,6 +117,8 @@ enum Cmd {
 
 pub struct ViewerOptions {
     pub autorun: bool,
+    /// Fraction of time (0..0.9) the GPU is left idle for the desktop / browser.
+    pub gpu_headroom: f32,
     /// Address for the read-only web viewer, e.g. "0.0.0.0:8765".
     pub web: Option<String>,
 }
@@ -138,7 +140,8 @@ pub fn run_viewer(sim: Sim, rec: Recorder, sink: Option<Box<dyn Sink>>, opts: Vi
     let (tx, rx) = channel();
     let s2 = status.clone();
     let autorun = opts.autorun;
-    let worker = std::thread::spawn(move || stepper(sim, obs, rx, s2, autorun));
+    let headroom = opts.gpu_headroom.clamp(0.0, 0.9);
+    let worker = std::thread::spawn(move || stepper(sim, obs, rx, s2, autorun, headroom));
     let nopts = eframe::NativeOptions { viewport: egui::ViewportBuilder::default().with_inner_size([1680.0, 1020.0]).with_title("Primordia"), ..Default::default() };
     let app = App::new(tx.clone(), status, shared, view);
     let r = eframe::run_native("Primordia", nopts, Box::new(|cc| {
@@ -262,7 +265,9 @@ impl Chronicler {
 
 /// Drives the simulation as fast as the GPU allows; everything that only
 /// looks at the world happens on the observer thread.
-fn stepper(mut sim: Sim, mut obs: Observer, rx: Receiver<Cmd>, status: Arc<Mutex<Status>>, autorun: bool) {
+fn stepper(mut sim: Sim, mut obs: Observer, rx: Receiver<Cmd>, status: Arc<Mutex<Status>>, autorun: bool, headroom: f32) {
+    let mut ema = 0.0f64;
+    let mut tlast = Instant::now();
     let mut running = autorun;
     let mut pending_steps = 0u64;
     let mut lineage: HashMap<u32, u32> = HashMap::new();
@@ -337,6 +342,16 @@ fn stepper(mut sim: Sim, mut obs: Observer, rx: Receiver<Cmd>, status: Arc<Mutex
                 status.lock().unwrap().sub_frames = frames;
             } else {
                 sim.step();
+            }
+            if headroom > 0.0 {
+                // drain the GPU queue, time the epoch's real GPU work, then leave
+                // the GPU idle for the requested share of the time
+                sim.finish_pending();
+                let dt = tlast.elapsed().as_secs_f64();
+                ema = if ema == 0.0 { dt } else { 0.9 * ema + 0.1 * dt.min(1.0) };
+                let pause = ema * headroom as f64 / (1.0 - headroom as f64);
+                std::thread::sleep(Duration::from_secs_f64(pause.min(0.5)));
+                tlast = Instant::now();
             }
             if pending_steps > 0 {
                 pending_steps -= 1;

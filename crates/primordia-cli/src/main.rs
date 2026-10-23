@@ -56,6 +56,10 @@ enum Cmd {
         /// Run phase 6 only on the GPU (state copied every epoch) instead of fully resident
         #[arg(long)]
         exec_only: bool,
+        /// Leave this fraction of GPU time idle (viewer only), e.g. 0.2, so a browser
+        /// or desktop on the same machine stays smooth
+        #[arg(long, default_value_t = 0.0)]
+        gpu_headroom: f32,
         /// Continue from a snapshot (<run>/snapshots/e*.psnap); `config` is then ignored
         /// in favour of that run's config.toml (plus any --set overrides)
         #[arg(long)]
@@ -294,7 +298,7 @@ fn main() -> Result<()> {
                 println!("{n}");
             }
         }
-        Cmd::Run { config, seed, headless, epochs, out, cpu, set, progress, events, autorun, web, exec_only, resume } => {
+        Cmd::Run { config, seed, headless, epochs, out, cpu, set, progress, events, autorun, web, exec_only, resume, gpu_headroom } => {
             let parent_dir = resume.as_ref().map(|sp| sp.parent().and_then(|d| d.parent()).map(|d| d.to_path_buf()).context("snapshot must live in <run>/snapshots/")).transpose()?;
             let cfg = match &parent_dir {
                 Some(d) => load_config(&d.join("config.toml").display().to_string(), seed, &set)?,
@@ -346,7 +350,7 @@ fn main() -> Result<()> {
                     rd.log_event(e)?;
                 }
                 let rd = rd;
-                primordia_view::run_viewer(sim, rec, Some(Box::new(rd)), primordia_view::ViewerOptions { autorun, web })?;
+                primordia_view::run_viewer(sim, rec, Some(Box::new(rd)), primordia_view::ViewerOptions { autorun, web, gpu_headroom })?;
             }
         }
         Cmd::Replay { run_dir, to, cpu } => replay(&run_dir, to, cpu)?,

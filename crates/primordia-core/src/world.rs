@@ -167,6 +167,10 @@ impl Sim {
             self.cpu_stale = false;
         }
     }
+    /// Wait until every submitted epoch has finished on the GPU (no download).
+    pub fn finish_pending(&mut self) {
+        self.collect(true);
+    }
     /// Births since the last call (resident: of finished epochs).
     pub fn take_births(&mut self) -> Vec<Birth> {
         std::mem::take(&mut self.births)

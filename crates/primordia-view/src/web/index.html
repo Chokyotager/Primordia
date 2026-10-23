@@ -26,9 +26,9 @@
   #title h1 { margin: 0; font-size: 20px; letter-spacing: 0.12em; color: var(--accent); }
   #title .sub { color: var(--muted); font-size: 12px; }
   .badge { font-size: 11px; color: #0b1a17; background: var(--accent); border-radius: 999px; padding: 1px 8px; width: max-content; }
-  .card { min-width: 108px; }
+  .card { min-width: 96px; padding: 8px 12px; }
   .card .k { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
-  .card .v { font-size: 21px; font-weight: 700; }
+  .card .v { font-size: 19px; font-weight: 700; }
   .card .s { color: var(--muted); font-size: 11px; }
   .meter { position: relative; height: 12px; width: 150px; background: #283042; border-radius: 6px; margin: 7px 0 3px; overflow: hidden; }
   .meter .bar { position: absolute; top: 0; bottom: 0; }
@@ -36,7 +36,7 @@
   #camera { display: flex; flex-direction: column; gap: 6px; justify-content: center; }
   #camera .row { display: flex; gap: 6px; }
   h2 { margin: 0 0 8px; font-size: 12px; color: var(--accent); letter-spacing: 0.1em; text-transform: uppercase; }
-  #left { top: 128px; left: 12px; width: 330px; bottom: 12px; display: flex; flex-direction: column; gap: 8px; }
+  #left { top: var(--top-h, 128px); left: 12px; width: 330px; bottom: 12px; display: flex; flex-direction: column; gap: 8px; }
   #atlas { flex: 1; overflow-y: auto; }
   .col { display: grid; grid-template-columns: 16px 1fr auto; gap: 8px; align-items: center; padding: 7px 8px; border-radius: 8px;
     cursor: pointer; border: 1px solid transparent; }
@@ -49,7 +49,7 @@
   .up { color: #78dc8c; } .down { color: #f07070; } .flat { color: var(--muted); }
   #detail { font-size: 12.5px; }
   #detail .prog { font-family: ui-monospace, monospace; font-size: 11px; color: #c8d2e0; margin-top: 6px; }
-  #right { top: 128px; right: 12px; width: 340px; bottom: 12px; display: flex; flex-direction: column; gap: 8px; }
+  #right { top: var(--top-h, 128px); right: 12px; width: 340px; bottom: 12px; display: flex; flex-direction: column; gap: 8px; }
   #chron { flex: 1; overflow-y: auto; }
   .note { display: grid; grid-template-columns: 22px 1fr; gap: 6px; padding: 5px 0; border-bottom: 1px solid var(--line); font-size: 12.5px; }
   .note .e { color: var(--muted); font-size: 11px; font-family: ui-monospace, monospace; }
@@ -67,6 +67,7 @@
   #tip { position: fixed; pointer-events: none; font-size: 12px; padding: 6px 10px; border-radius: 8px; background: rgba(12, 15, 24, 0.92);
     border: 1px solid var(--line); display: none; max-width: 300px; }
   #status { bottom: 12px; left: 50%; transform: translateX(-50%); font-size: 12px; color: var(--muted); }
+  @media (max-width: 1500px) { .card.opt { display: none; } }
   @media (max-width: 1100px) { #right { display: none; } }
   @media (max-width: 760px) { #left { display: none; } }
 </style>
@@ -92,8 +93,8 @@
   <div class="panel card"><div class="k">Living cells</div><div class="v" id="c-pop" style="color:#78dc8c">–</div><div class="s" id="c-pop-s"></div></div>
   <div class="panel card"><div class="k">Colonies</div><div class="v" id="c-col" style="color:#ffaa3c">–</div><div class="s">groups of related cells</div></div>
   <div class="panel card"><div class="k">Complexity</div><div class="v" id="c-hoe" style="color:var(--warm)">–</div><div class="s" id="c-hoe-s"></div></div>
-  <div class="panel card"><div class="k">Copiers</div><div class="v" id="c-rep" style="color:#6ec8ff">–</div><div class="s">of the top 100 programs</div></div>
-  <div class="panel card"><div class="k">Handedness</div>
+  <div class="panel card opt"><div class="k">Copiers</div><div class="v" id="c-rep" style="color:#6ec8ff">–</div><div class="s">of the top 100 programs</div></div>
+  <div class="panel card opt"><div class="k">Handedness</div>
     <div class="meter"><div class="bar" id="hand-bar"></div><div class="mid"></div></div>
     <div class="s" id="c-hand"></div></div>
   <div class="panel card"><div class="k">Sky</div><div class="v" id="c-sun">–</div><div class="s" id="c-vents"></div></div>
@@ -151,7 +152,7 @@ const store = { get: (k, d) => { try { const v = localStorage.getItem(k); return
 
 const canvas = $('scene');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
 renderer.setSize(innerWidth, innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -251,13 +252,13 @@ function heightOf(hb, flag) {
 
 function buildTerrain(m) {
   const [gw0, gh0] = [m.grid[0], Math.max(m.grid[1], 1)];
-  const stride = Math.max(1, Math.ceil(Math.max(gw0, gh0) / 512));
+  const stride = Math.max(1, Math.ceil(Math.max(gw0, gh0) / 256));
   const gw = Math.ceil(gw0 / stride), gh = Math.max(2, Math.ceil(gh0 / stride));
   const W = WORLD_W, D = Math.max(4, WORLD_W * gh0 / gw0 * (gh0 === 1 ? 12 : 1));
   const geo = new THREE.PlaneGeometry(W, D, gw - 1, gh - 1);
   geo.rotateX(-Math.PI / 2);
   geo.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(gw * gh * 3), 3));
-  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.82, metalness: 0.04 });
+  const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
   // cells glow with their own colour, so they stay visible at night
   mat.onBeforeCompile = sh => {
     sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n  totalEmissiveRadiance += vColor.rgb * 0.6;');
@@ -284,7 +285,16 @@ function updateTerrain(w, m, b) {
     }
   }
   pos.needsUpdate = true; col.needsUpdate = true;
-  w.mesh.geometry.computeVertexNormals();
+  // normals straight from the height grid (much cheaper than computeVertexNormals)
+  const nrm = w.mesh.geometry.attributes.normal, P = pos.array, N = nrm.array, gw = w.gw, gh = w.gh;
+  const dx = w.W / Math.max(1, gw - 1), dz = w.D / Math.max(1, gh - 1);
+  for (let iy = 0; iy < gh; iy++) for (let ix = 0; ix < gw; ix++) {
+    const v = ix + iy * gw, l = ix > 0 ? v - 1 : v, r = ix < gw - 1 ? v + 1 : v, u = iy > 0 ? v - gw : v, d = iy < gh - 1 ? v + gw : v;
+    const hx = (P[r * 3 + 1] - P[l * 3 + 1]) / (dx * Math.max(1, (r - l))), hz = (P[d * 3 + 1] - P[u * 3 + 1]) / (dz * Math.max(1, (d - u) / gw));
+    const nx = -hx, ny = 1, nz = -hz, k = 1 / Math.hypot(nx, ny, nz);
+    N[v * 3] = nx * k; N[v * 3 + 1] = ny * k; N[v * 3 + 2] = nz * k;
+  }
+  nrm.needsUpdate = true;
 }
 
 function cellToWorld(w, m, x, y, z) {
@@ -329,26 +339,38 @@ function updateVolume(w, m, b) {
 }
 
 const PLUME = 70;
+const glowMat = new THREE.SpriteMaterial({ map: GLOW, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true });
+const plumeMat = new THREE.PointsMaterial({ map: GLOW, size: 2.2, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, color: 0xffb060 });
+// a fixed set of lights, created once: adding or removing lights would force every shader to recompile
+const ventLights = [0, 1, 2, 3].map(() => { const l = new THREE.PointLight(0xff8a30, 0, 40, 1.6); scene.add(l); return l; });
+const ventPool = [];
 function rebuildVents(m, b) {
-  ventGroup.clear();
-  m.vents.forEach((v, i) => {
-    const g = new THREE.Group(), p = cellToWorld(world, m, v[0], v[1] || 0, v[2] || 0);
-    if (world.kind === 'terrain' && b) { const c = v[0] + (v[1] || 0) * m.grid[0]; p.y = heightOf(b[c * 4 + 3], b[m.n * 4 + c]); }
-    g.position.copy(p);
-    const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: GLOW, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
-    glow.scale.set(9, 9, 1); glow.position.y = 1.2; g.add(glow);
+  while (ventPool.length < m.vents.length) {
+    const g = new THREE.Group();
+    const glow = new THREE.Sprite(glowMat); glow.scale.set(9, 9, 1); glow.position.y = 1.2; g.add(glow);
     const pg = new THREE.BufferGeometry(), seed = new Float32Array(PLUME);
     for (let k = 0; k < PLUME; k++) seed[k] = Math.random();
     pg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(PLUME * 3), 3));
-    const pts = new THREE.Points(pg, new THREE.PointsMaterial({ map: GLOW, size: 2.2, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, color: 0xffb060 }));
-    pts.userData.seed = seed; g.add(pts);
-    if (i < 6) { const l = new THREE.PointLight(0xff8a30, 60, 40, 1.6); l.position.y = 3; g.add(l); }
+    const pts = new THREE.Points(pg, plumeMat); pts.userData.seed = seed; g.add(pts);
     g.userData = { glow, pts, phase: Math.random() * 6.28 };
-    ventGroup.add(g);
+    ventGroup.add(g); ventPool.push(g);
+  }
+  ventPool.forEach((g, i) => {
+    const v = m.vents[i];
+    g.visible = !!v;
+    if (!v) return;
+    const p = cellToWorld(world, m, v[0], v[1] || 0, v[2] || 0);
+    if (world.kind === 'terrain' && b) { const c = v[0] + (v[1] || 0) * m.grid[0]; p.y = heightOf(b[c * 4 + 3], b[m.n * 4 + c]); }
+    g.position.copy(p);
+  });
+  ventLights.forEach((l, i) => {
+    const g = ventPool[i];
+    if (g && g.visible) { l.position.copy(g.position); l.position.y += 3; l.intensity = 60; } else l.intensity = 0;
   });
 }
 function animateVents(t) {
   for (const g of ventGroup.children) {
+    if (!g.visible) continue;
     const { glow, pts, phase } = g.userData, pulse = 0.75 + 0.25 * Math.sin(t * 2.4 + phase);
     glow.scale.set(9 * pulse, 9 * pulse, 1);
     const a = pts.geometry.attributes.position, seed = pts.userData.seed;
@@ -360,27 +382,31 @@ function animateVents(t) {
 // ---------------------------------------------------------------- 2D map
 const map = $('map'), mctx = map.getContext('2d');
 const img = document.createElement('canvas'), ictx = img.getContext('2d');
+let imgData = null, need2d = true, last2d = 0;
 let view = null, fly2 = null, drag = null;   // view: {cx, cy, s} centre in cells, pixels per cell
 function gridWH() { const g = meta.grid; return meta.dims === 1 ? [g[0], 1] : [g[0], g[1]]; }
 function resizeMap() {
+  need2d = true;
   // backing store in device pixels, displayed at CSS size (otherwise HiDPI screens stretch the map)
   map.width = Math.round(innerWidth * devicePixelRatio); map.height = Math.round(innerHeight * devicePixelRatio);
   map.style.width = `${innerWidth}px`; map.style.height = `${innerHeight}px`;
 }
 resizeMap();
-function fitScale() { const [w, h] = gridWH(); return Math.min((innerWidth - 720) / w, (innerHeight - 170) / h, innerWidth / w * 0.9); }
+function fitScale() { const [w, h] = gridWH(); const side = (innerWidth > 760 ? 350 : 0) + (innerWidth > 1100 ? 360 : 0); return Math.min((innerWidth - side - 20) / w, (innerHeight - topH() - 24) / h); }
 function fit2d(animate) {
   const [w, h] = gridWH(), to = { cx: w / 2, cy: h / 2, s: Math.max(0.5, fitScale()) };
   if (animate && view) fly2 = { from: { ...view }, to, t: 0 }; else view = to;
 }
 // screen centre of the map area (between the side panels)
-function mapCentre() { const l = innerWidth > 760 ? 350 : 0, r = innerWidth > 1100 ? 360 : 0; return [l + (innerWidth - l - r) / 2, 128 + (innerHeight - 140) / 2]; }
+function topH() { return parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--top-h')) || 128; }
+function mapCentre() { const l = innerWidth > 760 ? 350 : 0, r = innerWidth > 1100 ? 360 : 0, t = topH(); return [l + (innerWidth - l - r) / 2, t + (innerHeight - t - 12) / 2]; }
 function toScreen(x, y) { const [mx, my] = mapCentre(), h = gridWH()[1]; return [mx + (x - view.cx) * view.s, my + ((h - y) - (h - view.cy)) * view.s]; }
 function toCell(px, py) { const [mx, my] = mapCentre(), h = gridWH()[1]; return [view.cx + (px - mx) / view.s, h - ((h - view.cy) + (py - my) / view.s)]; }
 function updateImage(m, b) {
   const [w, h] = gridWH(), n = m.n;
-  img.width = w; img.height = h;
-  const id = ictx.createImageData(w, h), d = id.data;
+  if (img.width !== w || img.height !== h) { img.width = w; img.height = h; imgData = null; }
+  if (!imgData) imgData = ictx.createImageData(w, h);
+  const id = imgData, d = id.data;
   const sx = m.size[0], sy = m.size[1], flags = b.subarray(n * 4);
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
     let c = x + y * w;
@@ -393,6 +419,7 @@ function updateImage(m, b) {
     d[o] = b[c * 4]; d[o + 1] = b[c * 4 + 1]; d[o + 2] = b[c * 4 + 2]; d[o + 3] = 255;
   }
   ictx.putImageData(id, 0, 0);
+  need2d = true;
 }
 const hl = document.createElement('canvas'), hctx = hl.getContext('2d');
 let hlKey = '';
@@ -414,6 +441,9 @@ function updateHighlight() {
 }
 function draw2d(t) {
   if (!meta || !view) return;
+  // redraw only when something changed, plus a gentle 20 fps for the vent pulse
+  if (!need2d && !fly2 && !drag && t - last2d < (meta.vents.length ? 0.05 : 1)) return;
+  need2d = false; last2d = t;
   if (fly2) {
     fly2.t = Math.min(1, fly2.t + 1 / 60 / 1.2);
     const k = fly2.t < 0.5 ? 2 * fly2.t * fly2.t : 1 - Math.pow(-2 * fly2.t + 2, 2) / 2, a = fly2.from, z = fly2.to;
@@ -447,7 +477,7 @@ function draw2d(t) {
 map.addEventListener('wheel', e => {
   e.preventDefault(); if (!view) return; fly2 = null; follow = false;
   const [cx, cy] = toCell(e.clientX, e.clientY), f = Math.exp(-e.deltaY * 0.0015);
-  view.s = Math.min(80, Math.max(0.3, view.s * f));
+  view.s = Math.min(80, Math.max(0.3, view.s * f)); need2d = true;
   const [nx, ny] = toCell(e.clientX, e.clientY); view.cx += cx - nx; view.cy += cy - ny;
 }, { passive: false });
 map.addEventListener('pointerdown', e => { if (!view) return; drag = [e.clientX, e.clientY, view.cx, view.cy]; dragMoved = false; map.classList.add('drag'); fly2 = null; if (tour) setTour(false); });
@@ -455,7 +485,7 @@ addEventListener('pointerup', () => { setTimeout(() => { drag = null; }, 0); map
 let dragMoved = false;
 map.addEventListener('pointermove', e => {
   pointer = [e.clientX, e.clientY];
-  if (drag && (e.buttons & 1)) { view.cx = drag[2] - (e.clientX - drag[0]) / view.s; view.cy = drag[3] + (e.clientY - drag[1]) / view.s; }
+  if (drag && (e.buttons & 1)) { view.cx = drag[2] - (e.clientX - drag[0]) / view.s; view.cy = drag[3] + (e.clientY - drag[1]) / view.s; } need2d = true;
 });
 map.addEventListener('pointerleave', () => { pointer = null; $('tip').style.display = 'none'; });
 map.addEventListener('dblclick', () => { const k = hoverColony(); if (k && k.colony) { setTour(false); selectColony(k.id); } });
@@ -473,7 +503,7 @@ function colonyPos(c) {
 }
 let follow = false;
 function selectColony(id, flyThere = true) {
-  selected = id; follow = flyThere;
+  selected = id; follow = flyThere; need2d = true;
   const c = meta.colonies.find(x => x.id === id);
   if (c && flyThere) {
     if (mode === '2d') { fly2 = { from: { ...view }, to: { cx: c.center[0] + 0.5, cy: c.center[1] + 0.5, s: Math.min(40, Math.max(view.s, 220 / Math.max(6, c.radius * 2.6))) }, t: 0 }; }
@@ -495,8 +525,12 @@ function story(c) {
     ${(c.copiers * 100).toFixed(0)}% copiers · ${(c.bonded * 100).toFixed(0)}% bonded · ${(c.dormant * 100).toFixed(0)}% dormant · ${hand} · programs ≈ ${c.len.toFixed(0)} bytes
     <div class="prog">${c.program}</div>`;
 }
+let atlasKey = '';
 function renderAtlas() {
   if (!meta) return;
+  const key = selected + '|' + meta.colonies.map(c => `${c.id}:${c.size}:${Math.sign(Math.round(c.growth))}`).join(',');
+  if (key === atlasKey) return;
+  atlasKey = key;
   $('cols').innerHTML = meta.colonies.map(c => {
     const cls = c.growth > 1 ? 'up' : c.growth < -1 ? 'down' : 'flat', arrow = c.growth > 1 ? '▲' : c.growth < -1 ? '▼' : '●';
     return `<div class="col ${c.id === selected ? 'sel' : ''}" data-id="${c.id}">
@@ -513,7 +547,23 @@ function renderAtlas() {
 
 // floating name tags
 const tags = new Map();
+let panelRects = [], lastLab = 0;
+function measurePanels() {
+  panelRects = ['top', 'left', 'right', 'status'].map(id => $(id)).filter(e => e && e.offsetParent !== null).map(e => e.getBoundingClientRect());
+  for (const el of document.querySelectorAll('#top > .panel')) panelRects.push(el.getBoundingClientRect());
+  const top = $('top').getBoundingClientRect();
+  document.documentElement.style.setProperty('--top-h', `${Math.ceil(top.bottom + 8)}px`);
+}
+new ResizeObserver(() => { measurePanels(); need2d = true; }).observe($('top'));
+setInterval(measurePanels, 1000);
+function overPanel(x, y) {
+  for (const r of panelRects) if (x > r.left - 40 && x < r.right + 40 && y > r.top - 6 && y < r.bottom + 24) return true;
+  return false;
+}
 function updateLabels() {
+  const nowT = performance.now();
+  if (nowT - lastLab < 33) return;
+  lastLab = nowT;
   const box = $('labels');
   if (!meta || !showLabels || (mode === '3d' && !world) || (mode === '2d' && !view)) { box.style.display = 'none'; return; }
   box.style.display = 'block';
@@ -534,8 +584,9 @@ function updateLabels() {
       x = (p.x + 1) / 2 * innerWidth; y = (1 - p.y) / 2 * innerHeight;
       hide = p.z > 1 || x < 0 || x > innerWidth || y < 0 || y > innerHeight;
     }
+    if (!hide && overPanel(x, y)) hide = true;
     if (!hide) { for (const q of placed) if (Math.abs(q[0] - x) < 130 && Math.abs(q[1] - y) < 22) { hide = true; break; } }
-    if (c.id === selected) hide = false;
+    if (c.id === selected && !overPanel(x, y)) hide = false;
     if (!hide) {
       placed.push([x, y]);
       // glide to the new position instead of jumping
@@ -605,6 +656,7 @@ function spark(id, pts, color, lo, hi) {
   pts.forEach((p, i) => { if (!Number.isFinite(p[1])) return; const x = (p[0] - x0) / Math.max(1e-9, x1 - x0) * w, y = h - (p[1] - y0) / Math.max(1e-9, y1 - y0) * (h - 4) - 2; i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
   ctx.stroke();
 }
+let notesKey = '';
 function hud(m) {
   const s = m.summary;
   $('epoch').textContent = `epoch ${m.epoch.toLocaleString()} · ${m.eps.toFixed(1)} epochs/s · ${m.dims}D, ${m.n.toLocaleString()} sites`;
@@ -619,7 +671,10 @@ function hud(m) {
   $('c-hand').textContent = `${ee >= 0 ? '+' : ''}${ee.toFixed(2)} · ${Math.abs(ee) < 0.1 ? 'balanced' : ee > 0 ? 'left (L)' : 'right (D)'}`;
   $('c-sun').textContent = m.sun > 0.05 ? `☀ ${Math.round(m.sun * 100)}%` : '🌙 night';
   $('c-vents').textContent = `${m.vents.length} vent${m.vents.length === 1 ? '' : 's'} active`;
-  $('notes').innerHTML = m.chronicle.map(n => `<div class="note"><div>${n.icon}</div><div><div class="e">epoch ${n.epoch}</div>${n.text.replace(/</g, '&lt;')}</div></div>`).join('');
+  const nk = m.chronicle.length + ':' + (m.chronicle[0] ? m.chronicle[0].epoch + m.chronicle[0].text : '');
+  if (nk !== notesKey) { notesKey = nk;
+    $('notes').innerHTML = m.chronicle.map(n => `<div class="note"><div>${n.icon}</div><div><div class="e">epoch ${n.epoch}</div>${n.text.replace(/</g, '&lt;')}</div></div>`).join('');
+  }
   spark('sp-pop', m.series.population, '#78dc8c'); spark('sp-hoe', m.series.complexity, '#ffcf70');
   spark('sp-ee', m.series.handedness, '#e68a8a', -1, 1); spark('sp-rep', m.series.copiers, '#6ec8ff', 0, 100);
   $('status').textContent = `observing a live run (read-only) · ${m.backend}`;
