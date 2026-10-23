@@ -1,0 +1,34 @@
+# Live world M1: as live-s8 (seeded replicators, L and mirror-image D, under
+# sunlight, with starvation so that space keeps opening up), plus weak
+# moonlight (sleeping cells can break even at night, awake cells cannot) and
+# a 3-day lifespan that keeps turnover going (chosen from runs/sweep-moon).
+# Start fresh with: --events runs/seed-501.jsonl
+preset = "primordia-2d-sun"
+epochs = 1000000000
+
+[world]
+size = [501, 501]
+
+[individual]
+starve_after = 800
+max_age = 6000
+
+[energy.sun]
+i0 = 150
+moon = 0.02
+
+[energy.upkeep]
+base = 3.5
+per_byte = 0.12
+
+[energy.vents]
+enabled = true
+count = 6
+floor_only = false
+drift = 0.01
+
+[decay]
+rate = 3e-4
+
+[telemetry]
+snapshot_every = 11000  # alternates midday / dawn
