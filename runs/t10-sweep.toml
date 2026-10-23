@@ -1,0 +1,8 @@
+base = "paper-0d"
+epochs = 1500
+seeds = [2, 3, 4, 5, 6, 7]
+out = "runs/t10"
+[set]
+"telemetry.snapshot_every" = 0
+"telemetry.census_every" = 1500
+"telemetry.assay_every" = 500

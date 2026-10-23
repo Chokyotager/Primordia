@@ -1,0 +1,15 @@
+{"epoch": 0, "kind": "seed", "params": {"genome": "36 36 36 36 36 36 36 4d 67 40 2c 12 13 15 c4", "center": [15, 37], "radius": 1.5, "mirror": true, "energy": 2000}}
+{"epoch": 0, "kind": "seed", "params": {"genome": "36 36 36 36 36 36 36 4d 67 40 2c 12 13 15 c4", "center": [34, 8], "radius": 1.5, "mirror": true, "energy": 2000}}
+{"epoch": 0, "kind": "seed", "params": {"genome": "36 36 36 36 36 36 36 4d 67 40 2c 12 13 15 c4", "center": [23, 58], "radius": 1.5, "mirror": true, "energy": 2000}}
+{"epoch": 0, "kind": "seed", "params": {"genome": "36 36 36 36 36 36 36 4d 67 40 2c 12 13 15 c4", "center": [38, 30], "radius": 1.5, "mirror": true, "energy": 2000}}
+{"epoch": 0, "kind": "seed", "params": {"genome": "36 36 36 36 36 36 36 4d 67 40 2c 12 13 15 c4", "center": [40, 37], "radius": 1.5, "mirror": true, "energy": 2000}}
+{"epoch": 0, "kind": "seed", "params": {"genome": "36 36 36 36 36 36 36 4d 67 40 2c 12 13 15 c4", "center": [4, 38], "radius": 1.5, "mirror": true, "energy": 2000}}
+{"epoch": 0, "kind": "seed", "params": {"genome": "36 36 36 36 36 36 36 4d 67 40 2c 12 13 15 c4", "center": [0, 58], "radius": 1.5, "mirror": true, "energy": 2000}}
+{"epoch": 0, "kind": "seed", "params": {"genome": "36 36 36 36 36 36 36 4d 67 40 2c 12 13 15 c4", "center": [53, 30], "radius": 1.5, "mirror": true, "energy": 2000}}
+{"epoch": 0, "kind": "seed", "params": {"genome": "36 36 36 36 36 36 36 4d 67 40 2c 12 13 15 c4", "center": [16, 35], "radius": 1.5, "mirror": true, "energy": 2000}}
+{"epoch": 0, "kind": "seed", "params": {"genome": "36 36 36 36 36 36 36 4d 67 40 2c 12 13 15 c4", "center": [14, 12], "radius": 1.5, "mirror": true, "energy": 2000}}
+{"epoch": 0, "kind": "seed", "params": {"genome": "36 36 36 36 36 36 36 4d 67 40 2c 12 13 15 c4", "center": [45, 30], "radius": 1.5, "mirror": true, "energy": 2000}}
+{"epoch": 0, "kind": "seed", "params": {"genome": "36 36 36 36 36 36 36 4d 67 40 2c 12 13 15 c4", "center": [34, 53], "radius": 1.5, "mirror": true, "energy": 2000}}
+{"epoch": 5000, "kind": "paint", "params": {"field": "pool", "hand": 2, "center": [30, 30], "radius": 6, "amount": 50}}
+{"epoch": 7000, "kind": "wall", "params": {"center": [10, 40], "radius": 3, "type": "absorb"}}
+{"epoch": 9000, "kind": "set", "params": {"key": "chemistry.global_sink", "value": 0.0002}}

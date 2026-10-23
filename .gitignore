@@ -1,3 +1,21 @@
+# Build output
 /target
-/runs
+
+# Run outputs (snapshots, Parquet tables, logs, plot history): large and
+# regenerable. Keep the small inputs at the top of runs/ that reproduce them:
+# configs (*.toml) and seed / intervention lists (*.jsonl).
+/runs/*
+!/runs/*.toml
+!/runs/*.jsonl
 *.psnap
+*.parquet
+*.log
+
+# Editors, OS, Python
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+__pycache__/
+*.pyc

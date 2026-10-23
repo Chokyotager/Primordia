@@ -1,0 +1,29 @@
+# Live world: seeded replicators (L and mirror-image D) under sunlight, with
+# starvation so that space keeps opening up (chosen from runs/sweep-starve, S8).
+preset = "primordia-2d-sun"
+epochs = 1000000000
+
+[world]
+size = [501, 501]
+
+[individual]
+starve_after = 800
+
+[energy.sun]
+i0 = 150
+
+[energy.upkeep]
+base = 3.5
+per_byte = 0.12
+
+[energy.vents]
+enabled = true
+count = 6
+floor_only = false
+drift = 0.01
+
+[decay]
+rate = 3e-4
+
+[telemetry]
+snapshot_every = 10000

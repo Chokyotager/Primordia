@@ -68,7 +68,10 @@ GPU utilisation during a full run with viewer, telemetry and web feed: 95–98%.
 | `primordia-cli` | `run`, `batch`, `replay`, `branch`, `twin`, `assay`, `bench` |
 
 A run directory contains `manifest.json`, `config.toml` (fully resolved), `events.jsonl`, `hashes.csv`,
-`metrics/chirality/species/lineage/opcodes/ecology/assay.parquet`, `summary.json` and zstd `snapshots/*.psnap`.
+`metrics/chirality/species/lineage/opcodes/ecology/assay.parquet`, `summary.json`, `history.json` (plot
+history, carried over by `--resume`) and zstd `snapshots/*.psnap`. Run outputs are not committed; the
+inputs that reproduce them are: `runs/live-s8.toml` (the long-running live world) and `runs/seed-*.jsonl`
+(seed events placing a minimal replicator, needed when starting a fresh world from these configs).
 
 ## Tests
 
@@ -121,6 +124,10 @@ A run directory contains `manifest.json`, `config.toml` (fully resolved), `event
   otherwise) instead of a binomial table.
 * **Halting.** A halted cell wakes once its energy reaches `energy.wake_energy` (default 256); waking at
   `E > 0` would make a cell restart its slice from IP 0 forever with too little energy to finish anything.
+* **Additions beyond the spec** (all off by default): `individual.starve_after` kills a cell that stays
+  dormant (zero energy) for that many epochs without a break, so that space keeps opening up;
+  `energy.sun.moon` keeps night-time light at a floor (a fraction of full sun); `individual.max_age` kills
+  a cell once it is that many epochs old. All three run identically on the CPU and the GPU.
 * **paper-2d** uses the checkerboard scheduler with face neighbours, not the paper's radius-2 random-claim
   scheduler. paper-0d/2d use `step_budget = 8192`, as cubff does.
 * **Defaults that the spec leaves open:** jumps, `PUSH`, fillers and `JREL` cost 1; `DIGEST` costs 2 per
