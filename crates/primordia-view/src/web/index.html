@@ -362,7 +362,11 @@ const map = $('map'), mctx = map.getContext('2d');
 const img = document.createElement('canvas'), ictx = img.getContext('2d');
 let view = null, fly2 = null, drag = null;   // view: {cx, cy, s} centre in cells, pixels per cell
 function gridWH() { const g = meta.grid; return meta.dims === 1 ? [g[0], 1] : [g[0], g[1]]; }
-function resizeMap() { map.width = innerWidth * devicePixelRatio; map.height = innerHeight * devicePixelRatio; }
+function resizeMap() {
+  // backing store in device pixels, displayed at CSS size (otherwise HiDPI screens stretch the map)
+  map.width = Math.round(innerWidth * devicePixelRatio); map.height = Math.round(innerHeight * devicePixelRatio);
+  map.style.width = `${innerWidth}px`; map.style.height = `${innerHeight}px`;
+}
 resizeMap();
 function fitScale() { const [w, h] = gridWH(); return Math.min((innerWidth - 720) / w, (innerHeight - 170) / h, innerWidth / w * 0.9); }
 function fit2d(animate) {
@@ -523,7 +527,7 @@ function updateLabels() {
     if (el._sel !== (c.id === selected)) { el._sel = c.id === selected; el.classList.toggle('sel', el._sel); }
     let x, y, hide;
     if (mode === '2d') {
-      [x, y] = toScreen(c.center[0] + 0.5, c.center[1] + 0.5); y -= Math.max(8, c.radius * view.s * 0.8);
+      [x, y] = toScreen(c.center[0] + 0.5, c.center[1] + 0.5); y -= Math.max(6, view.s * 1.5);
       hide = x < 0 || x > innerWidth || y < 0 || y > innerHeight;
     } else {
       const p = colonyPos(c); p.y += 1.5; p.project(camera);
@@ -535,8 +539,9 @@ function updateLabels() {
     if (!hide) {
       placed.push([x, y]);
       // glide to the new position instead of jumping
-      if (el._x === undefined || Math.hypot(el._x - x, el._y - y) > 300) { el._x = x; el._y = y; }
-      el._x += (x - el._x) * 0.2; el._y += (y - el._y) * 0.2;
+      // 2D: exact placement; 3D: glide (the projected point jitters as colonies change)
+      if (mode === '2d' || el._x === undefined || Math.hypot(el._x - x, el._y - y) > 300) { el._x = x; el._y = y; }
+      else { el._x += (x - el._x) * 0.2; el._y += (y - el._y) * 0.2; }
       el.style.transform = `translate(${el._x}px, ${el._y}px) translate(-50%, -100%)`;
     }
     const disp = hide ? 'none' : 'block';
