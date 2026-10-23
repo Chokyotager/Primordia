@@ -43,6 +43,7 @@ pub mod pi {
     pub const EXT_Y: usize = 32;
     pub const EXT_Z: usize = 33;
     pub const NPAIRS: usize = 34;
+    pub const SLEEP_SCALE: usize = 35;
     pub const COSTS: usize = 64;
     pub const PWRITE: usize = 320;
     pub const CAT: usize = 384;
@@ -115,6 +116,7 @@ pub fn param_words(p: &Params) -> Vec<u32> {
     w[pi::HEAT] = p.heat_q16 as u32;
     w[pi::E_SCALE] = p.e_scale;
     w[pi::F_SCALE] = p.f_scale;
+    w[pi::SLEEP_SCALE] = p.sleep_scale;
     w[pi::SIG_EMIT] = p.sig_emit;
     let ncat = p.cat.len().min(pi::MAX_CAT);
     w[pi::NCAT] = if p.chem_on { ncat as u32 } else { 0 };
@@ -216,6 +218,7 @@ pub fn constants() -> String {
         ("P_EXT_Y", pi::EXT_Y),
         ("P_EXT_Z", pi::EXT_Z),
         ("P_NPAIRS", pi::NPAIRS),
+        ("P_SLEEP_SCALE", pi::SLEEP_SCALE),
         ("P_COSTS", pi::COSTS),
         ("P_PWRITE", pi::PWRITE),
         ("P_CAT", pi::CAT),

@@ -207,6 +207,21 @@ fn t1_halt_on_energy() {
     assert_eq!(st.site[c * SITE + S_SPENT], 3);
 }
 
+/// `SLEEP n` sleeps min(n, 255) x individual.sleep_scale epochs.
+#[test]
+fn t1_sleep_scale() {
+    for (scale, n, want) in [(1u32, 0x45u8, 5u32), (16, 0x45, 80), (16, 0x5F, 496)] {
+        let mut cfg = deterministic_cfg(2);
+        cfg.individual.sleep_scale = scale;
+        let (p, mut st) = blank(&cfg);
+        let c = p.geom.index([5, 5, 0]);
+        put(&mut st, &p, c, &[n, op::SLEEP, 0x41], 0, 1000);
+        let snap = flag_snapshot(&st);
+        exec_slice(&mut st, &p, &snap, c, None, None);
+        assert_eq!(st.h(c, H_SLEEP), want, "scale {scale}");
+    }
+}
+
 // ------------------------------------------------------------------ T2
 
 #[test]

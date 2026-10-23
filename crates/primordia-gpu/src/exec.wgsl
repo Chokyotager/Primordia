@@ -910,7 +910,7 @@ fn step() -> i32 {
     case 0x6Eu: { // SLEEP
         let n = pop(); if (g_err) { return END; }
         if (n > 0 && !fixed_len) {
-            hdr[me * HDR + H_SLEEP] = u32(min(n, 255));
+            hdr[me * HDR + H_SLEEP] = u32(min(n, 255)) * P[P_SLEEP_SCALE];
             return END;
         }
     }

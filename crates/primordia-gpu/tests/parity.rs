@@ -115,6 +115,7 @@ fn t4_ageing_and_moonlight() {
     let mut c = cfg(2);
     c.individual.max_age = 50;
     c.energy.sun.moon = 0.15;
+    c.individual.sleep_scale = 16; // the seeded programs include SLEEP
     c.validate().unwrap();
     let p = Params::new(&c);
     let night = primordia_core::phases::row_lights(&p, 30); // day_period 40: epoch 30 is mid-night
@@ -187,6 +188,7 @@ fn t4_resident_fuzz() {
         c.individual.starve_after = if rnd() % 2 == 0 { 20 } else { 0 };
         c.individual.max_age = if rnd() % 2 == 0 { 30 } else { 0 };
         c.energy.sun.moon = if rnd() % 2 == 0 { 0.1 } else { 0.0 };
+        c.individual.sleep_scale = if rnd() % 2 == 0 { 16 } else { 1 };
         c.energy.upkeep.base = 4.0;
         if c.validate().is_err() {
             continue;

@@ -67,6 +67,8 @@ pub struct IndividualCfg {
     pub starve_after: u32,
     /// A cell dies of old age this many epochs after its birth; 0 = never.
     pub max_age: u32,
+    /// `SLEEP n` sleeps for min(n, 255) x this many epochs (1 = as in the spec).
+    pub sleep_scale: u32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -397,6 +399,7 @@ impl Default for IndividualCfg {
             dead_after: 64,
             starve_after: 0,
             max_age: 0,
+            sleep_scale: 1,
         }
     }
 }
@@ -792,6 +795,7 @@ impl Config {
         let ind = &self.individual;
         ensure!(ind.l_max >= 1 && ind.l_max <= 256 && ind.l_max % 4 == 0, "l_max must be 4..=256 and a multiple of 4");
         ensure!(ind.l_init <= ind.l_max, "l_init > l_max");
+        ensure!((1..=256).contains(&ind.sleep_scale), "individual.sleep_scale must be 1..=256");
         ensure!((0.0..=1.0).contains(&self.energy.sun.moon), "energy.sun.moon must be in 0..=1");
         ensure!(ind.step_budget <= 65535, "step_budget too large");
         let faces = self.faces().max(1) as f64;

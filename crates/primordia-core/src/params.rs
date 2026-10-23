@@ -68,6 +68,7 @@ pub struct Params {
     pub dead_after: u32,
     pub starve_after: u32,
     pub max_age: u32,
+    pub sleep_scale: u32,
 
     pub energy_on: bool,
     pub chem_on: bool,
@@ -249,6 +250,7 @@ impl Params {
             dead_after: c.individual.dead_after,
             starve_after: if energy_on { c.individual.starve_after } else { 0 },
             max_age: c.individual.max_age,
+            sleep_scale: c.individual.sleep_scale,
             energy_on,
             chem_on: c.chemistry.enabled,
             matter_on: c.matter.enabled && !pair_concat,

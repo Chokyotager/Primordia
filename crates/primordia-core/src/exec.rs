@@ -821,7 +821,7 @@ impl<'a> Cpu<'a> {
             op::SLEEP => {
                 let n = pop!();
                 if n > 0 && !p.pair_concat {
-                    *st.hm(me, H_SLEEP) = n.min(255) as u32;
+                    *st.hm(me, H_SLEEP) = n.min(255) as u32 * p.sleep_scale;
                     return Flow::End;
                 }
             }
