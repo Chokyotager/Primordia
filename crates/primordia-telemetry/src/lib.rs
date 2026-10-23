@@ -157,7 +157,7 @@ impl Recorder {
 
     pub fn record(&mut self, sim: &mut Sim) -> Result<()> {
         // lineage: every birth this epoch (no state needed)
-        for b in &sim.births {
+        for b in &sim.take_births() {
             self.lineage.push(vec![V::I(b[0] as i64), V::I(b[1] as i64), V::I(b[2] as i64), V::I(b[3] as i64), V::I(b[4] as i64), V::I(b[5] as i64)])?;
         }
         if self.needs_state(sim.st.epoch) {

@@ -354,6 +354,9 @@ fn worker(mut sim: Sim, mut rec: Recorder, mut hook: Hook, rx: Receiver<Cmd>, ou
             for b in &sim.births {
                 lineage.insert(b[2], b[1]);
             }
+            if lineage.len() > 2_000_000 {
+                lineage.clear();
+            }
             if let Err(e) = rec.record(&mut sim) {
                 msg(&out, "⚠", format!("telemetry error: {e:#}"), sim.st.epoch);
             }

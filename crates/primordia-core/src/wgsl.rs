@@ -358,7 +358,8 @@ pub mod ts {
     pub const L_MATTER: usize = 21; // 3
     pub const L_ATOMS: usize = 24;
     pub const BIRTH_COUNT: usize = 25;
-    pub const N: usize = 26;
+    pub const FAULT: usize = 26;
+    pub const N: usize = 27;
 }
 
 pub fn phys_words(p: &Params) -> Vec<u32> {
@@ -542,6 +543,7 @@ pub fn phys_constants() -> String {
         ("T_L_MATTER", ts::L_MATTER),
         ("T_L_ATOMS", ts::L_ATOMS),
         ("T_BIRTH_COUNT", ts::BIRTH_COUNT),
+        ("T_FAULT", ts::FAULT),
         ("NTALLY", ts::N),
     ];
     for (n, v) in consts {

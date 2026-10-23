@@ -23,6 +23,7 @@
 @group(0) @binding(18) var<storage, read_write> shdr: array<u32>;
 @group(0) @binding(19) var<storage, read_write> stape: array<u32>;
 @group(0) @binding(20) var<storage, read_write> births: array<u32>;
+@group(0) @binding(21) var<storage, read_write> iargs: array<u32>;
 
 const NONE: u32 = 0xFFFFFFFFu;
 const C_NFLD: u32 = 0u;
@@ -32,7 +33,7 @@ const C_ANYOUT: u32 = 3u;
 const C_PHASE: u32 = 4u;
 const C_F: u32 = 8u;
 const CF_STRIDE: u32 = 10u;
-const BIRTH_CAP: u32 = 65536u;
+const BIRTH_CAP: u32 = 16384u;
 
 // ------------------------------------------------------------- arithmetic
 
@@ -725,25 +726,103 @@ fn k_lab_init(@builtin(global_invocation_id) gid: vec3<u32>) {
     atomicStore(&bw[B_LAB() + c], l);
 }
 
+// Union-find style labelling: hook trees onto smaller labels, then
+// shortcut. Labels only decrease and stay inside the component, so the
+// fixed point is the component's minimum canonical index whatever the
+// thread order. Rounds are gated on the GPU (indirect dispatch), so no
+// read-back is needed.
+fn set_changed() { atomicStore(&tally[2u * T_CHANGED], 1u); }
+
 @compute @workgroup_size(64)
-fn k_lab_prop(@builtin(global_invocation_id) gid: vec3<u32>) {
+fn k_lab_hook(@builtin(global_invocation_id) gid: vec3<u32>) {
     let c = gidx(gid);
     if (c >= Q[Q_N]) { return; }
-    let l0 = lab(c);
-    if (l0 == NONE) { return; }
-    var m = l0;
+    let lc = lab(c);
+    if (lc == NONE) { return; }
+    let bm = bonds(c);
+    for (var d = 0u; d < 6u; d = d + 1u) {
+        if ((bm & (1u << d)) == 0u) { continue; }
+        let t = nb_raw(c, d);
+        if (t == NONE) { continue; }
+        let lt = lab(t);
+        if (lt < lc) {
+            let o1 = atomicMin(&bw[B_LAB() + cellof(lc)], lt);
+            let o2 = atomicMin(&bw[B_LAB() + c], lt);
+            if (o1 > lt || o2 > lt) { set_changed(); }
+        }
+    }
+}
+
+@compute @workgroup_size(64)
+fn k_lab_jump(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let c = gidx(gid);
+    if (c >= Q[Q_N]) { return; }
+    let l = lab(c);
+    if (l == NONE) { return; }
+    let r = lab(cellof(l));
+    if (r < l) {
+        atomicMin(&bw[B_LAB() + c], r);
+        set_changed();
+    }
+}
+
+fn set_groups(at: u32, on: bool) {
+    let g = (Q[Q_N] + 63u) / 64u;
+    if (!on) {
+        iargs[at] = 0u;
+        iargs[at + 1u] = 1u;
+        iargs[at + 2u] = 1u;
+    } else if (g > 65535u) {
+        iargs[at] = 65535u;
+        iargs[at + 1u] = (g + 65534u) / 65535u;
+        iargs[at + 2u] = 1u;
+    } else {
+        iargs[at] = g;
+        iargs[at + 1u] = 1u;
+        iargs[at + 2u] = 1u;
+    }
+}
+
+// iargs: [0..3) labelling rounds, [3..6) body phase
+@compute @workgroup_size(1)
+fn k_body_gate() {
+    let on = atomicLoad(&tally[2u * T_VOTES]) > 0u;
+    set_groups(0u, on);
+    set_groups(3u, on);
+    atomicStore(&tally[2u * T_CHANGED], 0u);
+}
+
+@compute @workgroup_size(1)
+fn k_lab_gate() {
+    let more = atomicLoad(&tally[2u * T_CHANGED]) != 0u;
+    if (!more) { set_groups(0u, false); }
+    atomicStore(&tally[2u * T_CHANGED], 0u);
+}
+
+// After the last round: any edge with unequal labels means the labelling did
+// not converge; count it (it must stay 0) and skip the body phase.
+@compute @workgroup_size(64)
+fn k_lab_verify(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let c = gidx(gid);
+    if (c >= Q[Q_N]) { return; }
+    let lc = lab(c);
+    if (lc == NONE) { return; }
+    var bad = lab(cellof(lc)) != lc;
     let bm = bonds(c);
     for (var d = 0u; d < 6u; d = d + 1u) {
         if ((bm & (1u << d)) != 0u) {
             let t = nb_raw(c, d);
-            if (t != NONE) { m = min(m, lab(t)); }
+            if (t != NONE && lab(t) != lc) { bad = true; }
         }
     }
-    m = min(m, lab(cellof(m)));
-    if (m < l0) {
-        atomicMin(&bw[B_LAB() + c], m);
-        atomicStore(&tally[2u * T_CHANGED], 1u);
+    if (bad) {
+        atomicAdd(&tally[2u * T_FAULT], 1u);
     }
+}
+
+@compute @workgroup_size(1)
+fn k_fault_gate() {
+    if (atomicLoad(&tally[2u * T_FAULT]) != 0u) { set_groups(3u, false); }
 }
 
 @compute @workgroup_size(64)

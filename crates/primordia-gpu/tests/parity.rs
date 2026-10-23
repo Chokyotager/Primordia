@@ -93,7 +93,8 @@ fn parity_mode(dims: u32, epochs: u32, paper: bool, resident: bool) {
         }
         assert_eq!(a.st.tally, b.st.tally, "tally at epoch {e}");
         assert_eq!(a.st.ledger, b.st.ledger, "ledger at epoch {e}");
-        assert_eq!(a.births, b.births, "births at epoch {e}");
+        assert_eq!(a.take_births(), b.take_births(), "births at epoch {e}");
+        assert_eq!(b.faults, 0, "labelling fault at epoch {e}");
         assert_eq!(a.st.hash(), b.st.hash());
     }
     let occ = (0..a.st.n).filter(|&c| a.st.occupied(c)).count();
@@ -176,14 +177,54 @@ fn t4_resident_fuzz() {
             b.step();
             if e % 3 == 0 || e >= 50 {
                 b.sync();
+                assert_eq!(a.take_births(), b.take_births(), "fuzz case {case} births at epoch {e}");
+                assert_eq!(b.faults, 0);
                 if let Some(d) = a.st.first_diff(&b.st) {
                     panic!("fuzz case {case} (dims {dims}, {:?}): resident GPU != CPU at epoch {e}: {:?}", c.world.boundary, d);
                 }
             }
-            assert_eq!(a.st.ledger, b.st.ledger, "fuzz case {case} ledger at epoch {e}");
-            assert_eq!(a.births, b.births, "fuzz case {case} births at epoch {e}");
+            
+            
         }
+        b.sync();
+        assert_eq!(a.st.ledger, b.st.ledger, "fuzz case {case} ledger");
         assert_eq!(a.st.ledger.violations, 0);
         eprintln!("fuzz case {case}: dims {dims} {:?} identical", c.world.boundary);
     }
+}
+
+/// The pipelined path: many epochs in flight, asynchronous snapshots, no
+/// syncing; snapshot hashes, births and the ledger must match the CPU model.
+#[test]
+fn t4_pipelined_snapshots() {
+    let c = cfg(2);
+    let p = Params::new(&c);
+    let Ok(gpu) = GpuExec::with_mode(&p, true) else { return };
+    let mut a = Sim::new(c.clone(), Box::new(CpuExec)).unwrap();
+    let mut b = Sim::new(c.clone(), Box::new(gpu)).unwrap();
+    seed(&mut a);
+    seed(&mut b);
+    b.touch();
+    let mut want = std::collections::BTreeMap::new();
+    let mut births_a = vec![];
+    for _ in 0..80 {
+        a.step();
+        births_a.extend(a.take_births());
+        b.step();
+        if a.st.epoch % 7 == 0 {
+            want.insert(a.st.epoch, a.st.hash());
+            b.request_snapshot();
+        }
+    }
+    let snaps = b.take_snapshots(true);
+    assert_eq!(snaps.len(), want.len());
+    for s in &snaps {
+        assert_eq!(s.hash(), want[&s.epoch], "snapshot at epoch {}", s.epoch);
+    }
+    b.sync();
+    assert_eq!(a.st.hash(), b.st.hash());
+    assert_eq!(births_a, b.take_births());
+    assert_eq!(a.st.ledger, b.st.ledger);
+    assert_eq!(b.faults, 0);
+    eprintln!("pipelined: {} snapshots identical", snaps.len());
 }

@@ -11,16 +11,25 @@ use primordia_core::phases::{self, FluxSpec};
 use primordia_core::rng::phase;
 use primordia_core::state::State;
 use primordia_core::wgsl::{self, pi, qi, ts};
-use primordia_core::world::{ExecBackend, ResidentOut};
+use primordia_core::world::{EpochResult, ExecBackend, StateCopy};
+use std::collections::VecDeque;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 const EXEC_SHADER: &str = include_str!("exec.wgsl");
 const PHYS_SHADER: &str = include_str!("phys.wgsl");
 const WG: u32 = 64;
 const CTL_LEN: usize = 96;
-const BIRTH_CAP: usize = 65536;
+const BIRTH_CAP: usize = 16384;
+/// Epochs that may be in flight at once.
+const RING: usize = 6;
+/// Asynchronous full-state copies that may be outstanding.
+const COPIES: usize = 3;
 const MAX_VENTS: usize = 4096;
 const NONE: u32 = 0xFFFF_FFFF;
+/// Union-find rounds per epoch (each gated off on the GPU once converged).
+const LAB_ROUNDS: usize = 48;
 
 #[allow(dead_code)]
 struct Bufs {
@@ -55,6 +64,18 @@ struct Bufs {
     births: wgpu::Buffer,
     small: wgpu::Buffer,
     phys_bind: wgpu::BindGroup,
+    iargs: wgpu::Buffer,
+    iargs_w: wgpu::Buffer,
+    params_all: wgpu::Buffer,
+    res: Vec<Slot>,
+    copies: Vec<Slot>,
+}
+
+struct Slot {
+    buf: wgpu::Buffer,
+    ready: Arc<AtomicBool>,
+    sub: Option<wgpu::SubmissionIndex>,
+    epoch: u64,
 }
 
 struct Pipes {
@@ -78,6 +99,12 @@ pub struct GpuExec {
     n_batches: usize,
     map_key: u64,
     pub resident: bool,
+    inflight: VecDeque<usize>,
+    next_slot: usize,
+    copy_q: VecDeque<usize>,
+    next_copy: usize,
+    done: VecDeque<EpochResult>,
+    copies_done: VecDeque<StateCopy>,
     pub adapter: String,
     /// Accumulated time (s): upload, kernels, download.
     pub timing: [f64; 3],
@@ -109,7 +136,12 @@ const PHYS_KERNELS: &[&str] = &[
     "k_wake",
     "k_site",
     "k_lab_init",
-    "k_lab_prop",
+    "k_lab_hook",
+    "k_lab_jump",
+    "k_lab_gate",
+    "k_body_gate",
+    "k_lab_verify",
+    "k_fault_gate",
     "k_body_tally",
     "k_body_decide",
     "k_body_check",
@@ -147,7 +179,7 @@ impl GpuExec {
         limits.max_buffer_size = alimits.max_buffer_size;
         limits.max_storage_buffers_per_shader_stage = alimits.max_storage_buffers_per_shader_stage.max(8);
         limits.max_bindings_per_bind_group = alimits.max_bindings_per_bind_group;
-        anyhow::ensure!(limits.max_storage_buffers_per_shader_stage >= 21, "adapter supports only {} storage buffers per stage", limits.max_storage_buffers_per_shader_stage);
+        anyhow::ensure!(limits.max_storage_buffers_per_shader_stage >= 22, "adapter supports only {} storage buffers per stage", limits.max_storage_buffers_per_shader_stage);
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("primordia"),
             required_features: wgpu::Features::empty(),
@@ -178,7 +210,7 @@ impl GpuExec {
         // physics
         let psrc = format!("{}\n{}", wgsl::phys_constants(), PHYS_SHADER);
         let pmodule = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("phys.wgsl"), source: wgpu::ShaderSource::Wgsl(psrc.into()) });
-        let pentries: Vec<_> = (0..21).map(|b| storage_entry(b, PHYS_READ_ONLY.contains(&b))).collect();
+        let pentries: Vec<_> = (0..22).map(|b| storage_entry(b, PHYS_READ_ONLY.contains(&b))).collect();
         let phys_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("phys"), entries: &pentries });
         let ppl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[Some(&phys_layout)], immediate_size: 0 });
         let phys = PHYS_KERNELS.iter().map(|k| (*k, mk(&pmodule, &ppl, k))).collect();
@@ -195,6 +227,12 @@ impl GpuExec {
             n_batches: 0,
             map_key: 0,
             resident,
+            inflight: VecDeque::new(),
+            next_slot: 0,
+            copy_q: VecDeque::new(),
+            next_copy: 0,
+            done: VecDeque::new(),
+            copies_done: VecDeque::new(),
             adapter: format!("{} ({:?}, {})", info.name, info.backend, info.driver),
             timing: [0.0; 3],
         };
@@ -254,7 +292,22 @@ impl GpuExec {
         let shdr = mk("shdr", sizes[1]);
         let stape = mk("stape", sizes[0]);
         let births = mk("births", (BIRTH_CAP * 6 * 4) as u64);
-        let pb = [&tapes, &hdr, &fields, &site, &nbr, &q, &tables, &light, &rows, &vents, &mmap, &jf, &bo, &outs, &expo, &tally, &ctl, &bw, &shdr, &stape, &births];
+        // kernels write the dispatch arguments into iargs_w (bound); a copy moves
+        // them into iargs (indirect-only), since one buffer cannot be both in
+        // a single dispatch
+        let iargs_w = mk("iargs_w", 64);
+        let iargs = d.create_buffer(&wgpu::BufferDescriptor { label: Some("iargs"), size: 64, usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+        let params_all = mk("params_all", (pi::LEN * 4 * 28) as u64);
+        let res_size = ((ts::N * 2 + BIRTH_CAP * 6) * 4) as u64;
+        let mk_slot = |label: &str, size: u64| Slot {
+            buf: d.create_buffer(&wgpu::BufferDescriptor { label: Some(label), size, usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false }),
+            ready: Arc::new(AtomicBool::new(false)),
+            sub: None,
+            epoch: 0,
+        };
+        let res = (0..RING).map(|_| mk_slot("result", res_size)).collect();
+        let copies = (0..COPIES).map(|_| mk_slot("copy", sizes.iter().sum())).collect();
+        let pb = [&tapes, &hdr, &fields, &site, &nbr, &q, &tables, &light, &rows, &vents, &mmap, &jf, &bo, &outs, &expo, &tally, &ctl, &bw, &shdr, &stape, &births, &iargs_w];
         let pentries: Vec<_> = pb.iter().enumerate().map(|(i, b)| wgpu::BindGroupEntry { binding: i as u32, resource: b.as_entire_binding() }).collect();
         let phys_bind = d.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("phys"), layout: &self.phys_layout, entries: &pentries });
         self.bufs = Some(Bufs {
@@ -288,7 +341,14 @@ impl GpuExec {
             births,
             small,
             phys_bind,
+            iargs,
+            iargs_w,
+            params_all,
+            res,
+            copies,
         });
+        self.inflight.clear();
+        self.copy_q.clear();
         self.layout_key = key;
         self.map_key = 0;
     }
@@ -356,29 +416,128 @@ impl GpuExec {
     }
 
     fn run_exec(&self, st: &State, p: &Params) {
+        let mut enc = self.device.create_command_encoder(&Default::default());
+        self.encode_exec(&mut enc, st.epoch, st.mirrored, p);
+        self.queue.submit([enc.finish()]);
+    }
+
+    /// Encode phase 6 into `enc`: one parameter block per colour is uploaded
+    /// once and copied into place before each sub-step.
+    fn encode_exec(&self, enc: &mut wgpu::CommandEncoder, epoch: u64, mirrored: bool, p: &Params) {
         let b = self.bufs.as_ref().unwrap();
         let q = &self.queue;
         let mut w = self.words.clone();
-        w[pi::EPOCH] = st.epoch as u32;
-        w[pi::MIRRORED] = st.mirrored as u32;
+        w[pi::EPOCH] = epoch as u32;
+        w[pi::MIRRORED] = mirrored as u32;
+        let blk = (pi::LEN * 4) as u64;
         if p.geom.dims == 0 {
-            let pairs = exec::pairing(p, st.epoch);
+            let pairs = exec::pairing(p, epoch);
             q.write_buffer(&b.pairs, 0, bytemuck::cast_slice(&pairs));
             w[pi::NPAIRS] = (pairs.len() / 2) as u32;
             q.write_buffer(&b.params, 0, bytemuck::cast_slice(&w));
-            let mut enc = self.device.create_command_encoder(&Default::default());
-            self.dispatch(&mut enc, &self.pipes.snap, &b.exec_bind, p.geom.n as u32);
-            self.dispatch(&mut enc, &self.pipes.exec, &b.exec_bind, w[pi::NPAIRS]);
-            q.submit([enc.finish()]);
+            self.dispatch(enc, &self.pipes.snap, &b.exec_bind, p.geom.n as u32);
+            self.dispatch(enc, &self.pipes.exec, &b.exec_bind, w[pi::NPAIRS]);
         } else {
-            for col in exec::color_order(p, st.epoch, st.mirrored) {
+            let order = exec::color_order(p, epoch, mirrored);
+            let mut all = Vec::with_capacity(pi::LEN * order.len());
+            for &col in &order {
                 w[pi::COLOR] = col;
-                q.write_buffer(&b.params, 0, bytemuck::cast_slice(&w));
-                let mut enc = self.device.create_command_encoder(&Default::default());
-                self.dispatch(&mut enc, &self.pipes.snap, &b.exec_bind, p.geom.n as u32);
-                self.dispatch(&mut enc, &self.pipes.exec, &b.exec_bind, p.geom.cells_per_color() as u32);
-                q.submit([enc.finish()]);
+                all.extend_from_slice(&w);
             }
+            q.write_buffer(&b.params_all, 0, bytemuck::cast_slice(&all));
+            for i in 0..order.len() {
+                enc.copy_buffer_to_buffer(&b.params_all, i as u64 * blk, &b.params, 0, blk);
+                self.dispatch(enc, &self.pipes.snap, &b.exec_bind, p.geom.n as u32);
+                self.dispatch(enc, &self.pipes.exec, &b.exec_bind, p.geom.cells_per_color() as u32);
+            }
+        }
+    }
+
+    fn gate(&self, enc: &mut wgpu::CommandEncoder, k: &str) {
+        self.phys1(enc, k);
+        let b = self.bufs.as_ref().unwrap();
+        enc.copy_buffer_to_buffer(&b.iargs_w, 0, &b.iargs, 0, 64);
+    }
+
+    fn phys_indirect(&self, enc: &mut wgpu::CommandEncoder, k: &str, at: u64) {
+        let b = self.bufs.as_ref().unwrap();
+        let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
+        pass.set_pipeline(&self.pipes.phys[k]);
+        pass.set_bind_group(0, &b.phys_bind, &[]);
+        pass.dispatch_workgroups_indirect(&b.iargs, at);
+    }
+
+    /// Read a finished result slot (it must be mapped).
+    fn harvest_result(&mut self, si: usize) {
+        let b = self.bufs.as_ref().unwrap();
+        let slot = &b.res[si];
+        let (tally, births) = {
+            let data = slot.buf.slice(..).get_mapped_range().expect("mapped result");
+            let w: &[u32] = bytemuck::cast_slice(&data);
+            let tally: Vec<u64> = (0..ts::N).map(|s| w[2 * s] as u64 | (w[2 * s + 1] as u64) << 32).collect();
+            let nb = (tally[ts::BIRTH_COUNT] as usize).min(BIRTH_CAP);
+            let bw = &w[ts::N * 2..];
+            let mut births: Vec<[u32; 6]> = (0..nb).map(|i| [bw[i * 6], bw[i * 6 + 1], bw[i * 6 + 2], bw[i * 6 + 3], bw[i * 6 + 4], bw[i * 6 + 5]]).collect();
+            births.sort_by_key(|x| x[3]);
+            (tally, births)
+        };
+        slot.buf.unmap();
+        slot.ready.store(false, Ordering::Release);
+        self.done.push_back(EpochResult { epoch: slot.epoch, tally, births });
+    }
+
+    /// Harvest finished epochs in order; with `wait`, block for all of them.
+    fn pump(&mut self, wait: bool) {
+        let _ = self.device.poll(if wait { wgpu::PollType::wait_indefinitely() } else { wgpu::PollType::Poll });
+        while let Some(&si) = self.inflight.front() {
+            if !self.bufs.as_ref().unwrap().res[si].ready.load(Ordering::Acquire) {
+                if !wait {
+                    break;
+                }
+                let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+                continue;
+            }
+            self.inflight.pop_front();
+            self.harvest_result(si);
+        }
+    }
+
+    fn harvest_copy(&mut self, ci: usize) {
+        let b = self.bufs.as_ref().unwrap();
+        let slot = &b.copies[ci];
+        let s = b.sizes;
+        let c = {
+            let data = slot.buf.slice(..).get_mapped_range().expect("mapped copy");
+            let (a, rest) = data.split_at(s[0] as usize);
+            let (h, rest) = rest.split_at(s[1] as usize);
+            let (f, rest) = rest.split_at(s[2] as usize);
+            let (si, rest) = rest.split_at(s[3] as usize);
+            StateCopy {
+                epoch: slot.epoch,
+                tapes: a.to_vec(),
+                hdr: bytemuck::cast_slice(h).to_vec(),
+                fields: bytemuck::cast_slice(f).to_vec(),
+                site: bytemuck::cast_slice(si).to_vec(),
+                light: bytemuck::cast_slice(&rest[..s[4] as usize]).to_vec(),
+            }
+        };
+        slot.buf.unmap();
+        slot.ready.store(false, Ordering::Release);
+        self.copies_done.push_back(c);
+    }
+
+    fn pump_copies(&mut self, wait: bool) {
+        let _ = self.device.poll(if wait { wgpu::PollType::wait_indefinitely() } else { wgpu::PollType::Poll });
+        while let Some(&ci) = self.copy_q.front() {
+            if !self.bufs.as_ref().unwrap().copies[ci].ready.load(Ordering::Acquire) {
+                if !wait {
+                    break;
+                }
+                let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+                continue;
+            }
+            self.copy_q.pop_front();
+            self.harvest_copy(ci);
         }
     }
 
@@ -483,6 +642,7 @@ impl ExecBackend for GpuExec {
     }
     fn download(&mut self, st: &mut State) {
         let t = Instant::now();
+        self.pump(true);
         self.download_state(st, true);
         self.timing[2] += t.elapsed().as_secs_f64();
     }
@@ -500,18 +660,30 @@ impl ExecBackend for GpuExec {
         self.timing[2] += (t3 - t2).as_secs_f64();
     }
 
-    fn epoch_resident(&mut self, st: &State, p: &Params, vents: &[u32], map: Option<&[u32]>) -> ResidentOut {
+    fn submit_resident(&mut self, epoch: u64, mirrored: bool, p: &Params, vents: &[u32], map: Option<&[u32]>) {
         let t0 = Instant::now();
         let n = p.geom.n as u32;
         let dims = p.geom.dims;
+        // free the result slot we are about to reuse
+        let si = self.next_slot;
+        while self.inflight.contains(&si) {
+            self.pump(false);
+            if self.inflight.contains(&si) {
+                let sub = self.bufs.as_ref().unwrap().res[self.inflight[0]].sub.clone();
+                if let Some(s) = sub {
+                    let _ = self.device.poll(wgpu::PollType::Wait { submission_index: Some(s), timeout: None });
+                }
+            }
+        }
+        self.next_slot = (si + 1) % RING;
         {
             let b = self.bufs.as_ref().unwrap();
             let q = &self.queue;
             let mut qw = self.qwords.clone();
-            qw[qi::EPOCH] = st.epoch as u32;
-            qw[qi::MIRRORED] = st.mirrored as u32;
+            qw[qi::EPOCH] = epoch as u32;
+            qw[qi::MIRRORED] = mirrored as u32;
             q.write_buffer(&b.q, 0, bytemuck::cast_slice(&qw));
-            q.write_buffer(&b.rows, 0, bytemuck::cast_slice(&phases::row_lights(p, st.epoch)));
+            q.write_buffer(&b.rows, 0, bytemuck::cast_slice(&phases::row_lights(p, epoch)));
             let mut vw = vec![vents.len().min(MAX_VENTS) as u32];
             vw.extend(vents.iter().take(MAX_VENTS));
             q.write_buffer(&b.vents, 0, bytemuck::cast_slice(&vw));
@@ -524,8 +696,8 @@ impl ExecBackend for GpuExec {
             }
             q.write_buffer(&b.tally, 0, bytemuck::cast_slice(&vec![0u32; ts::N * 2]));
         }
-        // phases 2-5
         let mut enc = self.device.create_command_encoder(&Default::default());
+        // phases 2-5
         if dims == 3 && p.sun_on {
             self.phys(&mut enc, "k_light3d", p.geom.size[0] * p.geom.size[1]);
         } else {
@@ -538,7 +710,7 @@ impl ExecBackend for GpuExec {
             self.phys1(&mut enc, "k_vents");
         }
         if dims > 0 {
-            let base = if st.mirrored { 3 } else { 0 };
+            let base = if mirrored { 3 } else { 0 };
             for bi in 0..self.n_batches {
                 self.use_ctl(&mut enc, base + bi);
                 for k in ["k_flux_a", "k_flux_b", "k_flux_c", "k_flux_d"] {
@@ -562,42 +734,29 @@ impl ExecBackend for GpuExec {
             }
             self.phys(&mut enc, "k_wake", n);
         }
-        self.queue.submit([enc.finish()]);
         // phase 6
-        self.run_exec(st, p);
+        self.encode_exec(&mut enc, epoch, mirrored, p);
         // site counters, births
-        let mut enc = self.device.create_command_encoder(&Default::default());
         self.phys(&mut enc, "k_site", n);
-        self.queue.submit([enc.finish()]);
-        // phase 7: bodies (only when someone voted)
+        // phase 7: bodies, gated on the GPU by the vote count
         if p.bonds_on && dims > 0 {
             let b = self.bufs.as_ref().unwrap();
-            let votes = self.read_small(&b.tally, (ts::VOTES * 8) as u64, 1)[0];
-            if votes > 0 {
-                let mut enc = self.device.create_command_encoder(&Default::default());
-                enc.clear_buffer(&b.bw, (n as u64) * 4, None);
-                self.phys(&mut enc, "k_lab_init", n);
-                self.queue.submit([enc.finish()]);
-                loop {
-                    self.queue.write_buffer(&b.tally, (ts::CHANGED * 8) as u64, bytemuck::cast_slice(&[0u32]));
-                    let mut enc = self.device.create_command_encoder(&Default::default());
-                    for _ in 0..8 {
-                        self.phys(&mut enc, "k_lab_prop", n);
-                    }
-                    self.queue.submit([enc.finish()]);
-                    if self.read_small(&b.tally, (ts::CHANGED * 8) as u64, 1)[0] == 0 {
-                        break;
-                    }
-                }
-                let mut enc = self.device.create_command_encoder(&Default::default());
-                for k in ["k_body_tally", "k_body_decide", "k_body_check", "k_body_claim", "k_body_check2", "k_body_move1", "k_body_move2", "k_body_move3"] {
-                    self.phys(&mut enc, k, n);
-                }
-                self.queue.submit([enc.finish()]);
+            self.gate(&mut enc, "k_body_gate");
+            enc.clear_buffer(&b.bw, (n as u64) * 4, None);
+            self.phys_indirect(&mut enc, "k_lab_init", 0);
+            for _ in 0..LAB_ROUNDS {
+                self.phys_indirect(&mut enc, "k_lab_hook", 0);
+                self.phys_indirect(&mut enc, "k_lab_jump", 0);
+                self.phys_indirect(&mut enc, "k_lab_jump", 0);
+                self.gate(&mut enc, "k_lab_gate");
+            }
+            self.phys_indirect(&mut enc, "k_lab_verify", 12);
+            self.gate(&mut enc, "k_fault_gate");
+            for k in ["k_body_tally", "k_body_decide", "k_body_check", "k_body_claim", "k_body_check2", "k_body_move1", "k_body_move2", "k_body_move3"] {
+                self.phys_indirect(&mut enc, k, 12);
             }
         }
         // phases 8-9
-        let mut enc = self.device.create_command_encoder(&Default::default());
         self.phys(&mut enc, "k_clear_votes", n);
         self.phys(&mut enc, "k_expo", n);
         self.phys(&mut enc, "k_mutate", n);
@@ -607,22 +766,61 @@ impl ExecBackend for GpuExec {
         self.phys(&mut enc, "k_dead", n);
         self.phys(&mut enc, "k_dead_bonds", n);
         self.phys(&mut enc, "k_ledger", n);
-        self.queue.submit([enc.finish()]);
-        let t1 = Instant::now();
+        // results to the slot's staging buffer
         let b = self.bufs.as_ref().unwrap();
-        let raw = self.read_small(&b.tally, 0, ts::N * 2);
-        let tally: Vec<u64> = (0..ts::N).map(|s| raw[2 * s] as u64 | (raw[2 * s + 1] as u64) << 32).collect();
-        let nb = (tally[ts::BIRTH_COUNT] as usize).min(BIRTH_CAP);
-        let mut births = vec![];
-        if nb > 0 {
-            let w = self.read_small(&b.births, 0, nb * 6);
-            births = w.chunks(6).map(|c| [c[0], c[1], c[2], c[3], c[4], c[5]]).collect();
-            births.sort_by_key(|x| x[3]);
+        let tsz = (ts::N * 2 * 4) as u64;
+        enc.copy_buffer_to_buffer(&b.tally, 0, &b.res[si].buf, 0, tsz);
+        enc.copy_buffer_to_buffer(&b.births, 0, &b.res[si].buf, tsz, (BIRTH_CAP * 6 * 4) as u64);
+        let sub = self.queue.submit([enc.finish()]);
+        let b = self.bufs.as_mut().unwrap();
+        let slot = &mut b.res[si];
+        slot.epoch = epoch;
+        slot.sub = Some(sub);
+        let ready = slot.ready.clone();
+        slot.buf.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+            r.expect("map result");
+            ready.store(true, Ordering::Release);
+        });
+        self.inflight.push_back(si);
+        self.timing[1] += t0.elapsed().as_secs_f64();
+    }
+
+    fn poll_resident(&mut self, wait: bool) -> Vec<EpochResult> {
+        let t = Instant::now();
+        self.pump(wait);
+        self.timing[2] += t.elapsed().as_secs_f64();
+        self.done.drain(..).collect()
+    }
+
+    fn request_copy(&mut self, epoch: u64) {
+        let ci = self.next_copy;
+        while self.copy_q.contains(&ci) {
+            self.pump_copies(true);
         }
-        let t2 = Instant::now();
-        self.timing[1] += (t1 - t0).as_secs_f64();
-        self.timing[2] += (t2 - t1).as_secs_f64();
-        ResidentOut { tally, births }
+        self.next_copy = (ci + 1) % COPIES;
+        let b = self.bufs.as_ref().unwrap();
+        let mut enc = self.device.create_command_encoder(&Default::default());
+        let mut off = 0;
+        for (src, sz) in [&b.tapes, &b.hdr, &b.fields, &b.site, &b.light].iter().zip(b.sizes) {
+            enc.copy_buffer_to_buffer(src, 0, &b.copies[ci].buf, off, sz);
+            off += sz;
+        }
+        let sub = self.queue.submit([enc.finish()]);
+        let b = self.bufs.as_mut().unwrap();
+        let slot = &mut b.copies[ci];
+        slot.epoch = epoch;
+        slot.sub = Some(sub);
+        let ready = slot.ready.clone();
+        slot.buf.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+            r.expect("map copy");
+            ready.store(true, Ordering::Release);
+        });
+        self.copy_q.push_back(ci);
+    }
+
+    fn poll_copies(&mut self, wait: bool) -> Vec<StateCopy> {
+        self.pump_copies(wait);
+        self.copies_done.drain(..).collect()
     }
 }
 
