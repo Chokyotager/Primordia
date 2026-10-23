@@ -4,6 +4,14 @@ An implementation of `primorida_spec.md`: a deterministic artificial-life simula
 Random byte programs (PISA-1) on a 0D–3D lattice can become self-replicators under mirror-symmetric
 physics with energy, temperature, chemistry, conserved matter, bonding and chirality.
 
+It builds on Blaise Agüera y Arcas et al., *Computational Life: How Well-formed, Self-replicating
+Programs Emerge from Simple Interaction* ([arXiv:2406.19108](https://arxiv.org/abs/2406.19108); reference
+code: [cubff](https://github.com/paradigms-of-intelligence/cubff)), which showed self-replicators
+emerging from random BFF, Forth and Z80 program soups with no explicit fitness function. The `paper-0d`
+and `paper-2d` presets reduce Primordia to that setting for validation (test T10).
+
+Licensed under the [MIT License](LICENSE).
+
 ```
 cargo build --release
 ./target/release/primordia presets
