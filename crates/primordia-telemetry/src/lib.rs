@@ -146,19 +146,36 @@ impl Recorder {
     }
 
     /// Record everything due after the epoch that just finished.
-    pub fn record(&mut self, sim: &Sim) -> Result<()> {
+    /// True when `record` will read cell state after this epoch (so a
+    /// resident simulation must be synced first).
+    pub fn needs_state(&self, epoch: u64) -> bool {
+        let c = &self.cfg;
+        [c.metrics_every.max(1), c.opcode_every.max(1), c.chirality_every.max(1), c.entropy_every.max(1), c.assay_every.max(1), c.census_every.max(1), c.ecology_every.max(1)]
+            .iter()
+            .any(|&k| epoch % k == 0)
+    }
+
+    pub fn record(&mut self, sim: &mut Sim) -> Result<()> {
+        // lineage: every birth this epoch (no state needed)
+        for b in &sim.births {
+            self.lineage.push(vec![V::I(b[0] as i64), V::I(b[1] as i64), V::I(b[2] as i64), V::I(b[3] as i64), V::I(b[4] as i64), V::I(b[5] as i64)])?;
+        }
+        if self.needs_state(sim.st.epoch) {
+            sim.sync();
+        } else {
+            let st = &sim.st;
+            self.summary.epoch = st.epoch;
+            self.summary.ledger_violations = st.ledger.violations;
+            self.summary.energy_residual = st.ledger.energy_residual;
+            self.summary.matter_residual = st.ledger.matter_residual;
+            self.summary.atom_residual = st.ledger.atom_residual;
+            return Ok(());
+        }
+        let sim = &*sim;
         let st = &sim.st;
         let p = &sim.p;
         let e = st.epoch; // epochs completed
         let due = |every: u64| every > 0 && e % every == 0;
-        // lineage: every birth this epoch
-        for c in 0..st.n {
-            let h = &st.hdr[c * HDR..(c + 1) * HDR];
-            if h[H_FLAGS] & FL_NEWBORN != 0 {
-                let gh = st.tape(c).iter().fold(0xcbf29ce484222325u64, |a, &b| (a ^ b as u64).wrapping_mul(0x100000001b3));
-                self.lineage.push(vec![V::I(e as i64 - 1), V::I(h[H_PARENT] as i64), V::I(h[H_LINEAGE] as i64), V::I(c as i64), V::I(h[H_DEPTH] as i64), V::I(gh as i64)])?;
-            }
-        }
         let mut s = std::mem::take(&mut self.summary);
         s.epoch = e;
         s.ledger_violations = st.ledger.violations;

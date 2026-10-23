@@ -548,7 +548,7 @@ impl Default for TelemetryCfg {
             snapshot_every: 10_000,
             tracers: false,
             ledger_every: 1,
-            metrics_every: 1,
+            metrics_every: 10,
             opcode_every: 10,
             chirality_every: 10,
             entropy_every: 100,

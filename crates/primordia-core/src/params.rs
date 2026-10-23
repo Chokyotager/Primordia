@@ -47,7 +47,7 @@ pub struct Reaction {
     pub energy_q16: [i64; 2],
     pub catalyzable: bool,
     pub photo: bool,
-    pub rate_q32: u64,
+    pub rate_q32: u32,
     pub arr: usize,
 }
 
@@ -132,12 +132,12 @@ pub struct Params {
     pub p_sub: u32,
     pub p_ins: u32,
     pub p_del: u32,
-    pub mu_bg_q32: u64,
-    pub mu_uv_q32: u64,
-    pub mu_flip_q32: u64,
-    pub decay_q32: u64,
+    pub mu_bg_q32: u32,
+    pub mu_uv_q32: u32,
+    pub mu_flip_q32: u32,
+    pub decay_q32: u32,
     pub decay_light_q16: u64,
-    pub bond_break_q32: u64,
+    pub bond_break_q32: u32,
     pub vote_q16: u64,
     pub max_body: u32,
 
@@ -155,6 +155,10 @@ pub struct Params {
     pub map_a: f64,
     pub map_r0: f64,
     pub hash_every: u64,
+}
+
+fn q32u(x: f64) -> u32 {
+    to_q32(x).min(u32::MAX as u64) as u32
 }
 
 fn q16s(x: f64) -> i64 {
@@ -214,7 +218,7 @@ impl Params {
                     energy_q16: [q16s(r.energy as f64 * (1.0 + bias)), q16s(r.energy as f64)],
                     catalyzable: r.catalyzable,
                     photo: r.kind == ReactionKind::Photolysis,
-                    rate_q32: to_q32(r.rate),
+                    rate_q32: to_q32(r.rate).min(u32::MAX as u64) as u32,
                     arr: a,
                 };
                 if rx.catalyzable && rx.energy > 0 {
@@ -299,12 +303,12 @@ impl Params {
             p_sub: if copy_on { cp(m.copy.sub) } else { 0 },
             p_ins: if copy_on { cp(m.copy.sub).saturating_add(cp(m.copy.ins)) } else { 0 },
             p_del: if copy_on { cp(m.copy.sub).saturating_add(cp(m.copy.ins)).saturating_add(cp(m.copy.del)) } else { 0 },
-            mu_bg_q32: if m.enabled { to_q32(m.background) } else { 0 },
-            mu_uv_q32: if m.enabled { to_q32(m.radiation) } else { 0 },
-            mu_flip_q32: if m.enabled { to_q32(m.hand_flip) } else { 0 },
-            decay_q32: if c.decay.enabled { to_q32(c.decay.rate) } else { 0 },
+            mu_bg_q32: if m.enabled { q32u(m.background) } else { 0 },
+            mu_uv_q32: if m.enabled { q32u(m.radiation) } else { 0 },
+            mu_flip_q32: if m.enabled { q32u(m.hand_flip) } else { 0 },
+            decay_q32: if c.decay.enabled { q32u(c.decay.rate) } else { 0 },
             decay_light_q16: to_q16(c.decay.light_factor) as u64,
-            bond_break_q32: if c.bonds.enabled { to_q32(c.bonds.break_rate) } else { 0 },
+            bond_break_q32: if c.bonds.enabled { q32u(c.bonds.break_rate) } else { 0 },
             vote_q16: to_q16(c.bonds.vote_threshold) as u64,
             max_body: c.bonds.max_body_move,
             arr,

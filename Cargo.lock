@@ -3030,6 +3030,7 @@ dependencies = [
  "egui_plot",
  "primordia-core",
  "primordia-telemetry",
+ "rayon",
  "serde_json",
 ]
 

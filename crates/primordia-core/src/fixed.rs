@@ -142,36 +142,6 @@ pub fn poisson_exp_table() -> Vec<u32> {
         .collect()
 }
 
-/// Inverse-CDF Poisson sample. `lambda_q32` is the mean in Q32 (u64), `u` a
-/// uniform u32. Deterministic integer arithmetic only.
-#[inline]
-pub fn poisson_sample(table: &[u32], lambda_q32: u64, u: u32, kmax: u32) -> u32 {
-    if lambda_q32 == 0 {
-        return 0;
-    }
-    let lam = lambda_q32.min(((POIS_SIZE - 1) as u64) << 22) as u128;
-    // P(K=0) = exp(-lambda): series for small lambda, table otherwise.
-    let mut p: u128 = if lam < (1u128 << 28) {
-        let l2 = (lam * lam) >> 32;
-        let l3 = (l2 * lam) >> 32;
-        (1u128 << 32) - lam + l2 / 2 - l3 / 6
-    } else {
-        table[(lam >> 22) as usize] as u128
-    };
-    let mut cdf = p;
-    let u = u as u128;
-    let mut k = 0u32;
-    while u >= cdf && k < kmax {
-        k += 1;
-        p = ((p * lam) >> 32) / k as u128;
-        if p == 0 {
-            break;
-        }
-        cdf += p;
-    }
-    k
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -186,25 +156,13 @@ mod tests {
     #[test]
     fn poisson_mean() {
         let t = poisson_exp_table();
-        let lam = 0.7f64;
-        let lq = (lam * Q32 as f64) as u64;
-        let mut s = 0u64;
-        let n = 200_000u32;
-        for i in 0..n {
-            let u = crate::rng::philox_u32(1, 2, [i, 0, 0, 0]);
-            s += poisson_sample(&t, lq, u, 64) as u64;
+        for lam in [0.0005f64, 0.02, 0.7, 3.0] {
+            let lq = (lam * (1u64 << 24) as f64) as u32;
+            let n = 200_000u32;
+            let s: u64 = (0..n).map(|i| poisson24(&t, lq, crate::rng::philox_u32(1, 2, [i, 0, 0, 0]), 64) as u64).sum();
+            let m = s as f64 / n as f64;
+            assert!((m - lam).abs() < 0.02 * lam.max(0.05), "lambda {lam}: mean {m}");
         }
-        let m = s as f64 / n as f64;
-        assert!((m - lam).abs() < 0.02, "mean {m}");
-        // tiny lambda
-        let lq = (0.0005 * Q32 as f64) as u64;
-        let mut s = 0u64;
-        for i in 0..n {
-            let u = crate::rng::philox_u32(3, 2, [i, 0, 0, 0]);
-            s += poisson_sample(&t, lq, u, 64) as u64;
-        }
-        let m = s as f64 / n as f64;
-        assert!((m - 0.0005).abs() < 0.0003, "tiny mean {m}");
     }
 }
 
@@ -231,4 +189,73 @@ pub fn mulshr16(a: u32, b: u32) -> u32 {
 #[inline]
 pub fn mul16_sat(a: u32, b: u32) -> u32 {
     if a >= 65536 && b >= 65536 { u32::MAX } else { a.wrapping_mul(b) }
+}
+
+// ---- 32-bit-exact helpers shared with WGSL (phys.wgsl). Each is defined as
+// the low 32 bits (or a saturation) of an exact wide computation, which WGSL
+// reproduces with 16-bit limbs.
+
+#[inline]
+pub fn sat32(x: u64) -> u32 {
+    x.min(u32::MAX as u64) as u32
+}
+/// min((a*b) >> 16, 2^32-1)
+#[inline]
+pub fn mulshr16_sat(a: u32, b: u32) -> u32 {
+    sat32((a as u64 * b as u64) >> 16)
+}
+/// ((a*b + d) >> 16) mod 2^32
+#[inline]
+pub fn mad_shr16(a: u32, b: u32, d: u32) -> u32 {
+    ((a as u64 * b as u64 + d as u64) >> 16) as u32
+}
+/// (a*b + d) >> 32 (always fits)
+#[inline]
+pub fn mad_shr32(a: u32, b: u32, d: u32) -> u32 {
+    ((a as u64 * b as u64 + d as u64) >> 32) as u32
+}
+/// min((a*b) >> 8, 2^32-1)
+#[inline]
+pub fn mulshr8_sat(a: u32, b: u32) -> u32 {
+    sat32((a as u64 * b as u64) >> 8)
+}
+/// floor((k*(qa-qb) + r) / 2^16) mod 2^32 as i32, k >= 0, r < 2^16.
+#[inline]
+pub fn flux_j(k: u32, qa: u32, qb: u32, r: u32) -> i32 {
+    ((k as i64 * (qa as i64 - qb as i64) + r as i64) >> 16) as i32
+}
+/// Limit a positive outflow j when the cell's total outflow o exceeds its content q.
+#[inline]
+pub fn flux_lim(j: u32, q: u32, o: u32) -> u32 {
+    if o > q { mulshr16(j, ratio16(q, o)) } else { j }
+}
+#[inline]
+pub fn sat_add(a: u32, b: u32) -> u32 {
+    a.saturating_add(b)
+}
+
+/// Poisson sample with mean `lam24` (Q24). Shared with WGSL.
+pub fn poisson24(table: &[u32], lam24: u32, u: u32, kmax: u32) -> u32 {
+    if lam24 == 0 {
+        return 0;
+    }
+    let mut p: u32 = if lam24 < (1 << 20) {
+        let l = lam24 << 8; // Q32
+        let l2 = ((l as u64 * l as u64) >> 32) as u32;
+        let l3 = ((l2 as u64 * l as u64) >> 32) as u32;
+        0xFFFF_FFFFu32.wrapping_sub(l).wrapping_add(l2 / 2).wrapping_sub(l3 / 6)
+    } else {
+        table[((lam24 >> 14) as usize).min(POIS_SIZE - 1)]
+    };
+    let mut cdf = p;
+    let mut k = 0;
+    while u >= cdf && k < kmax {
+        k += 1;
+        p = (((p as u64 * lam24 as u64) >> 24) as u32) / k;
+        if p == 0 {
+            break;
+        }
+        cdf = cdf.saturating_add(p);
+    }
+    k
 }

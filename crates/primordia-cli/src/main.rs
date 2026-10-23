@@ -50,6 +50,12 @@ enum Cmd {
         /// Start the viewer running instead of paused
         #[arg(long)]
         autorun: bool,
+        /// Serve the read-only three.js viewer on this address, e.g. 0.0.0.0:8765
+        #[arg(long)]
+        web: Option<String>,
+        /// Run phase 6 only on the GPU (state copied every epoch) instead of fully resident
+        #[arg(long)]
+        exec_only: bool,
     },
     /// Grid sweep over config keys x seeds.
     Batch {
@@ -98,6 +104,12 @@ enum Cmd {
         epochs: u64,
         #[arg(long)]
         only: Option<String>,
+        /// Benchmark a snapshot instead (uses the run directory's config.toml)
+        #[arg(long)]
+        snapshot: Option<PathBuf>,
+        /// Benchmark the exec-only GPU mode (physics on the CPU) with a per-phase breakdown
+        #[arg(long)]
+        exec_only: bool,
     },
     /// List built-in presets.
     Presets,
@@ -167,9 +179,15 @@ impl RunDir {
         writeln!(self.events, "{}", serde_json::to_string(e)?)?;
         Ok(())
     }
-    pub fn after_epoch(&mut self, sim: &Sim) -> Result<()> {
+    pub fn after_epoch(&mut self, sim: &mut Sim) -> Result<()> {
         let e = sim.st.epoch;
-        if sim.cfg.telemetry.hash_every > 0 && e % sim.cfg.telemetry.hash_every == 0 {
+        let t = &sim.cfg.telemetry;
+        let hash_due = t.hash_every > 0 && e % t.hash_every == 0;
+        let snap_due = t.snapshot_every > 0 && e % t.snapshot_every == 0;
+        if hash_due || snap_due {
+            sim.sync();
+        }
+        if hash_due {
             writeln!(self.hashes, "{},{:016x}", e, sim.st.hash())?;
         }
         if sim.cfg.telemetry.snapshot_every > 0 && e % sim.cfg.telemetry.snapshot_every == 0 {
@@ -177,7 +195,8 @@ impl RunDir {
         }
         Ok(())
     }
-    pub fn snapshot(&self, sim: &Sim) -> Result<PathBuf> {
+    pub fn snapshot(&self, sim: &mut Sim) -> Result<PathBuf> {
+        sim.sync();
         let path = self.dir.join("snapshots").join(format!("e{:010}.psnap", sim.st.epoch));
         sim.st.write_snapshot(&path, config_hash(&sim.cfg))?;
         Ok(path)
@@ -193,7 +212,14 @@ fn print_summary(s: &Summary) {
 
 /// Headless run loop shared by run, branch and batch.
 fn run_headless(sim: &mut Sim, rd: &mut RunDir, epochs: u64, progress: u64) -> Result<Summary> {
+    run_headless_feed(sim, rd, epochs, progress, None)
+}
+
+fn run_headless_feed(sim: &mut Sim, rd: &mut RunDir, epochs: u64, progress: u64, feed: Option<std::sync::Arc<primordia_view::web::Feed>>) -> Result<Summary> {
     let mut rec = Recorder::new(Some(&rd.dir), sim)?;
+    let mut chron = primordia_view::Chronicler::new();
+    let mut notes: Vec<primordia_view::Note> = vec![];
+    let mut last_feed = Instant::now() - std::time::Duration::from_secs(60);
     let t0 = Instant::now();
     let start = sim.st.epoch;
     for e in &sim.events {
@@ -203,6 +229,16 @@ fn run_headless(sim: &mut Sim, rd: &mut RunDir, epochs: u64, progress: u64) -> R
         sim.step();
         rec.record(sim)?;
         rd.after_epoch(sim)?;
+        if let Some(f) = &feed {
+            chron.observe(sim, &rec.summary, &mut notes);
+            if last_feed.elapsed() > std::time::Duration::from_millis(1500) {
+                sim.sync();
+                let rate = (sim.st.epoch - start) as f64 / t0.elapsed().as_secs_f64();
+                let recent: Vec<_> = notes.iter().rev().take(30).cloned().collect();
+                f.publish(sim, &rec, rate, primordia_view::sun_level(sim), &recent);
+                last_feed = Instant::now();
+            }
+        }
         if progress > 0 && sim.st.epoch % progress == 0 {
             let rate = (sim.st.epoch - start) as f64 / t0.elapsed().as_secs_f64();
             print!("[{:6.1} ep/s] ", rate);
@@ -232,12 +268,13 @@ fn main() -> Result<()> {
                 println!("{n}");
             }
         }
-        Cmd::Run { config, seed, headless, epochs, out, cpu, set, progress, events, autorun } => {
+        Cmd::Run { config, seed, headless, epochs, out, cpu, set, progress, events, autorun, web, exec_only } => {
             let cfg = load_config(&config, seed, &set)?;
             let epochs = epochs.unwrap_or(cfg.epochs);
             let dir = out.unwrap_or_else(|| default_dir(&cfg, &config));
             let p = Params::new(&cfg);
-            let (be, name) = backend(&p, cpu || !cfg.gpu.exec);
+            let be = primordia_gpu::backend_mode(&p, !(cpu || !cfg.gpu.exec), !exec_only);
+            let name = be.name();
             println!("primordia run: {} cells, dims {}, backend {name}, out {}", p.geom.n, p.geom.dims, dir.display());
             let mut rd = RunDir::create(&dir, &cfg, &name, None)?;
             let mut sim = Sim::from_state(cfg.clone(), p.clone(), State::init(&cfg, &p), be)?;
@@ -247,7 +284,16 @@ fn main() -> Result<()> {
                 }
             }
             if headless {
-                let s = run_headless(&mut sim, &mut rd, epochs, progress)?;
+                let feed = match &web {
+                    Some(addr) => {
+                        let f = primordia_view::web::Feed::new();
+                        primordia_view::web::serve(addr, f.clone())?;
+                        println!("read-only browser viewer on http://{addr}");
+                        Some(f)
+                    }
+                    None => None,
+                };
+                let s = run_headless_feed(&mut sim, &mut rd, epochs, progress, feed)?;
                 print_summary(&s);
                 println!("{}", serde_json::to_string_pretty(&s)?);
             } else {
@@ -255,7 +301,7 @@ fn main() -> Result<()> {
                 for e in &sim.events {
                     rd.log_event(e)?;
                 }
-                primordia_view::run_viewer(sim, rec, Box::new(move |s: &Sim, ev: Option<&Event>, snap: bool| -> Result<Option<PathBuf>> {
+                primordia_view::run_viewer(sim, rec, Box::new(move |s: &mut Sim, ev: Option<&Event>, snap: bool| -> Result<Option<PathBuf>> {
                     if let Some(e) = ev {
                         rd.log_event(e)?;
                     }
@@ -264,7 +310,7 @@ fn main() -> Result<()> {
                         return Ok(Some(rd.snapshot(s)?));
                     }
                     Ok(None)
-                }), autorun)?;
+                }), primordia_view::ViewerOptions { autorun, web })?;
             }
         }
         Cmd::Replay { run_dir, to, cpu } => replay(&run_dir, to, cpu)?,
@@ -301,7 +347,7 @@ fn main() -> Result<()> {
                 println!("minimal  : {}  ({} bytes)", isa::to_hex(&r.minimal), r.minimal.len());
             }
         }
-        Cmd::Bench { epochs, only } => bench(epochs, only.as_deref())?,
+        Cmd::Bench { epochs, only, snapshot, exec_only } => bench(epochs, only.as_deref(), snapshot.as_deref(), exec_only)?,
         Cmd::Batch { sweep, cpu } => batch(&sweep, cpu)?,
     }
     Ok(())
@@ -354,6 +400,7 @@ fn replay(run_dir: &Path, to: Option<u64>, cpu: bool) -> Result<()> {
         while sim.st.epoch < *e {
             sim.step();
         }
+        sim.sync();
         let got = format!("{:016x}", sim.st.hash());
         if &got != h {
             bail!("replay diverged at epoch {e}: recorded {h}, replayed {got}");
@@ -383,6 +430,8 @@ fn twin(spec: &str, epochs: Option<u64>, sets: &[String], cpu: bool) -> Result<(
         a.step();
         b.step();
         if a.st.epoch % every == 0 || a.st.epoch == epochs {
+            a.sync();
+            b.sync();
             let ha = a.st.mirror(&p).hash();
             let hb = b.st.hash();
             if ha != hb {
@@ -440,8 +489,15 @@ fn bisect(cfg: &Config, p: &Params, a: State, b: State) -> Result<()> {
     Ok(())
 }
 
-fn bench(epochs: u64, only: Option<&str>) -> Result<()> {
-    let cases: Vec<(&str, Config)> = vec![
+fn bench(epochs: u64, only: Option<&str>, snapshot: Option<&Path>, exec_only: bool) -> Result<()> {
+    let snap_cfg = match snapshot {
+        Some(sp) => {
+            let dir = sp.parent().and_then(|d| d.parent()).context("snapshot must live in <run>/snapshots/")?;
+            Some(Config::from_file(&dir.join("config.toml"))?)
+        }
+        None => None,
+    };
+    let cases: Vec<(&str, Config)> = if let Some(c) = snap_cfg { vec![("snapshot", c)] } else { vec![
         ("2d-1M (1023^2, full physics)", Config::preset("primordia-2d-sun")?),
         ("2d-250k (501^2, full physics)", {
             let mut c = Config::preset("primordia-2d-sun")?;
@@ -450,7 +506,7 @@ fn bench(epochs: u64, only: Option<&str>) -> Result<()> {
         }),
         ("3d-970k (99^3, full physics)", Config::preset("primordia-3d")?),
         ("paper-0d (2^17 x 64B)", Config::preset("paper-0d")?),
-    ];
+    ] };
     for (name, cfg) in cases {
         if let Some(o) = only {
             if !name.contains(o) {
@@ -458,11 +514,31 @@ fn bench(epochs: u64, only: Option<&str>) -> Result<()> {
             }
         }
         let p = Params::new(&cfg);
-        let st = State::init(&cfg, &p);
-        let be = primordia_gpu::backend(&p, true);
+        let st = match snapshot {
+            Some(sp) => {
+                let (mut st, _) = State::read_snapshot(sp, &p)?;
+                st.reset_ledger(&p);
+                st
+            }
+            None => State::init(&cfg, &p),
+        };
+        let be = primordia_gpu::backend_mode(&p, true, !exec_only);
         let bname = be.name();
         let mut sim = Sim::from_state(cfg, p, st, be)?;
         sim.step(); // warm-up
+        if sim.backend.resident() {
+            let t0 = Instant::now();
+            for _ in 0..epochs {
+                sim.step();
+            }
+            let total = t0.elapsed().as_secs_f64();
+            println!("\n== {name}  [{bname}]  {:.2} epochs/s ({:.1} ms/epoch, whole epoch on the GPU)", epochs as f64 / total, 1000.0 * total / epochs as f64);
+            if let Some(gt) = sim.backend.timing() {
+                let k = (epochs + 1) as f64;
+                println!("   gpu: submit+kernels {:.2} ms, tally read-back {:.2} ms per epoch", 1000.0 * gt[1] / k, 1000.0 * gt[2] / k);
+            }
+            continue;
+        }
         let mut t = [0f64; 9];
         let names = ["interventions+sources", "transport", "chemistry", "absorb/upkeep", "exec (backend)", "site counters", "bodies", "mutation/decay", "ledger"];
         let t0 = Instant::now();

@@ -18,6 +18,35 @@ pub trait ExecBackend: Send {
     fn timing(&self) -> Option<[f64; 3]> {
         None
     }
+    /// True when the backend keeps the whole state resident and runs phases
+    /// 2-9 itself (`epoch_resident`); `State` arrays are then only valid after
+    /// `download`.
+    fn resident(&self) -> bool {
+        false
+    }
+    fn epoch_resident(&mut self, _st: &State, _p: &Params, _vents: &[u32], _map: Option<&[u32]>) -> ResidentOut {
+        unimplemented!("backend is not resident")
+    }
+    fn download(&mut self, _st: &mut State) {}
+    fn upload(&mut self, _st: &State) {}
+}
+
+/// Results of one resident epoch: the 64-bit tally slots (see
+/// `wgsl::ts`) and the births of this epoch.
+pub struct ResidentOut {
+    pub tally: Vec<u64>,
+    pub births: Vec<[u32; 6]>,
+}
+
+/// One birth: epoch, parent lineage, child lineage, cell, depth, FNV-1a-32 of the tape.
+pub type Birth = [u32; 6];
+
+pub fn fnv32(t: &[u8]) -> u32 {
+    let mut h = 0x811c_9dc5u32;
+    for &b in t {
+        h = (h ^ b as u32).wrapping_mul(0x0100_0193);
+    }
+    h
 }
 
 pub struct CpuExec;
@@ -50,6 +79,12 @@ pub struct Sim {
     pub map_image: Option<Vec<u32>>,
     /// Errors from events that were rejected (kept for the viewer / log).
     pub rejected: Vec<String>,
+    /// Births during the last epoch.
+    pub births: Vec<Birth>,
+    /// Resident backends: CPU arrays are older than the GPU state.
+    pub cpu_stale: bool,
+    /// Resident backends: CPU arrays were modified and must be uploaded.
+    pub gpu_stale: bool,
 }
 
 impl Sim {
@@ -61,7 +96,8 @@ impl Sim {
     pub fn from_state(cfg: Config, p: Params, st: State, mut backend: Box<dyn ExecBackend>) -> Result<Sim> {
         backend.reconfigure(&p);
         let map_image = load_map_image(&cfg, &p)?;
-        Ok(Sim { cfg, p, st, events: vec![], backend, map_image, rejected: vec![] })
+        let resident = backend.resident();
+        Ok(Sim { cfg, p, st, events: vec![], backend, map_image, rejected: vec![], births: vec![], cpu_stale: false, gpu_stale: resident })
     }
     pub fn epoch(&self) -> u64 {
         self.st.epoch
@@ -72,14 +108,27 @@ impl Sim {
         self.events.insert(pos, ev);
     }
 
-    /// Phases 1-5.
-    pub fn begin_epoch(&mut self) {
+    /// Make the CPU copy of the state current (resident backends only).
+    pub fn sync(&mut self) {
+        if self.cpu_stale {
+            self.backend.download(&mut self.st);
+            self.cpu_stale = false;
+        }
+    }
+    /// Declare that the CPU copy was modified (it is uploaded before the next epoch).
+    pub fn touch(&mut self) {
+        if self.backend.resident() {
+            self.gpu_stale = true;
+        }
+    }
+
+    fn apply_events(&mut self) {
         let e = self.st.epoch;
-        self.st.tally.births = 0;
-        self.st.tally.deaths = 0;
-        self.st.tally.body_moves = 0;
-        // 1. interventions
         let due: Vec<Event> = self.events.iter().filter(|x| x.epoch == e).cloned().collect();
+        if !due.is_empty() {
+            self.sync();
+            self.touch();
+        }
         for ev in due {
             if ev.kind == "set" {
                 if let Err(err) = self.apply_set(&ev) {
@@ -89,6 +138,15 @@ impl Sim {
                 self.rejected.push(format!("epoch {e}: {} rejected: {err:#}", ev.kind));
             }
         }
+    }
+
+    /// Phases 1-5 on the CPU golden model.
+    pub fn begin_epoch(&mut self) {
+        self.sync();
+        self.st.tally.births = 0;
+        self.st.tally.deaths = 0;
+        self.st.tally.body_moves = 0;
+        self.apply_events();
         let p = &self.p;
         // 2-5
         phases::sources(&mut self.st, p);
@@ -101,29 +159,103 @@ impl Sim {
     pub fn end_epoch(&mut self) {
         let p = &self.p;
         phases::collect_site_counters(&mut self.st);
-        self.st.tally.births = self.st.hdr.chunks(crate::params::HDR).filter(|h| h[crate::params::H_FLAGS] & crate::params::FL_NEWBORN != 0).count() as u64;
+        self.births.clear();
+        for c in 0..self.st.n {
+            let h = &self.st.hdr[c * crate::params::HDR..(c + 1) * crate::params::HDR];
+            if h[crate::params::H_FLAGS] & crate::params::FL_NEWBORN != 0 {
+                use crate::params::*;
+                self.births.push([self.st.epoch as u32, h[H_PARENT], h[H_LINEAGE], c as u32, h[H_DEPTH], fnv32(self.st.tape(c))]);
+            }
+        }
+        self.st.tally.births = self.births.len() as u64;
         phases::body_move(&mut self.st, p);
         let map = phases::mutation_map(&self.st, p, self.map_image.as_ref());
         phases::mutate_decay(&mut self.st, p, map.as_ref());
         let le = self.cfg.telemetry.ledger_every.max(1);
         if (self.st.epoch + 1) % le == 0 {
             phases::ledger_check(&mut self.st, p);
-            let keep = (self.st.tally.births, self.st.tally.deaths, self.st.tally.body_moves);
-            self.st.tally = Default::default();
-            (self.st.tally.births, self.st.tally.deaths, self.st.tally.body_moves) = keep;
+            self.reset_tally();
         }
         self.st.epoch += 1;
     }
 
+    fn reset_tally(&mut self) {
+        let keep = (self.st.tally.births, self.st.tally.deaths, self.st.tally.body_moves);
+        self.st.tally = Default::default();
+        (self.st.tally.births, self.st.tally.deaths, self.st.tally.body_moves) = keep;
+    }
+
     pub fn step(&mut self) {
+        if self.backend.resident() {
+            self.step_resident();
+            return;
+        }
         self.begin_epoch();
         self.backend.exec(&mut self.st, &self.p);
         self.end_epoch();
     }
 
+    /// One epoch with the whole state on the GPU.
+    fn step_resident(&mut self) {
+        use crate::wgsl::ts;
+        self.st.tally.births = 0;
+        self.st.tally.deaths = 0;
+        self.st.tally.body_moves = 0;
+        self.apply_events();
+        if self.gpu_stale {
+            self.backend.upload(&self.st);
+            self.gpu_stale = false;
+        }
+        let p = &self.p;
+        // vents: inject at the current positions (GPU), then age / drift / spawn (CPU)
+        let vents: Vec<u32> = if p.vents_on { self.st.vents.iter().map(|v| v.pos).collect() } else { vec![] };
+        let nv = vents.len() as i64;
+        if p.vents_on {
+            if !p.chem_only {
+                self.st.tally.energy_source += nv * p.vent_cfg.rate as i64;
+            }
+            if let Some(x4) = p.x4_species {
+                self.st.tally.atom_source += nv * 2 * p.vent_cfg.x4_rate as i64 * p.mass[x4] as i64;
+            }
+        }
+        phases::vent_update(&mut self.st, p);
+        let map = phases::mutation_map(&self.st, p, self.map_image.as_ref());
+        let out = self.backend.epoch_resident(&self.st, p, &vents, map.as_deref());
+        let t = |s: usize| out.tally[s] as i64;
+        let tl = &mut self.st.tally;
+        tl.energy_source += t(ts::SUN);
+        tl.dissipation += t(ts::DISS);
+        tl.energy_sink += t(ts::E_SINK);
+        tl.spending += t(ts::UPKEEP) + t(ts::SPENT);
+        tl.reaction_net += t(ts::RXN_GAIN) - t(ts::RXN_USED);
+        tl.atom_sink += t(ts::ATOM_SINK);
+        for cl in 0..3 {
+            tl.matter_sink[cl] += t(ts::M_SINK + cl);
+        }
+        for h in 0..2 {
+            tl.matter_source[h] += t(ts::RAC_SRC + h);
+            tl.matter_sink[h] += t(ts::RAC_SINK + h);
+        }
+        tl.births = out.tally[ts::BIRTHS];
+        tl.deaths = out.tally[ts::DEATHS];
+        tl.body_moves = out.tally[ts::BODY_MOVES];
+        self.births = out.births;
+        let le = self.cfg.telemetry.ledger_every.max(1);
+        if (self.st.epoch + 1) % le == 0 {
+            let m = [t(ts::L_MATTER), t(ts::L_MATTER + 1), t(ts::L_MATTER + 2)];
+            let m = if p.matter_on { m } else { [0; 3] };
+            let a = if p.chem_on { t(ts::L_ATOMS) } else { 0 };
+            phases::ledger_apply(&mut self.st, t(ts::L_ENERGY), m, a);
+            self.reset_tally();
+        }
+        self.st.epoch += 1;
+        self.cpu_stale = true;
+    }
+
     /// Step with the execution phase split into its sub-steps on the CPU
     /// golden model; `on_substep` sees the state after each one.
     pub fn step_substeps(&mut self, mut on_substep: impl FnMut(&State, u32)) {
+        self.touch();
         self.begin_epoch();
         let p = &self.p;
         if p.geom.dims == 0 {
@@ -152,6 +284,7 @@ impl Sim {
         self.cfg = new;
         self.p = np;
         self.backend.reconfigure(&self.p);
+        self.touch();
         Ok(())
     }
 }

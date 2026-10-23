@@ -1,0 +1,388 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Primordia Observer</title>
+<style>
+  :root {
+    --bg: #070a10; --panel: rgba(16, 20, 30, 0.78); --line: rgba(110, 140, 170, 0.25);
+    --text: #e4e9f2; --muted: #8a94a8; --accent: #6ed2be; --warm: #ffcf70;
+  }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 14px/1.4 "Inter", system-ui, -apple-system, "Segoe UI", sans-serif; overflow: hidden; }
+  canvas#scene { position: fixed; inset: 0; display: block; }
+  .hud { position: fixed; pointer-events: none; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    backdrop-filter: blur(8px); padding: 10px 14px; pointer-events: auto; }
+  #top { top: 14px; left: 16px; right: 16px; display: flex; gap: 10px; flex-wrap: wrap; align-items: stretch; }
+  #title { display: flex; flex-direction: column; justify-content: center; }
+  #title h1 { margin: 0; font-size: 20px; letter-spacing: 0.12em; color: var(--accent); }
+  #title .sub { color: var(--muted); font-size: 12px; }
+  .badge { display: inline-block; margin-top: 4px; font-size: 11px; color: #0b1a17; background: var(--accent);
+    border-radius: 999px; padding: 1px 8px; width: max-content; }
+  .card { min-width: 118px; }
+  .card .k { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
+  .card .v { font-size: 22px; font-weight: 700; }
+  .card .s { color: var(--muted); font-size: 11px; }
+  .meter { position: relative; height: 14px; width: 160px; background: #283042; border-radius: 7px; margin: 6px 0 2px; overflow: hidden; }
+  .meter .bar { position: absolute; top: 0; bottom: 0; }
+  .meter .mid { position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: #fff; }
+  #right { top: 120px; right: 16px; width: 360px; bottom: 16px; display: flex; flex-direction: column; gap: 10px; }
+  #chron { flex: 1; overflow-y: auto; }
+  #chron h2, #legend h2, #trends h2 { margin: 0 0 6px; font-size: 13px; color: var(--accent); letter-spacing: 0.08em; text-transform: uppercase; }
+  .note { display: grid; grid-template-columns: 22px 1fr; gap: 6px; padding: 5px 0; border-bottom: 1px solid var(--line); font-size: 12.5px; }
+  .note .e { color: var(--muted); font-size: 11px; font-family: ui-monospace, monospace; }
+  #legend { bottom: 16px; left: 16px; width: 300px; }
+  .lg { display: flex; align-items: center; gap: 8px; font-size: 12px; margin: 3px 0; }
+  .sw { width: 14px; height: 14px; border-radius: 4px; flex: none; }
+  #trends { height: 205px; flex: none; }
+  .spark { display: grid; grid-template-columns: 90px 1fr; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); }
+  .spark canvas { width: 100%; height: 34px; }
+  #status { bottom: 16px; left: 50%; transform: translateX(-50%); font-size: 12px; color: var(--muted); }
+  #help { color: var(--muted); font-size: 11px; margin-top: 6px; }
+  label.toggle { font-size: 12px; color: var(--muted); cursor: pointer; }
+  @media (max-width: 900px) { #right { display: none; } #legend { display: none; } }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<canvas id="scene"></canvas>
+
+<div id="top" class="hud">
+  <div id="title" class="panel">
+    <h1>PRIMORDIA</h1>
+    <div class="sub" id="epoch">connecting…</div>
+    <span class="badge">observer · read-only</span>
+  </div>
+  <div class="panel card"><div class="k">Living cells</div><div class="v" id="c-pop" style="color:#78dc8c">–</div><div class="s" id="c-pop-s"></div></div>
+  <div class="panel card"><div class="k">Families</div><div class="v" id="c-fam" style="color:#f0a0d2">–</div><div class="s">groups of similar programs</div></div>
+  <div class="panel card"><div class="k">Complexity</div><div class="v" id="c-hoe" style="color:var(--warm)">–</div><div class="s" id="c-hoe-s"></div></div>
+  <div class="panel card"><div class="k">Copiers</div><div class="v" id="c-rep" style="color:#6ec8ff">–</div><div class="s">of the top 100 programs</div></div>
+  <div class="panel card"><div class="k">Largest body</div><div class="v" id="c-body" style="color:#c8aaff">–</div><div class="s" id="c-body-s"></div></div>
+  <div class="panel card"><div class="k">Handedness of code</div>
+    <div class="meter"><div class="bar" id="hand-bar"></div><div class="mid"></div></div>
+    <div class="s" id="c-hand"></div></div>
+  <div class="panel card"><div class="k">Sky</div><div class="v" id="c-sun">–</div><div class="s" id="c-vents"></div></div>
+</div>
+
+<div id="right" class="hud">
+  <div id="chron" class="panel"><h2>Chronicle</h2><div id="notes"></div></div>
+  <div id="trends" class="panel"><h2>Trends</h2>
+    <div class="spark"><span>Population</span><canvas id="sp-pop"></canvas></div>
+    <div class="spark"><span>Complexity</span><canvas id="sp-hoe"></canvas></div>
+    <div class="spark"><span>Handedness</span><canvas id="sp-ee"></canvas></div>
+    <div class="spark"><span>Copiers</span><canvas id="sp-rep"></canvas></div>
+  </div>
+</div>
+
+<div id="legend" class="hud panel">
+  <h2>How to read this</h2>
+  <div class="lg"><span class="sw" style="background:linear-gradient(90deg,#5ec962,#4facE6,#f065a0,#fac448)"></span>Raised, coloured mats are living cells; each colour is a family of similar programs</div>
+  <div class="lg"><span class="sw" style="background:#f2f2f2"></span>Taller and brighter = more stored energy</div>
+  <div class="lg"><span class="sw" style="background:#5a5c62"></span>Grey = dormant (out of energy)</div>
+  <div class="lg"><span class="sw" style="background:#18463a"></span>Low ground glowing green = food (free energy)</div>
+  <div class="lg"><span class="sw" style="background:#6e2d12"></span>Rust-red ground = hot</div>
+  <div class="lg"><span class="sw" style="background:#ffa028"></span>Orange plumes = hydrothermal vents</div>
+  <div id="help">Drag to orbit · scroll to zoom · right-drag to pan ·
+    <label class="toggle"><input type="checkbox" id="spin" checked> slow spin</label></div>
+</div>
+
+<div id="status" class="hud panel">waiting for the simulation…</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const canvas = document.getElementById('scene');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 5000);
+const controls = new OrbitControls(camera, canvas);
+controls.enableDamping = true;
+controls.autoRotate = true;
+controls.autoRotateSpeed = 0.35;
+document.getElementById('spin').addEventListener('change', e => controls.autoRotate = e.target.checked);
+
+const hemi = new THREE.HemisphereLight(0x9fc4ff, 0x1a1208, 0.6);
+scene.add(hemi);
+const sunLight = new THREE.DirectionalLight(0xfff1d6, 1.2);
+scene.add(sunLight);
+scene.add(sunLight.target);
+const DAY = new THREE.Color(0x5d93c9), NIGHT = new THREE.Color(0x05070d);
+scene.background = NIGHT.clone();
+scene.fog = new THREE.Fog(NIGHT.clone(), 200, 900);
+
+// stars
+{
+  const g = new THREE.BufferGeometry(), p = [];
+  for (let i = 0; i < 2500; i++) {
+    const v = new THREE.Vector3().randomDirection().multiplyScalar(1500);
+    if (v.y < 0) v.y = -v.y;
+    p.push(v.x, v.y, v.z);
+  }
+  g.setAttribute('position', new THREE.Float32BufferAttribute(p, 3));
+  var stars = new THREE.Points(g, new THREE.PointsMaterial({ color: 0xffffff, size: 2, sizeAttenuation: false, transparent: true, opacity: 0.8, fog: false }));
+  scene.add(stars);
+}
+
+// glow texture for vents
+function glowTexture() {
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const x = c.getContext('2d');
+  const g = x.createRadialGradient(64, 64, 0, 64, 64, 64);
+  g.addColorStop(0, 'rgba(255,240,200,1)'); g.addColorStop(0.25, 'rgba(255,170,60,0.85)');
+  g.addColorStop(0.6, 'rgba(255,90,20,0.25)'); g.addColorStop(1, 'rgba(255,60,0,0)');
+  x.fillStyle = g; x.fillRect(0, 0, 128, 128);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+}
+const GLOW = glowTexture();
+
+let meta = null, world = null, ventGroup = new THREE.Group(), loading = false, lastEpoch = -1;
+scene.add(ventGroup);
+const WORLD_W = 160;
+
+function heightOf(hb, flag) {
+  if (flag & 16) return 5.0;                    // wall
+  if (hb >= 128) return 1.4 + (hb - 128) / 127 * 2.2;
+  return hb / 100 * 0.7;
+}
+
+// ---------------------------------------------------------------- 2D / 0D / 1D terrain
+function buildTerrain(m) {
+  const [gw0, gh0] = [m.grid[0], Math.max(m.grid[1], 1)];
+  const stride = Math.max(1, Math.ceil(Math.max(gw0, gh0) / 512));
+  const gw = Math.ceil(gw0 / stride), gh = Math.max(2, Math.ceil(gh0 / stride));
+  const W = WORLD_W, D = WORLD_W * Math.max(gh0, 1) / gw0 * (gh0 === 1 ? 12 : 1);
+  const geo = new THREE.PlaneGeometry(W, Math.max(D, 4), gw - 1, gh - 1);
+  geo.rotateX(-Math.PI / 2);
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(gw * gh * 3), 3));
+  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.82, metalness: 0.04 });
+  const mesh = new THREE.Mesh(geo, mat);
+  scene.add(mesh);
+  // base slab
+  const base = new THREE.Mesh(new THREE.BoxGeometry(W * 1.02, 2, Math.max(D, 4) * 1.02), new THREE.MeshStandardMaterial({ color: 0x0c1018, roughness: 1 }));
+  base.position.y = -1.05; scene.add(base);
+  camera.position.set(0, W * 0.55, Math.max(D, 40) * 0.95);
+  controls.target.set(0, 0, 0);
+  return { kind: 'terrain', mesh, base, gw, gh, gw0, gh0, stride, W, D: Math.max(D, 4) };
+}
+
+function updateTerrain(w, m, bytes) {
+  const n = m.n, pos = w.mesh.geometry.attributes.position, col = w.mesh.geometry.attributes.color;
+  const flags = bytes.subarray(n * 4);
+  for (let iy = 0; iy < w.gh; iy++) {
+    const ly = w.gh0 === 1 ? 0 : Math.min(w.gh0 - 1, (w.gh - 1 - iy) * w.stride);
+    for (let ix = 0; ix < w.gw; ix++) {
+      const lx = Math.min(w.gw0 - 1, ix * w.stride);
+      const c = lx + ly * w.gw0;
+      const v = ix + iy * w.gw;
+      if (c >= n) { pos.setY(v, -0.5); col.setXYZ(v, 0.02, 0.02, 0.03); continue; }
+      const f = flags[c];
+      pos.setY(v, heightOf(bytes[c * 4 + 3], f));
+      let r = bytes[c * 4] / 255, g = bytes[c * 4 + 1] / 255, b = bytes[c * 4 + 2] / 255;
+      if (f & 4) { r = Math.min(1, r * 1.15); g = Math.min(1, g * 1.15); b = Math.min(1, b * 1.15); }
+      col.setXYZ(v, r * r, g * g, b * b);       // to linear
+    }
+  }
+  pos.needsUpdate = true; col.needsUpdate = true;
+  w.mesh.geometry.computeVertexNormals();
+}
+
+function cellToWorld(w, m, x, y, z) {
+  if (w.kind === 'terrain') {
+    const fx = (x + 0.5) / w.gw0 - 0.5, fy = w.gh0 === 1 ? 0 : (y + 0.5) / w.gh0 - 0.5;
+    return new THREE.Vector3(fx * w.W, 0, -fy * w.D);
+  }
+  const s = w.scale;
+  return new THREE.Vector3((x - m.size[0] / 2) * s, z * s, (m.size[1] / 2 - y) * s);
+}
+
+// ---------------------------------------------------------------- 3D volume
+function buildVolume(m) {
+  const s = WORLD_W / Math.max(m.size[0], m.size[1]);
+  const max = 260000;
+  const geo = new THREE.BoxGeometry(s * 0.9, s * 0.9, s * 0.9);
+  const mat = new THREE.MeshStandardMaterial({ roughness: 0.7, metalness: 0.05 });
+  const mesh = new THREE.InstancedMesh(geo, mat, max);
+  mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  scene.add(mesh);
+  const floor = new THREE.Mesh(new THREE.BoxGeometry(m.size[0] * s, 1, m.size[1] * s), new THREE.MeshStandardMaterial({ color: 0x141a24, roughness: 1 }));
+  floor.position.y = -0.6; scene.add(floor);
+  const box = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(m.size[0] * s, m.size[2] * s, m.size[1] * s)), new THREE.LineBasicMaterial({ color: 0x3a4a60 }));
+  box.position.y = m.size[2] * s / 2; scene.add(box);
+  camera.position.set(WORLD_W * 0.9, WORLD_W * 0.8, WORLD_W * 0.9);
+  controls.target.set(0, m.size[2] * s * 0.35, 0);
+  return { kind: 'volume', mesh, scale: s, max };
+}
+
+function updateVolume(w, m, bytes) {
+  const n = m.n, flags = bytes.subarray(n * 4);
+  let occ = 0;
+  for (let c = 0; c < n; c++) if (flags[c] & 1) occ++;
+  const stride = Math.max(1, Math.ceil(occ / w.max));
+  const mtx = new THREE.Matrix4(), color = new THREE.Color();
+  const [sx, sy] = [m.size[0], m.size[1]];
+  let k = 0, seen = 0;
+  for (let c = 0; c < n && k < w.max; c++) {
+    const f = flags[c];
+    if (!(f & 1)) continue;
+    if ((seen++ % stride) !== 0) continue;
+    const x = c % sx, y = Math.floor(c / sx) % sy, z = Math.floor(c / (sx * sy));
+    const p = cellToWorld(w, m, x, y, z);
+    const e = Math.max(0.35, (bytes[c * 4 + 3] - 128) / 127);
+    mtx.makeScale(e, e, e).setPosition(p.x, p.y + w.scale / 2, p.z);
+    w.mesh.setMatrixAt(k, mtx);
+    color.setRGB(bytes[c * 4] / 255, bytes[c * 4 + 1] / 255, bytes[c * 4 + 2] / 255, THREE.SRGBColorSpace);
+    w.mesh.setColorAt(k, color);
+    k++;
+  }
+  w.mesh.count = k;
+  w.mesh.instanceMatrix.needsUpdate = true;
+  if (w.mesh.instanceColor) w.mesh.instanceColor.needsUpdate = true;
+}
+
+// ---------------------------------------------------------------- vents
+const PLUME = 70;
+function rebuildVents(m, bytes) {
+  ventGroup.clear();
+  const lights = 6;
+  m.vents.forEach((v, i) => {
+    const g = new THREE.Group();
+    let p = cellToWorld(world, m, v[0], v[1] || 0, v[2] || 0);
+    if (world.kind === 'terrain' && bytes) {
+      const c = v[0] + (v[1] || 0) * m.grid[0];
+      p.y = heightOf(bytes[c * 4 + 3], bytes[m.n * 4 + c]);
+    }
+    g.position.copy(p);
+    const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: GLOW, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
+    glow.scale.set(9, 9, 1); glow.position.y = 1.2; g.add(glow);
+    const pg = new THREE.BufferGeometry(), pp = new Float32Array(PLUME * 3), seed = new Float32Array(PLUME);
+    for (let k = 0; k < PLUME; k++) seed[k] = Math.random();
+    pg.setAttribute('position', new THREE.BufferAttribute(pp, 3));
+    const pts = new THREE.Points(pg, new THREE.PointsMaterial({ map: GLOW, size: 2.2, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, color: 0xffb060 }));
+    pts.userData.seed = seed; g.add(pts);
+    if (i < lights) { const l = new THREE.PointLight(0xff8a30, 60, 40, 1.6); l.position.y = 3; g.add(l); }
+    g.userData = { glow, pts, phase: Math.random() * 6.28 };
+    ventGroup.add(g);
+  });
+}
+function animateVents(t) {
+  for (const g of ventGroup.children) {
+    const { glow, pts, phase } = g.userData;
+    const pulse = 0.75 + 0.25 * Math.sin(t * 2.4 + phase);
+    glow.scale.set(9 * pulse, 9 * pulse, 1);
+    const a = pts.geometry.attributes.position, seed = pts.userData.seed;
+    for (let k = 0; k < PLUME; k++) {
+      const life = (t * 0.35 + seed[k]) % 1;
+      const ang = seed[k] * 40 + t * 0.6;
+      a.setXYZ(k, Math.cos(ang) * life * 2.2, 1 + life * 16, Math.sin(ang) * life * 2.2);
+    }
+    a.needsUpdate = true;
+    pts.material.opacity = 0.85;
+  }
+}
+
+// ---------------------------------------------------------------- HUD
+const $ = id => document.getElementById(id);
+function spark(id, pts, color, lo, hi) {
+  const c = $(id), ctx = c.getContext('2d');
+  const w = c.width = c.clientWidth * devicePixelRatio, h = c.height = c.clientHeight * devicePixelRatio;
+  ctx.clearRect(0, 0, w, h);
+  if (!pts || pts.length < 2) return;
+  const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]).filter(Number.isFinite);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs);
+  const y0 = lo ?? Math.min(...ys), y1 = hi ?? Math.max(...ys);
+  ctx.strokeStyle = color; ctx.lineWidth = 1.5 * devicePixelRatio; ctx.beginPath();
+  pts.forEach((p, i) => {
+    if (!Number.isFinite(p[1])) return;
+    const x = (p[0] - x0) / Math.max(1e-9, x1 - x0) * w, y = h - (p[1] - y0) / Math.max(1e-9, y1 - y0) * (h - 4) - 2;
+    i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+  });
+  ctx.stroke();
+}
+function hud(m) {
+  const s = m.summary;
+  $('epoch').textContent = `epoch ${m.epoch} · ${m.eps.toFixed(1)} epochs/s · ${m.dims}D, ${m.n.toLocaleString()} sites`;
+  $('c-pop').textContent = s.occupied.toLocaleString();
+  $('c-pop-s').textContent = `+${m.births} born, −${m.deaths} died`;
+  $('c-fam').textContent = s.species;
+  $('c-hoe').textContent = s.hoe.toFixed(2);
+  $('c-hoe-s').textContent = s.hoe > 1 ? 'structured: life-like' : s.hoe > 0.3 ? 'some structure' : 'random soup';
+  $('c-rep').textContent = `${s.replicators}`;
+  $('c-body').textContent = s.max_body;
+  $('c-body-s').textContent = `${s.bodies.toLocaleString()} bonded bodies`;
+  const ee = Math.max(-1, Math.min(1, s.ee_code)), bar = $('hand-bar');
+  bar.style.left = ee >= 0 ? '50%' : `${50 + ee * 50}%`; bar.style.width = `${Math.abs(ee) * 50}%`;
+  bar.style.background = ee >= 0 ? '#e65050' : '#5078f0';
+  $('c-hand').textContent = `${ee >= 0 ? '+' : ''}${ee.toFixed(2)} · ${Math.abs(ee) < 0.1 ? 'balanced' : ee > 0 ? 'left (L)' : 'right (D)'}`;
+  $('c-sun').textContent = m.sun > 0.05 ? `☀ ${Math.round(m.sun * 100)}%` : '🌙 night';
+  $('c-vents').textContent = `${m.vents.length} vent${m.vents.length === 1 ? '' : 's'} active`;
+  $('notes').innerHTML = m.chronicle.map(n => `<div class="note"><div>${n.icon}</div><div><div class="e">epoch ${n.epoch}</div>${n.text.replace(/</g, '&lt;')}</div></div>`).join('');
+  spark('sp-pop', m.series.population, '#78dc8c');
+  spark('sp-hoe', m.series.complexity, '#ffcf70');
+  spark('sp-ee', m.series.handedness, '#e68a8a', -1, 1);
+  spark('sp-rep', m.series.copiers, '#6ec8ff', 0, 100);
+  $('status').textContent = `observing live run · backend ${m.backend}`;
+}
+
+function sky(sun) {
+  const c = NIGHT.clone().lerp(DAY, Math.min(1, sun * 1.2));
+  scene.background = c; scene.fog.color.copy(c);
+  stars.material.opacity = Math.max(0, 1 - sun * 2.5);
+  sunLight.intensity = 0.15 + 2.2 * sun;
+  hemi.intensity = 0.35 + 0.5 * sun;
+  sunLight.position.set(WORLD_W * 0.6, 40 + 160 * sun, WORLD_W * 0.3);
+}
+
+// ---------------------------------------------------------------- data
+async function poll() {
+  try {
+    const r = await fetch('meta.json', { cache: 'no-store' });
+    if (r.ok) {
+      meta = await r.json();
+      hud(meta); sky(meta.sun);
+      if (meta.epoch !== lastEpoch && !loading) {
+        loading = true;
+        const fr = await fetch('frame.bin', { cache: 'no-store' });
+        const bytes = new Uint8Array(await fr.arrayBuffer());
+        if (!world) world = meta.dims === 3 ? buildVolume(meta) : buildTerrain(meta);
+        if (world.kind === 'terrain') updateTerrain(world, meta, bytes); else updateVolume(world, meta, bytes);
+        rebuildVents(meta, bytes);
+        lastEpoch = meta.epoch; loading = false;
+      }
+    } else {
+      $('status').textContent = 'waiting for the simulation to publish its first frame…';
+    }
+  } catch (e) {
+    loading = false;
+    $('status').textContent = 'connection lost — retrying…';
+  }
+  setTimeout(poll, 1000);
+}
+poll();
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+const clock = new THREE.Clock();
+renderer.setAnimationLoop(() => {
+  const t = clock.getElapsedTime();
+  controls.update();
+  animateVents(t);
+  renderer.render(scene, camera);
+});
+</script>
+</body>
+</html>

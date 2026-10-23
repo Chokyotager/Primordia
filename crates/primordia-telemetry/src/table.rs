@@ -64,7 +64,7 @@ impl Table {
         debug_assert_eq!(row.len(), self.cols.len());
         self.rows.push(row);
         self.total_rows += 1;
-        if self.rows.len() >= 4096 {
+        if self.rows.len() >= 1024 {
             self.flush()?;
         }
         Ok(())
@@ -98,6 +98,8 @@ impl Table {
         }
         let batch = RecordBatch::try_new(self.schema.clone(), arrays)?;
         w.write(&batch)?;
+        // close the row group so the rows reach disk now, not at shutdown
+        w.flush()?;
         self.rows.clear();
         Ok(())
     }

@@ -261,3 +261,314 @@ pub fn constants() -> String {
     s += &arr("OR_NVALID", &nvalid);
     s
 }
+
+// ---------------------------------------------------------------- physics
+
+/// Indices into the physics parameter buffer Q (phys.wgsl).
+pub mod qi {
+    pub const N: usize = 0;
+    pub const DIMS: usize = 1;
+    pub const SX: usize = 2;
+    pub const SY: usize = 3;
+    pub const SZ: usize = 4;
+    pub const LMAX: usize = 5;
+    pub const NF: usize = 6;
+    pub const K: usize = 7;
+    pub const S: usize = 8;
+    pub const FLAGS: usize = 9;
+    pub const SEED_LO: usize = 10;
+    pub const SEED_HI: usize = 11;
+    pub const EPOCH: usize = 12;
+    pub const MIRRORED: usize = 13;
+    pub const BOUND: usize = 14; // 3 words
+    pub const ABSORB: usize = 17;
+    pub const UPK_BASE: usize = 18;
+    pub const UPK_BYTE: usize = 19;
+    pub const HEAT: usize = 20;
+    pub const WAKE: usize = 21;
+    pub const W_OCC: usize = 22;
+    pub const DISS: usize = 23;
+    pub const RELAX: usize = 24;
+    pub const TAMB: usize = 25;
+    pub const SIG_DECAY: usize = 26;
+    pub const SUN_HEAT: usize = 27;
+    pub const SUN_ATT: usize = 28;
+    pub const I0I: usize = 29;
+    pub const RXN_HEAT: usize = 30;
+    pub const SINK: usize = 31;
+    pub const RAC: usize = 32;
+    pub const RAC_BIAS: usize = 33;
+    pub const NRX: usize = 34;
+    pub const MU_BG: usize = 35;
+    pub const MU_UV: usize = 36;
+    pub const MU_FLIP: usize = 37;
+    pub const DECAY: usize = 38;
+    pub const DECAY_LIGHT: usize = 39;
+    pub const BOND_BREAK: usize = 40;
+    pub const DEAD_AFTER: usize = 41;
+    pub const VOTE_Q16: usize = 42;
+    pub const MAX_BODY: usize = 43;
+    pub const VENT_RATE: usize = 44;
+    pub const VENT_HEAT: usize = 45;
+    pub const VENT_X4: usize = 46;
+    pub const X4: usize = 47;
+    pub const HAS_MAP: usize = 48;
+    pub const ARR_MUT: usize = 49;
+    pub const ARR_RAC: usize = 50;
+    pub const ARR_DEC: usize = 51;
+    pub const ARR_BOND: usize = 52;
+    pub const POIS_OFF: usize = 53;
+    pub const MASS: usize = 56; // 8 words
+    pub const RX: usize = 64; // reactions, RX_STRIDE words each
+    pub const RX_STRIDE: usize = 10;
+    pub const MAX_RX: usize = 16;
+    pub const LEN: usize = RX + RX_STRIDE * MAX_RX;
+}
+
+pub mod qf {
+    pub const ENERGY: u32 = 1;
+    pub const CHEM: u32 = 2;
+    pub const MATTER: u32 = 4;
+    pub const SIG: u32 = 8;
+    pub const BONDS: u32 = 16;
+    pub const SUN: u32 = 32;
+    pub const VENTS: u32 = 64;
+    pub const CHEM_ONLY: u32 = 128;
+}
+
+/// Tally slots (64-bit lo/hi pairs) accumulated by the physics kernels.
+pub mod ts {
+    pub const SUN: usize = 0;
+    pub const DISS: usize = 1;
+    pub const E_SINK: usize = 2;
+    pub const UPKEEP: usize = 3;
+    pub const SPENT: usize = 4;
+    pub const RXN_GAIN: usize = 5;
+    pub const RXN_USED: usize = 6;
+    pub const ATOM_SINK: usize = 7;
+    pub const M_SINK: usize = 8; // 3
+    pub const RAC_SRC: usize = 11; // 2
+    pub const RAC_SINK: usize = 13; // 2
+    pub const BIRTHS: usize = 15;
+    pub const DEATHS: usize = 16;
+    pub const BODY_MOVES: usize = 17;
+    pub const VOTES: usize = 18;
+    pub const CHANGED: usize = 19;
+    pub const L_ENERGY: usize = 20;
+    pub const L_MATTER: usize = 21; // 3
+    pub const L_ATOMS: usize = 24;
+    pub const BIRTH_COUNT: usize = 25;
+    pub const N: usize = 26;
+}
+
+pub fn phys_words(p: &Params) -> Vec<u32> {
+    let mut w = vec![0u32; qi::LEN];
+    let g = &p.geom;
+    w[qi::N] = g.n as u32;
+    w[qi::DIMS] = g.dims;
+    w[qi::SX] = g.size[0];
+    w[qi::SY] = g.size[1];
+    w[qi::SZ] = g.size[2];
+    w[qi::LMAX] = p.lmax as u32;
+    w[qi::NF] = p.nf as u32;
+    w[qi::K] = p.k as u32;
+    w[qi::S] = p.s as u32;
+    let mut f = 0;
+    for (on, b) in [
+        (p.energy_on, qf::ENERGY),
+        (p.chem_on, qf::CHEM),
+        (p.matter_on, qf::MATTER),
+        (p.sig_on, qf::SIG),
+        (p.bonds_on, qf::BONDS),
+        (p.sun_on, qf::SUN),
+        (p.vents_on, qf::VENTS),
+        (p.chem_only, qf::CHEM_ONLY),
+    ] {
+        if on {
+            f |= b;
+        }
+    }
+    w[qi::FLAGS] = f;
+    w[qi::SEED_LO] = p.seed as u32;
+    w[qi::SEED_HI] = (p.seed >> 32) as u32;
+    for a in 0..3 {
+        w[qi::BOUND + a] = match g.boundary[a] {
+            crate::geom::Boundary::Torus => 0,
+            crate::geom::Boundary::Reflecting => 1,
+            crate::geom::Boundary::Absorbing => 2,
+        };
+    }
+    w[qi::ABSORB] = p.absorb_q16 as u32;
+    w[qi::UPK_BASE] = p.upkeep_base_q16 as u32;
+    w[qi::UPK_BYTE] = p.upkeep_byte_q16 as u32;
+    w[qi::HEAT] = p.heat_q16 as u32;
+    w[qi::WAKE] = p.wake_energy;
+    w[qi::W_OCC] = p.w_occ_q16 as u32;
+    w[qi::DISS] = p.diss_q16 as u32;
+    w[qi::RELAX] = p.relax_q16 as u32;
+    w[qi::TAMB] = p.t_amb;
+    w[qi::SIG_DECAY] = p.sig_decay_q16 as u32;
+    w[qi::SUN_HEAT] = p.sun_heat_q16 as u32;
+    w[qi::SUN_ATT] = 65536 - (p.sun_atten_q16.min(1 << 16) as u32);
+    w[qi::I0I] = ((p.sun_i0_q16 >> 16) as u32).max(1);
+    w[qi::RXN_HEAT] = p.rxn_heat_q16 as u32;
+    w[qi::SINK] = p.sink_q16 as u32;
+    w[qi::RAC] = p.rac_q32.min(u32::MAX as u64) as u32;
+    w[qi::RAC_BIAS] = p.rac_bias_q16 as u32;
+    w[qi::NRX] = p.reactions.len().min(qi::MAX_RX) as u32;
+    w[qi::MU_BG] = p.mu_bg_q32;
+    w[qi::MU_UV] = p.mu_uv_q32;
+    w[qi::MU_FLIP] = p.mu_flip_q32;
+    w[qi::DECAY] = p.decay_q32;
+    w[qi::DECAY_LIGHT] = p.decay_light_q16 as u32;
+    w[qi::BOND_BREAK] = p.bond_break_q32;
+    w[qi::DEAD_AFTER] = p.dead_after;
+    w[qi::VOTE_Q16] = p.vote_q16 as u32;
+    w[qi::MAX_BODY] = p.max_body;
+    w[qi::VENT_RATE] = p.vent_cfg.rate;
+    w[qi::VENT_HEAT] = p.vent_cfg.heat;
+    w[qi::VENT_X4] = p.vent_cfg.x4_rate;
+    w[qi::X4] = p.x4_species.map(|x| x as u32).unwrap_or(NONE);
+    w[qi::HAS_MAP] = (p.map_kind != 0) as u32;
+    w[qi::ARR_MUT] = (p.arr_mut * 4096) as u32;
+    w[qi::ARR_RAC] = (p.arr_rac * 4096) as u32;
+    w[qi::ARR_DEC] = (p.arr_decay * 4096) as u32;
+    w[qi::ARR_BOND] = (p.arr_bond * 4096) as u32;
+    w[qi::POIS_OFF] = (p.arr.len() * 4096) as u32;
+    for (k, &m) in p.mass.iter().take(8).enumerate() {
+        w[qi::MASS + k] = m;
+    }
+    for (i, r) in p.reactions.iter().take(qi::MAX_RX).enumerate() {
+        let b = qi::RX + i * qi::RX_STRIDE;
+        w[b] = r.r[0];
+        w[b + 1] = r.r[1];
+        w[b + 2] = r.p[0];
+        w[b + 3] = r.p[1];
+        w[b + 4] = r.energy as u32;
+        w[b + 5] = r.energy_q16[0].max(0) as u32;
+        w[b + 6] = r.energy_q16[1].max(0) as u32;
+        w[b + 7] = r.photo as u32;
+        w[b + 8] = r.rate_q32;
+        w[b + 9] = (r.arr * 4096) as u32;
+    }
+    w
+}
+
+/// Arrhenius tables followed by the Poisson exp(-lambda) table.
+pub fn phys_tables(p: &Params) -> Vec<u32> {
+    let mut t = vec![];
+    for a in &p.arr {
+        t.extend_from_slice(a);
+    }
+    t.extend_from_slice(&p.pois);
+    t
+}
+
+pub fn phys_constants() -> String {
+    let mut s = constants();
+    let consts: Vec<(&str, usize)> = vec![
+        ("Q_N", qi::N),
+        ("Q_DIMS", qi::DIMS),
+        ("Q_SX", qi::SX),
+        ("Q_SY", qi::SY),
+        ("Q_SZ", qi::SZ),
+        ("Q_LMAX", qi::LMAX),
+        ("Q_NF", qi::NF),
+        ("Q_K", qi::K),
+        ("Q_S", qi::S),
+        ("Q_FLAGS", qi::FLAGS),
+        ("Q_SEED_LO", qi::SEED_LO),
+        ("Q_SEED_HI", qi::SEED_HI),
+        ("Q_EPOCH", qi::EPOCH),
+        ("Q_MIRRORED", qi::MIRRORED),
+        ("Q_BOUND", qi::BOUND),
+        ("Q_ABSORB", qi::ABSORB),
+        ("Q_UPK_BASE", qi::UPK_BASE),
+        ("Q_UPK_BYTE", qi::UPK_BYTE),
+        ("Q_HEAT", qi::HEAT),
+        ("Q_WAKE", qi::WAKE),
+        ("Q_W_OCC", qi::W_OCC),
+        ("Q_DISS", qi::DISS),
+        ("Q_RELAX", qi::RELAX),
+        ("Q_TAMB", qi::TAMB),
+        ("Q_SIG_DECAY", qi::SIG_DECAY),
+        ("Q_SUN_HEAT", qi::SUN_HEAT),
+        ("Q_SUN_ATT", qi::SUN_ATT),
+        ("Q_I0I", qi::I0I),
+        ("Q_RXN_HEAT", qi::RXN_HEAT),
+        ("Q_SINK", qi::SINK),
+        ("Q_RAC", qi::RAC),
+        ("Q_RAC_BIAS", qi::RAC_BIAS),
+        ("Q_NRX", qi::NRX),
+        ("Q_MU_BG", qi::MU_BG),
+        ("Q_MU_UV", qi::MU_UV),
+        ("Q_MU_FLIP", qi::MU_FLIP),
+        ("Q_DECAY", qi::DECAY),
+        ("Q_DECAY_LIGHT", qi::DECAY_LIGHT),
+        ("Q_BOND_BREAK", qi::BOND_BREAK),
+        ("Q_DEAD_AFTER", qi::DEAD_AFTER),
+        ("Q_VOTE_Q16", qi::VOTE_Q16),
+        ("Q_MAX_BODY", qi::MAX_BODY),
+        ("Q_VENT_RATE", qi::VENT_RATE),
+        ("Q_VENT_HEAT", qi::VENT_HEAT),
+        ("Q_VENT_X4", qi::VENT_X4),
+        ("Q_X4", qi::X4),
+        ("Q_HAS_MAP", qi::HAS_MAP),
+        ("Q_ARR_MUT", qi::ARR_MUT),
+        ("Q_ARR_RAC", qi::ARR_RAC),
+        ("Q_ARR_DEC", qi::ARR_DEC),
+        ("Q_ARR_BOND", qi::ARR_BOND),
+        ("Q_POIS_OFF", qi::POIS_OFF),
+        ("Q_MASS", qi::MASS),
+        ("Q_RX", qi::RX),
+        ("RX_STRIDE", qi::RX_STRIDE),
+        ("T_SUN", ts::SUN),
+        ("T_DISS", ts::DISS),
+        ("T_E_SINK", ts::E_SINK),
+        ("T_UPKEEP", ts::UPKEEP),
+        ("T_SPENT", ts::SPENT),
+        ("T_RXN_GAIN", ts::RXN_GAIN),
+        ("T_RXN_USED", ts::RXN_USED),
+        ("T_ATOM_SINK", ts::ATOM_SINK),
+        ("T_M_SINK", ts::M_SINK),
+        ("T_RAC_SRC", ts::RAC_SRC),
+        ("T_RAC_SINK", ts::RAC_SINK),
+        ("T_BIRTHS", ts::BIRTHS),
+        ("T_DEATHS", ts::DEATHS),
+        ("T_BODY_MOVES", ts::BODY_MOVES),
+        ("T_VOTES", ts::VOTES),
+        ("T_CHANGED", ts::CHANGED),
+        ("T_L_ENERGY", ts::L_ENERGY),
+        ("T_L_MATTER", ts::L_MATTER),
+        ("T_L_ATOMS", ts::L_ATOMS),
+        ("T_BIRTH_COUNT", ts::BIRTH_COUNT),
+        ("NTALLY", ts::N),
+    ];
+    for (n, v) in consts {
+        s += &format!("const {n}: u32 = {v}u;\n");
+    }
+    for (n, v) in [
+        ("G_ENERGY", qf::ENERGY),
+        ("G_CHEM", qf::CHEM),
+        ("G_MATTER", qf::MATTER),
+        ("G_SIG", qf::SIG),
+        ("G_BONDS", qf::BONDS),
+        ("G_SUN", qf::SUN),
+        ("G_VENTS", qf::VENTS),
+        ("G_CHEM_ONLY", qf::CHEM_ONLY),
+    ] {
+        s += &format!("const {n}: u32 = {v}u;\n");
+    }
+    for (n, v) in [
+        ("PH_SOURCES", crate::rng::phase::SOURCES),
+        ("PH_TRANSPORT", crate::rng::phase::TRANSPORT),
+        ("PH_CHEM", crate::rng::phase::CHEM),
+        ("PH_ABSORB", crate::rng::phase::ABSORB),
+        ("PH_MUTATE", crate::rng::phase::MUTATE),
+        ("PH_BONDBREAK", crate::rng::phase::BONDBREAK),
+        ("WALL_ABSORB", WALL_ABSORB),
+    ] {
+        s += &format!("const {n}: u32 = {v}u;\n");
+    }
+    s
+}
