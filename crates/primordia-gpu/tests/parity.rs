@@ -151,6 +151,8 @@ fn t4_resident_fuzz() {
         c.energy.enabled = rnd() % 5 != 0;
         c.shielding.granularity = if rnd() % 2 == 0 { primordia_core::config::Granularity::Byte } else { primordia_core::config::Granularity::Slice };
         c.bonds.break_rate = 1e-2;
+        c.individual.starve_after = if rnd() % 2 == 0 { 20 } else { 0 };
+        c.energy.upkeep.base = 4.0;
         if c.validate().is_err() {
             continue;
         }

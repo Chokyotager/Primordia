@@ -66,6 +66,7 @@ pub struct Params {
     pub pair_random: bool,
     pub random_facing: bool,
     pub dead_after: u32,
+    pub starve_after: u32,
 
     pub energy_on: bool,
     pub chem_on: bool,
@@ -244,6 +245,7 @@ impl Params {
             pair_random: c.individual.pair_order == PairOrder::Random,
             random_facing: c.individual.random_initial_facing,
             dead_after: c.individual.dead_after,
+            starve_after: if energy_on { c.individual.starve_after } else { 0 },
             energy_on,
             chem_on: c.chemistry.enabled,
             matter_on: c.matter.enabled && !pair_concat,

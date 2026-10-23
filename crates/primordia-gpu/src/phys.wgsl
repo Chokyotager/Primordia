@@ -1119,7 +1119,8 @@ fn mutate_cell(c: u32) {
             break;
         }
     }
-    if (allzero) { setH(c, H_ZERO, H(c, H_ZERO) + 1u); } else { setH(c, H_ZERO, 0u); }
+    let starving = Q[Q_STARVE] > 0u && (H(c, H_FLAGS) & FL_HALT) != 0u;
+    if (starving || allzero) { setH(c, H_ZERO, H(c, H_ZERO) + 1u); } else { setH(c, H_ZERO, 0u); }
 }
 @compute @workgroup_size(64)
 fn k_mutate(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -1156,8 +1157,21 @@ fn k_bondbreak(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 
 fn dead_cell(c: u32) {
-    if (!occ(c) || H(c, H_ZERO) < Q[Q_DEAD_AFTER]) { return; }
+    if (!occ(c)) { return; }
     let len = H(c, H_LEN);
+    var allzero = true;
+    for (var i = 0u; i < len; i = i + 1u) {
+        if (tb(c, i) != 0u) {
+            allzero = false;
+            break;
+        }
+    }
+    let z = H(c, H_ZERO);
+    if (allzero) {
+        if (z < Q[Q_DEAD_AFTER]) { return; }
+    } else if (Q[Q_STARVE] == 0u || z < Q[Q_STARVE]) {
+        return;
+    }
     let pb = 2u + 2u * Q[Q_K];
     for (var i = 0u; i < len; i = i + 1u) {
         let b = tb(c, i);

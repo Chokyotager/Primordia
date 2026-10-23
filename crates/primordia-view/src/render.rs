@@ -671,6 +671,27 @@ pub fn colonies(st: &State, p: &Params, infos: &[CellInfo], tr: &mut Tracker) ->
             }
         }
         col.radius = (rad / k as f32).sqrt().max(1.0);
+        // anchor labels and fly-to on the member cell nearest the centroid, so
+        // they always sit on the colony even when its shape is irregular
+        if g.dims > 0 {
+            let mut best = (f32::MAX, col.center);
+            for &c in cells.iter().step_by((cells.len() / 3000).max(1)) {
+                let q = g.coords(c as usize);
+                let mut d2 = 0f32;
+                for a in 0..g.dims as usize {
+                    let s = g.size[a] as f32;
+                    let mut dd = (q[a] as f32 - col.center[a]).abs();
+                    if g.boundary[a] == primordia_core::geom::Boundary::Torus {
+                        dd = dd.min(s - dd);
+                    }
+                    d2 += dd * dd;
+                }
+                if d2 < best.0 {
+                    best = (d2, [q[0] as f32, q[1] as f32, q[2] as f32]);
+                }
+            }
+            col.center = best.1;
+        }
         col.energy = (e / k) as f32;
         col.copiers = (cp / k) as f32;
         col.bonded = (bd / k) as f32;

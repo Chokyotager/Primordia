@@ -62,6 +62,9 @@ pub struct IndividualCfg {
     pub random_initial_facing: bool,
     pub interaction: Interaction,
     pub dead_after: u32,
+    /// A cell that stays dormant (out of energy) for this many epochs dies;
+    /// 0 = never (dormant cells only die once their tape has decayed to zeros).
+    pub starve_after: u32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -387,6 +390,7 @@ impl Default for IndividualCfg {
             random_initial_facing: true,
             interaction: Interaction::Hybrid,
             dead_after: 64,
+            starve_after: 0,
         }
     }
 }

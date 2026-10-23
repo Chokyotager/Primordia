@@ -60,7 +60,7 @@
   .lg { display: flex; align-items: center; gap: 8px; font-size: 12px; margin: 3px 0; }
   .sw { width: 14px; height: 14px; border-radius: 4px; flex: none; }
   #labels { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
-  .tag { position: absolute; transform: translate(-50%, -100%); white-space: nowrap; font-size: 12px; padding: 3px 9px 3px 7px;
+  .tag { position: absolute; left: 0; top: 0; will-change: transform; white-space: nowrap; font-size: 12px; padding: 3px 9px 3px 7px;
     border-radius: 999px; background: rgba(10, 12, 18, 0.78); border: 1px solid rgba(255,255,255,0.15); pointer-events: auto; cursor: pointer; }
   .tag i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; vertical-align: 0; }
   .tag.sel { border-color: #fff; box-shadow: 0 0 12px rgba(255,255,255,0.35); }
@@ -124,7 +124,7 @@
       <div class="lg"><span class="sw" style="background:#5a5c62"></span>Faded = dormant (out of energy)</div>
       <div class="lg"><span class="sw" style="background:#102c28"></span>Low green ground = food (free energy)</div>
       <div class="lg"><span class="sw" style="background:#ffa028"></span>Orange plumes = hydrothermal vents</div>
-      <div class="lg" style="color:var(--muted)">2D: drag to pan · scroll to zoom · 3D: drag to orbit, right-drag to pan · hover for details, double-click a colony to follow it</div>
+      <div class="lg" style="color:var(--muted)">2D: drag to pan · scroll to zoom · click a colony to highlight it · 3D: drag to orbit, right-drag to pan · picking a colony in the list flies there and follows it</div>
     </details>
   </div>
 </div>
@@ -198,7 +198,7 @@ $('b-spin').onclick = () => setSpin(!spin);
 $('b-tour').onclick = () => setTour(!tour);
 $('b-lab').classList.toggle('on', showLabels);
 $('b-lab').onclick = () => { showLabels = !showLabels; store.set('labels', showLabels); $('b-lab').classList.toggle('on', showLabels); };
-controls.addEventListener('start', () => { if (spin) setSpin(false); if (tour) setTour(false); fly = null; });
+controls.addEventListener('start', () => { if (spin) setSpin(false); if (tour) setTour(false); fly = null; follow = false; });
 
 let fly = null; // {from:{pos,target}, to:{pos,target}, t}
 function flyTo(target, dist, elev = 0.75) {
@@ -208,7 +208,15 @@ function flyTo(target, dist, elev = 0.75) {
   const pos = target.clone().add(dir.multiplyScalar(dist * Math.cos(elev))).add(new THREE.Vector3(0, dist * Math.sin(elev), 0));
   fly = { fp: camera.position.clone(), ft: controls.target.clone(), tp: pos, tt: target.clone(), t: 0 };
 }
-let mode = store.get('mode', '2d');
+let mode = store.get('mode', '2d'), dirty3d = false;
+// the 3D scene is only rebuilt while it is shown (it is the expensive part)
+function update3d() {
+  if (!meta) return;
+  if (!world) world = meta.dims === 3 ? buildVolume(meta) : buildTerrain(meta);
+  if (world.kind === 'terrain') updateTerrain(world, meta, bytes); else updateVolume(world, meta, bytes);
+  rebuildVents(meta, bytes);
+  dirty3d = false;
+}
 function setMode(m) {
   mode = m; store.set('mode', m);
   $('b-2d').classList.toggle('on', m === '2d'); $('b-3d').classList.toggle('on', m === '3d');
@@ -217,6 +225,7 @@ function setMode(m) {
   $('b-spin').style.display = m === '3d' ? '' : 'none';
   $('b-top').style.display = m === '3d' ? '' : 'none';
   if (m === '2d' && spin) setSpin(false);
+  if (m === '3d' && (dirty3d || !world)) update3d();
   fly = null; fly2 = null;
 }
 $('b-2d').onclick = () => setMode('2d');
@@ -381,6 +390,24 @@ function updateImage(m, b) {
   }
   ictx.putImageData(id, 0, 0);
 }
+const hl = document.createElement('canvas'), hctx = hl.getContext('2d');
+let hlKey = '';
+function updateHighlight() {
+  const sc = selected ? meta.colonies.findIndex(x => x.id === selected) : -1;
+  const key = `${meta.epoch}:${sc}`;
+  if (key === hlKey) return sc >= 0;
+  hlKey = key;
+  if (sc < 0 || meta.dims === 3) return false;
+  const [w, h] = gridWH(), n = meta.n, k = sc + 1;
+  hl.width = w; hl.height = h;
+  const id = hctx.createImageData(w, h), d = id.data;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const c = x + y * w, o = ((h - 1 - y) * w + x) * 4;
+    if (bytes[n * 5 + c] !== k) { d[o + 3] = 150; }
+  }
+  hctx.putImageData(id, 0, 0);
+  return true;
+}
 function draw2d(t) {
   if (!meta || !view) return;
   if (fly2) {
@@ -395,6 +422,7 @@ function draw2d(t) {
   const [x0, y0] = toScreen(0, h);
   mctx.imageSmoothingEnabled = false;
   mctx.drawImage(img, x0, y0, w * view.s, h * view.s);
+  if (updateHighlight()) mctx.drawImage(hl, x0, y0, w * view.s, h * view.s);
   mctx.strokeStyle = 'rgba(120,140,170,0.4)'; mctx.lineWidth = 1; mctx.strokeRect(x0 - 0.5, y0 - 0.5, w * view.s + 1, h * view.s + 1);
   // vents
   for (const v of meta.vents) {
@@ -409,23 +437,28 @@ function draw2d(t) {
     const [px, py] = toScreen(sc.center[0] + 0.5, sc.center[1] + 0.5), r = Math.max(14, sc.radius * 1.7 * view.s) + 3 * Math.sin(t * 3);
     mctx.lineWidth = 3; mctx.strokeStyle = '#fff'; mctx.beginPath(); mctx.arc(px, py, r, 0, Math.PI * 2); mctx.stroke();
     mctx.lineWidth = 2; mctx.strokeStyle = rgb(sc.color); mctx.beginPath(); mctx.arc(px, py, r + 5, 0, Math.PI * 2); mctx.stroke();
-    if (!fly2 && !drag) { view.cx += (sc.center[0] + 0.5 - view.cx) * 0.03; view.cy += (sc.center[1] + 0.5 - view.cy) * 0.03; }
+    if (follow && !fly2 && !drag) { view.cx += (sc.center[0] + 0.5 - view.cx) * 0.05; view.cy += (sc.center[1] + 0.5 - view.cy) * 0.05; }
   }
 }
 map.addEventListener('wheel', e => {
-  e.preventDefault(); if (!view) return; fly2 = null;
+  e.preventDefault(); if (!view) return; fly2 = null; follow = false;
   const [cx, cy] = toCell(e.clientX, e.clientY), f = Math.exp(-e.deltaY * 0.0015);
   view.s = Math.min(80, Math.max(0.3, view.s * f));
   const [nx, ny] = toCell(e.clientX, e.clientY); view.cx += cx - nx; view.cy += cy - ny;
 }, { passive: false });
-map.addEventListener('pointerdown', e => { if (!view) return; drag = [e.clientX, e.clientY, view.cx, view.cy]; map.classList.add('drag'); fly2 = null; if (tour) setTour(false); });
-addEventListener('pointerup', () => { drag = null; map.classList.remove('drag'); });
+map.addEventListener('pointerdown', e => { if (!view) return; drag = [e.clientX, e.clientY, view.cx, view.cy]; dragMoved = false; map.classList.add('drag'); fly2 = null; if (tour) setTour(false); });
+addEventListener('pointerup', () => { setTimeout(() => { drag = null; }, 0); map.classList.remove('drag'); });
+let dragMoved = false;
 map.addEventListener('pointermove', e => {
   pointer = [e.clientX, e.clientY];
-  if (drag) { view.cx = drag[2] - (e.clientX - drag[0]) / view.s; view.cy = drag[3] + (e.clientY - drag[1]) / view.s; }
+  if (drag && (e.buttons & 1)) { view.cx = drag[2] - (e.clientX - drag[0]) / view.s; view.cy = drag[3] + (e.clientY - drag[1]) / view.s; }
 });
 map.addEventListener('pointerleave', () => { pointer = null; $('tip').style.display = 'none'; });
 map.addEventListener('dblclick', () => { const k = hoverColony(); if (k && k.colony) { setTour(false); selectColony(k.id); } });
+map.addEventListener('click', e => {
+  if (drag && Math.hypot(e.clientX - drag[0], e.clientY - drag[1]) > 4) return;
+  const k = hoverColony(); if (k && k.colony) { setTour(false); selectColony(k.id, false); } else if (k) { selected = null; renderAtlas(); }
+});
 
 // ---------------------------------------------------------------- colonies
 const rgb = c => `rgb(${c[0]},${c[1]},${c[2]})`;
@@ -434,8 +467,9 @@ function colonyPos(c) {
   if (world.kind === 'terrain') p.y = 2.4;
   return p;
 }
+let follow = false;
 function selectColony(id, flyThere = true) {
-  selected = id;
+  selected = id; follow = flyThere;
   const c = meta.colonies.find(x => x.id === id);
   if (c && flyThere) {
     if (mode === '2d') { fly2 = { from: { ...view }, to: { cx: c.center[0] + 0.5, cy: c.center[1] + 0.5, s: Math.min(40, Math.max(view.s, 220 / Math.max(6, c.radius * 2.6))) }, t: 0 }; }
@@ -477,15 +511,16 @@ function renderAtlas() {
 const tags = new Map();
 function updateLabels() {
   const box = $('labels');
-  if (!meta || !world || !showLabels) { box.style.display = 'none'; return; }
+  if (!meta || !showLabels || (mode === '3d' && !world) || (mode === '2d' && !view)) { box.style.display = 'none'; return; }
   box.style.display = 'block';
   const seen = new Set(), placed = [];
   for (const c of meta.colonies.slice(0, 14)) {
     seen.add(c.id);
     let el = tags.get(c.id);
     if (!el) { el = document.createElement('div'); el.className = 'tag'; el.onclick = () => { setTour(false); selectColony(c.id); }; box.appendChild(el); tags.set(c.id, el); }
-    el.innerHTML = `<i style="background:${rgb(c.color)}"></i>${c.name} · ${c.size.toLocaleString()}`;
-    el.classList.toggle('sel', c.id === selected);
+    const html = `<i style="background:${rgb(c.color)}"></i>${c.name} · ${c.size.toLocaleString()}`;
+    if (el._html !== html) { el.innerHTML = html; el._html = html; }
+    if (el._sel !== (c.id === selected)) { el._sel = c.id === selected; el.classList.toggle('sel', el._sel); }
     let x, y, hide;
     if (mode === '2d') {
       [x, y] = toScreen(c.center[0] + 0.5, c.center[1] + 0.5); y -= Math.max(8, c.radius * view.s * 0.8);
@@ -497,8 +532,15 @@ function updateLabels() {
     }
     if (!hide) { for (const q of placed) if (Math.abs(q[0] - x) < 130 && Math.abs(q[1] - y) < 22) { hide = true; break; } }
     if (c.id === selected) hide = false;
-    el.style.display = hide ? 'none' : 'block';
-    if (!hide) { placed.push([x, y]); el.style.left = `${x}px`; el.style.top = `${y}px`; }
+    if (!hide) {
+      placed.push([x, y]);
+      // glide to the new position instead of jumping
+      if (el._x === undefined || Math.hypot(el._x - x, el._y - y) > 300) { el._x = x; el._y = y; }
+      el._x += (x - el._x) * 0.2; el._y += (y - el._y) * 0.2;
+      el.style.transform = `translate(${el._x}px, ${el._y}px) translate(-50%, -100%)`;
+    }
+    const disp = hide ? 'none' : 'block';
+    if (el._disp !== disp) { el._disp = disp; el.style.display = disp; }
   }
   for (const [id, el] of tags) if (!seen.has(id)) { el.remove(); tags.delete(id); }
 }
@@ -511,7 +553,7 @@ canvas.addEventListener('pointerleave', () => { pointer = null; $('tip').style.d
 canvas.addEventListener('dblclick', () => { const k = hoverColony(); if (k) { setTour(false); selectColony(k.id); } });
 let lastHover = 0;
 function hoverColony() {
-  if (!pointer || !meta || !bytes) return null;
+  if (!pointer || !meta || !bytes || (mode === '3d' && !world)) return null;
   if (mode === '2d') {
     if (!view || meta.dims === 3) return null;
     const [cx, cy] = toCell(pointer[0], pointer[1]), [w, h] = gridWH(), x = Math.floor(cx), y = Math.floor(cy);
@@ -541,7 +583,7 @@ function updateTip(now) {
     s += h.colony ? `<span style="color:${rgb(h.colony.color)}">${h.colony.name}</span>` : 'a loner cell';
     const t = []; if (h.f & 2) t.push('dormant'); if (h.f & 4) t.push('copier'); if (h.f & 8) t.push('bonded');
     if (t.length) s += ` · ${t.join(', ')}`;
-    if (h.colony) s += '<br><span style="color:var(--muted)">double-click to follow this colony</span>';
+    if (h.colony) s += '<br><span style="color:var(--muted)">click to highlight · double-click to fly there and follow</span>';
   }
   tip.innerHTML = s; tip.style.display = 'block';
   tip.style.left = `${pointer[0] + 16}px`; tip.style.top = `${pointer[1] + 16}px`;
@@ -598,11 +640,10 @@ async function poll() {
         const fr = await fetch('frame.bin', { cache: 'no-store' });
         const b = new Uint8Array(await fr.arrayBuffer());
         meta = m; bytes = b;
-        if (!world) world = meta.dims === 3 ? buildVolume(meta) : buildTerrain(meta);
-        if (world.kind === 'terrain') updateTerrain(world, meta, b); else updateVolume(world, meta, b);
         updateImage(meta, b);
         if (!view) fit2d(false);
-        rebuildVents(meta, b);
+        hlKey = '';
+        if (mode === '3d') update3d(); else dirty3d = true;
         lastEpoch = meta.epoch; loading = false;
         hud(meta); sky(meta.sun);
       }
@@ -631,7 +672,7 @@ renderer.setAnimationLoop(() => {
     const p = colonyPos(sc), r = Math.max(2, sc.radius * worldScale(world, meta) * 1.3);
     ring.position.copy(p); ring.position.y = 3.2 + 0.3 * Math.sin(t * 3); ring.scale.set(r, r, r);
     ring.material.color.setRGB(sc.color[0] / 255, sc.color[1] / 255, sc.color[2] / 255);
-    if (!fly && controls.target.distanceTo(p) > 0.5) controls.target.lerp(p, 0.04);
+    if (follow && !fly && controls.target.distanceTo(p) > 0.5) controls.target.lerp(p, 0.04);
   }
   if (mode === '2d') {
     draw2d(t);

@@ -1042,7 +1042,9 @@ pub fn mutate_decay(st: &mut State, p: &Params, map: Option<&Vec<u32>>) {
                 }
             }
             // dead-cell bookkeeping
-            if t.iter().all(|&b| b == 0) {
+            // dying counter: all-empty tape, or (with starvation on) dormant
+            let starving = p.starve_after > 0 && h[H_FLAGS] & FL_HALT != 0;
+            if starving || t.iter().all(|&b| b == 0) {
                 h[H_ZERO] += 1;
             } else {
                 h[H_ZERO] = 0;
@@ -1079,10 +1081,21 @@ pub fn mutate_decay(st: &mut State, p: &Params, map: Option<&Vec<u32>>) {
         }
     }
     // dead-cell clearing (sequential: touches neighbours' bond bits)
-    let dead: Vec<usize> = (0..st.n).into_par_iter().filter(|&c| st.occupied(c) && st.h(c, H_ZERO) >= p.dead_after).collect();
+    let dead: Vec<usize> = (0..st.n).into_par_iter().filter(|&c| st.occupied(c) && dying(st, p, c)).collect();
     for c in dead {
         clear_cell(st, p, c);
         st.tally.deaths += 1;
+    }
+}
+
+/// The cell's dying counter has reached its limit: `dead_after` for an
+/// all-empty tape, otherwise `starve_after` (if starvation is on).
+pub fn dying(st: &State, p: &Params, c: usize) -> bool {
+    let z = st.h(c, H_ZERO);
+    if st.tape(c).iter().all(|&b| b == 0) {
+        z >= p.dead_after
+    } else {
+        p.starve_after > 0 && z >= p.starve_after
     }
 }
 
