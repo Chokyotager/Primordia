@@ -53,7 +53,7 @@ impl Mode {
         match self {
             Mode::Colonies => vec![
                 (COLONY_COLORS[0], "each bright colour is one colony: a connected group of related cells (see the Colonies list)"),
-                ([56, 62, 76], "slate = loners: cells not part of a sizeable colony"),
+                ([82, 92, 112], "slate = loners: cells not part of a sizeable colony"),
                 ([150, 150, 150], "faded = dormant (out of energy)"),
                 ([16, 44, 40], "dark green ground = food (free energy)"),
                 ([255, 170, 40], "orange beacon = hydrothermal vent"),
@@ -746,7 +746,7 @@ pub fn colony_color(st: &State, p: &Params, c: usize, info: &CellInfo, of: &[u32
     let k = of[c];
     if k == 0 {
         // a loner: not part of any sizeable colony
-        return if info.halted { [34, 36, 42] } else { [56, 62, 76] };
+        return if info.halted { [48, 52, 62] } else { [82, 92, 112] };
     }
     let col = &cols[(k - 1) as usize];
     let e = ((st.h(c, H_E) as f32 + 1.0).ln() / e_hi.max(1.0)).clamp(0.0, 1.0);

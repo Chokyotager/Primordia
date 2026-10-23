@@ -11,7 +11,9 @@
   }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
     font: 14px/1.4 "Inter", system-ui, -apple-system, "Segoe UI", sans-serif; overflow: hidden; }
-  canvas#scene { position: fixed; inset: 0; display: block; }
+  canvas#scene, canvas#map { position: fixed; inset: 0; display: block; }
+  canvas#map { background: #0b0f17; cursor: grab; }
+  canvas#map.drag { cursor: grabbing; }
   .hud { position: fixed; pointer-events: none; }
   .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
     backdrop-filter: blur(8px); padding: 10px 14px; pointer-events: auto; }
@@ -77,6 +79,7 @@
 </head>
 <body>
 <canvas id="scene"></canvas>
+<canvas id="map"></canvas>
 <div id="labels"></div>
 <div id="tip"></div>
 
@@ -96,7 +99,9 @@
   <div class="panel card"><div class="k">Sky</div><div class="v" id="c-sun">–</div><div class="s" id="c-vents"></div></div>
   <div id="camera" class="panel">
     <div class="row">
-      <button id="b-spin" title="Slowly rotate the view">⟳ Spin: off</button>
+      <button id="b-2d" title="Flat top-down map">▦ 2D map</button>
+      <button id="b-3d" title="Lit 3D landscape">⛰ 3D</button>
+      <button id="b-spin" title="Slowly rotate the view (3D)">⟳ Spin: off</button>
       <button id="b-tour" title="Visit the biggest colonies one after another">✈ Tour</button>
     </div>
     <div class="row">
@@ -114,12 +119,12 @@
     <details>
       <summary>How to read this</summary>
       <div class="lg"><span class="sw" style="background:linear-gradient(90deg,#ff6363,#fac850,#46d296,#5a8cff,#f064d2)"></span>Each bright colour is one colony: a connected group of related cells (copies of each other)</div>
-      <div class="lg"><span class="sw" style="background:#383e4c"></span>Slate = loners, not part of a sizeable colony</div>
+      <div class="lg"><span class="sw" style="background:#525c70"></span>Slate = loners, not part of a sizeable colony</div>
       <div class="lg"><span class="sw" style="background:#f2f2f2"></span>Taller = more stored energy</div>
       <div class="lg"><span class="sw" style="background:#5a5c62"></span>Faded = dormant (out of energy)</div>
       <div class="lg"><span class="sw" style="background:#102c28"></span>Low green ground = food (free energy)</div>
       <div class="lg"><span class="sw" style="background:#ffa028"></span>Orange plumes = hydrothermal vents</div>
-      <div class="lg" style="color:var(--muted)">Drag to orbit · scroll to zoom · right-drag to pan · hover the ground for details</div>
+      <div class="lg" style="color:var(--muted)">2D: drag to pan · scroll to zoom · 3D: drag to orbit, right-drag to pan · hover for details, double-click a colony to follow it</div>
     </details>
   </div>
 </div>
@@ -161,9 +166,9 @@ const hemi = new THREE.HemisphereLight(0x9fc4ff, 0x1a1208, 0.9);
 scene.add(hemi);
 const sunLight = new THREE.DirectionalLight(0xfff1d6, 1.2);
 scene.add(sunLight, sunLight.target);
-const DAY = new THREE.Color(0x5d93c9), NIGHT = new THREE.Color(0x0a1020);
+const DAY = new THREE.Color(0x5d93c9), NIGHT = new THREE.Color(0x1a2440);
 scene.background = NIGHT.clone();
-scene.fog = new THREE.Fog(NIGHT.clone(), 220, 1000);
+scene.fog = new THREE.Fog(NIGHT.clone(), 400, 1400);
 
 let stars;
 {
@@ -203,7 +208,23 @@ function flyTo(target, dist, elev = 0.75) {
   const pos = target.clone().add(dir.multiplyScalar(dist * Math.cos(elev))).add(new THREE.Vector3(0, dist * Math.sin(elev), 0));
   fly = { fp: camera.position.clone(), ft: controls.target.clone(), tp: pos, tt: target.clone(), t: 0 };
 }
-$('b-over').onclick = () => { selected = null; flyTo(new THREE.Vector3(0, 0, 0), WORLD_W * 0.95, 0.65); renderAtlas(); };
+let mode = store.get('mode', '2d');
+function setMode(m) {
+  mode = m; store.set('mode', m);
+  $('b-2d').classList.toggle('on', m === '2d'); $('b-3d').classList.toggle('on', m === '3d');
+  $('map').style.display = m === '2d' ? 'block' : 'none';
+  $('scene').style.display = m === '3d' ? 'block' : 'none';
+  $('b-spin').style.display = m === '3d' ? '' : 'none';
+  $('b-top').style.display = m === '3d' ? '' : 'none';
+  if (m === '2d' && spin) setSpin(false);
+  fly = null; fly2 = null;
+}
+$('b-2d').onclick = () => setMode('2d');
+$('b-3d').onclick = () => setMode('3d');
+$('b-over').onclick = () => {
+  selected = null; renderAtlas();
+  if (mode === '2d') fit2d(true); else flyTo(new THREE.Vector3(0, 0, 0), WORLD_W * 0.95, 0.65);
+};
 $('b-top').onclick = () => { fly = { fp: camera.position.clone(), ft: controls.target.clone(), tp: new THREE.Vector3(0, WORLD_W * 1.15, 0.01), tt: new THREE.Vector3(0, 0, 0), t: 0 }; };
 
 // ---------------------------------------------------------------- world
@@ -227,7 +248,12 @@ function buildTerrain(m) {
   const geo = new THREE.PlaneGeometry(W, D, gw - 1, gh - 1);
   geo.rotateX(-Math.PI / 2);
   geo.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(gw * gh * 3), 3));
-  const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.82, metalness: 0.04 }));
+  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.82, metalness: 0.04 });
+  // cells glow with their own colour, so they stay visible at night
+  mat.onBeforeCompile = sh => {
+    sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n  totalEmissiveRadiance += vColor.rgb * 0.6;');
+  };
+  const mesh = new THREE.Mesh(geo, mat);
   scene.add(mesh);
   const base = new THREE.Mesh(new THREE.BoxGeometry(W * 1.02, 2, D * 1.02), new THREE.MeshStandardMaterial({ color: 0x0c1018, roughness: 1 }));
   base.position.y = -1.05; scene.add(base);
@@ -264,7 +290,11 @@ function worldScale(w, m) { return w.kind === 'terrain' ? w.W / w.gw0 : w.scale;
 
 function buildVolume(m) {
   const s = WORLD_W / Math.max(m.size[0], m.size[1]), max = 260000;
-  const mesh = new THREE.InstancedMesh(new THREE.BoxGeometry(s * 0.9, s * 0.9, s * 0.9), new THREE.MeshStandardMaterial({ roughness: 0.7, metalness: 0.05 }), max);
+  const vmat = new THREE.MeshStandardMaterial({ roughness: 0.7, metalness: 0.05 });
+  vmat.onBeforeCompile = sh => {
+    sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n  totalEmissiveRadiance += diffuseColor.rgb * 0.6;');
+  };
+  const mesh = new THREE.InstancedMesh(new THREE.BoxGeometry(s * 0.9, s * 0.9, s * 0.9), vmat, max);
   mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage); scene.add(mesh);
   const floor = new THREE.Mesh(new THREE.BoxGeometry(m.size[0] * s, 1, m.size[1] * s), new THREE.MeshStandardMaterial({ color: 0x141a24, roughness: 1 }));
   floor.position.y = -0.6; scene.add(floor);
@@ -318,6 +348,85 @@ function animateVents(t) {
   }
 }
 
+// ---------------------------------------------------------------- 2D map
+const map = $('map'), mctx = map.getContext('2d');
+const img = document.createElement('canvas'), ictx = img.getContext('2d');
+let view = null, fly2 = null, drag = null;   // view: {cx, cy, s} centre in cells, pixels per cell
+function gridWH() { const g = meta.grid; return meta.dims === 1 ? [g[0], 1] : [g[0], g[1]]; }
+function resizeMap() { map.width = innerWidth * devicePixelRatio; map.height = innerHeight * devicePixelRatio; }
+resizeMap();
+function fitScale() { const [w, h] = gridWH(); return Math.min((innerWidth - 720) / w, (innerHeight - 170) / h, innerWidth / w * 0.9); }
+function fit2d(animate) {
+  const [w, h] = gridWH(), to = { cx: w / 2, cy: h / 2, s: Math.max(0.5, fitScale()) };
+  if (animate && view) fly2 = { from: { ...view }, to, t: 0 }; else view = to;
+}
+// screen centre of the map area (between the side panels)
+function mapCentre() { const l = innerWidth > 760 ? 350 : 0, r = innerWidth > 1100 ? 360 : 0; return [l + (innerWidth - l - r) / 2, 128 + (innerHeight - 140) / 2]; }
+function toScreen(x, y) { const [mx, my] = mapCentre(), h = gridWH()[1]; return [mx + (x - view.cx) * view.s, my + ((h - y) - (h - view.cy)) * view.s]; }
+function toCell(px, py) { const [mx, my] = mapCentre(), h = gridWH()[1]; return [view.cx + (px - mx) / view.s, h - ((h - view.cy) + (py - my) / view.s)]; }
+function updateImage(m, b) {
+  const [w, h] = gridWH(), n = m.n;
+  img.width = w; img.height = h;
+  const id = ictx.createImageData(w, h), d = id.data;
+  const sx = m.size[0], sy = m.size[1], flags = b.subarray(n * 4);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    let c = x + y * w;
+    if (m.dims === 3) { // top-down: highest occupied cell in the column, else the floor
+      c = x + sx * y;
+      for (let z = m.size[2] - 1; z >= 0; z--) { const k = x + sx * (y + sy * z); if (flags[k] & 1) { c = k; break; } }
+    }
+    const o = ((h - 1 - y) * w + x) * 4;
+    if (c >= n) { d[o + 3] = 255; continue; }
+    d[o] = b[c * 4]; d[o + 1] = b[c * 4 + 1]; d[o + 2] = b[c * 4 + 2]; d[o + 3] = 255;
+  }
+  ictx.putImageData(id, 0, 0);
+}
+function draw2d(t) {
+  if (!meta || !view) return;
+  if (fly2) {
+    fly2.t = Math.min(1, fly2.t + 1 / 60 / 1.2);
+    const k = fly2.t < 0.5 ? 2 * fly2.t * fly2.t : 1 - Math.pow(-2 * fly2.t + 2, 2) / 2, a = fly2.from, z = fly2.to;
+    view = { cx: a.cx + (z.cx - a.cx) * k, cy: a.cy + (z.cy - a.cy) * k, s: a.s * Math.pow(z.s / a.s, k) };
+    if (fly2.t >= 1) fly2 = null;
+  }
+  const dpr = devicePixelRatio, [w, h] = gridWH();
+  mctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  mctx.fillStyle = '#0b0f17'; mctx.fillRect(0, 0, innerWidth, innerHeight);
+  const [x0, y0] = toScreen(0, h);
+  mctx.imageSmoothingEnabled = false;
+  mctx.drawImage(img, x0, y0, w * view.s, h * view.s);
+  mctx.strokeStyle = 'rgba(120,140,170,0.4)'; mctx.lineWidth = 1; mctx.strokeRect(x0 - 0.5, y0 - 0.5, w * view.s + 1, h * view.s + 1);
+  // vents
+  for (const v of meta.vents) {
+    const [px, py] = toScreen(v[0] + 0.5, (meta.dims >= 2 ? v[1] : 0) + 0.5), pulse = 0.75 + 0.25 * Math.sin(t * 2.4 + v[0]);
+    const r = Math.max(10, view.s * 3) * pulse, g = mctx.createRadialGradient(px, py, 0, px, py, r * 2.2);
+    g.addColorStop(0, 'rgba(255,235,170,1)'); g.addColorStop(0.2, 'rgba(255,160,50,0.85)'); g.addColorStop(1, 'rgba(255,90,20,0)');
+    mctx.fillStyle = g; mctx.beginPath(); mctx.arc(px, py, r * 2.2, 0, Math.PI * 2); mctx.fill();
+  }
+  // selected colony ring
+  const sc = selected ? meta.colonies.find(x => x.id === selected) : null;
+  if (sc) {
+    const [px, py] = toScreen(sc.center[0] + 0.5, sc.center[1] + 0.5), r = Math.max(14, sc.radius * 1.7 * view.s) + 3 * Math.sin(t * 3);
+    mctx.lineWidth = 3; mctx.strokeStyle = '#fff'; mctx.beginPath(); mctx.arc(px, py, r, 0, Math.PI * 2); mctx.stroke();
+    mctx.lineWidth = 2; mctx.strokeStyle = rgb(sc.color); mctx.beginPath(); mctx.arc(px, py, r + 5, 0, Math.PI * 2); mctx.stroke();
+    if (!fly2 && !drag) { view.cx += (sc.center[0] + 0.5 - view.cx) * 0.03; view.cy += (sc.center[1] + 0.5 - view.cy) * 0.03; }
+  }
+}
+map.addEventListener('wheel', e => {
+  e.preventDefault(); if (!view) return; fly2 = null;
+  const [cx, cy] = toCell(e.clientX, e.clientY), f = Math.exp(-e.deltaY * 0.0015);
+  view.s = Math.min(80, Math.max(0.3, view.s * f));
+  const [nx, ny] = toCell(e.clientX, e.clientY); view.cx += cx - nx; view.cy += cy - ny;
+}, { passive: false });
+map.addEventListener('pointerdown', e => { if (!view) return; drag = [e.clientX, e.clientY, view.cx, view.cy]; map.classList.add('drag'); fly2 = null; if (tour) setTour(false); });
+addEventListener('pointerup', () => { drag = null; map.classList.remove('drag'); });
+map.addEventListener('pointermove', e => {
+  pointer = [e.clientX, e.clientY];
+  if (drag) { view.cx = drag[2] - (e.clientX - drag[0]) / view.s; view.cy = drag[3] + (e.clientY - drag[1]) / view.s; }
+});
+map.addEventListener('pointerleave', () => { pointer = null; $('tip').style.display = 'none'; });
+map.addEventListener('dblclick', () => { const k = hoverColony(); if (k && k.colony) { setTour(false); selectColony(k.id); } });
+
 // ---------------------------------------------------------------- colonies
 const rgb = c => `rgb(${c[0]},${c[1]},${c[2]})`;
 function colonyPos(c) {
@@ -328,7 +437,10 @@ function colonyPos(c) {
 function selectColony(id, flyThere = true) {
   selected = id;
   const c = meta.colonies.find(x => x.id === id);
-  if (c && flyThere) flyTo(colonyPos(c), Math.max(45, c.radius * worldScale(world, meta) * 7), 1.0);
+  if (c && flyThere) {
+    if (mode === '2d') { fly2 = { from: { ...view }, to: { cx: c.center[0] + 0.5, cy: c.center[1] + 0.5, s: Math.min(40, Math.max(view.s, 220 / Math.max(6, c.radius * 2.6))) }, t: 0 }; }
+    else flyTo(colonyPos(c), Math.max(45, c.radius * worldScale(world, meta) * 7), 1.0);
+  }
   renderAtlas();
 }
 function nextTour() {
@@ -374,9 +486,15 @@ function updateLabels() {
     if (!el) { el = document.createElement('div'); el.className = 'tag'; el.onclick = () => { setTour(false); selectColony(c.id); }; box.appendChild(el); tags.set(c.id, el); }
     el.innerHTML = `<i style="background:${rgb(c.color)}"></i>${c.name} · ${c.size.toLocaleString()}`;
     el.classList.toggle('sel', c.id === selected);
-    const p = colonyPos(c); p.y += 1.5; p.project(camera);
-    const x = (p.x + 1) / 2 * innerWidth, y = (1 - p.y) / 2 * innerHeight;
-    let hide = p.z > 1 || x < 0 || x > innerWidth || y < 0 || y > innerHeight;
+    let x, y, hide;
+    if (mode === '2d') {
+      [x, y] = toScreen(c.center[0] + 0.5, c.center[1] + 0.5); y -= Math.max(8, c.radius * view.s * 0.8);
+      hide = x < 0 || x > innerWidth || y < 0 || y > innerHeight;
+    } else {
+      const p = colonyPos(c); p.y += 1.5; p.project(camera);
+      x = (p.x + 1) / 2 * innerWidth; y = (1 - p.y) / 2 * innerHeight;
+      hide = p.z > 1 || x < 0 || x > innerWidth || y < 0 || y > innerHeight;
+    }
     if (!hide) { for (const q of placed) if (Math.abs(q[0] - x) < 130 && Math.abs(q[1] - y) < 22) { hide = true; break; } }
     if (c.id === selected) hide = false;
     el.style.display = hide ? 'none' : 'block';
@@ -393,7 +511,15 @@ canvas.addEventListener('pointerleave', () => { pointer = null; $('tip').style.d
 canvas.addEventListener('dblclick', () => { const k = hoverColony(); if (k) { setTour(false); selectColony(k.id); } });
 let lastHover = 0;
 function hoverColony() {
-  if (!pointer || !world || world.kind !== 'terrain' || !bytes) return null;
+  if (!pointer || !meta || !bytes) return null;
+  if (mode === '2d') {
+    if (!view || meta.dims === 3) return null;
+    const [cx, cy] = toCell(pointer[0], pointer[1]), [w, h] = gridWH(), x = Math.floor(cx), y = Math.floor(cy);
+    if (x < 0 || y < 0 || x >= w || y >= h) return null;
+    const c = x + y * w, n = meta.n, f = bytes[n * 4 + c], k = bytes[n * 5 + c];
+    return { x, y, f, colony: k ? meta.colonies[k - 1] : null, id: k ? meta.colonies[k - 1].id : 0 };
+  }
+  if (!world || world.kind !== 'terrain') return null;
   mouse.set(pointer[0] / innerWidth * 2 - 1, -(pointer[1] / innerHeight) * 2 + 1);
   ray.setFromCamera(mouse, camera);
   const hit = ray.intersectObject(world.mesh)[0];
@@ -453,10 +579,11 @@ function hud(m) {
   renderAtlas();
 }
 function sky(sun) {
+  // night only tints the sky; the landscape stays lit so cells remain visible
   const c = NIGHT.clone().lerp(DAY, Math.min(1, sun * 1.2));
   scene.background = c; scene.fog.color.copy(c);
   stars.material.opacity = Math.max(0, 1 - sun * 2.5);
-  sunLight.intensity = 0.45 + 2.0 * sun; hemi.intensity = 0.9 + 0.5 * sun;
+  sunLight.intensity = 1.3 + 1.0 * sun; hemi.intensity = 1.6 + 0.3 * sun;
   sunLight.position.set(WORLD_W * 0.6, 40 + 160 * sun, WORLD_W * 0.3);
 }
 
@@ -473,6 +600,8 @@ async function poll() {
         meta = m; bytes = b;
         if (!world) world = meta.dims === 3 ? buildVolume(meta) : buildTerrain(meta);
         if (world.kind === 'terrain') updateTerrain(world, meta, b); else updateVolume(world, meta, b);
+        updateImage(meta, b);
+        if (!view) fit2d(false);
         rebuildVents(meta, b);
         lastEpoch = meta.epoch; loading = false;
         hud(meta); sky(meta.sun);
@@ -483,7 +612,8 @@ async function poll() {
 }
 poll();
 
-addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
+addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); resizeMap(); });
+setMode(mode);
 const clock = new THREE.Clock();
 renderer.setAnimationLoop(() => {
   const dt = clock.getDelta(), t = clock.elapsedTime;
@@ -496,18 +626,22 @@ renderer.setAnimationLoop(() => {
   if (tour) { tourT += dt; if (tourT > 9) { tourT = 0; nextTour(); } }
   // keep the camera on a selected colony as it moves
   const sc = selected && meta ? meta.colonies.find(x => x.id === selected) : null;
-  ring.visible = !!sc;
-  if (sc) {
+  ring.visible = !!sc && mode === '3d';
+  if (sc && mode === '3d') {
     const p = colonyPos(sc), r = Math.max(2, sc.radius * worldScale(world, meta) * 1.3);
     ring.position.copy(p); ring.position.y = 3.2 + 0.3 * Math.sin(t * 3); ring.scale.set(r, r, r);
     ring.material.color.setRGB(sc.color[0] / 255, sc.color[1] / 255, sc.color[2] / 255);
     if (!fly && controls.target.distanceTo(p) > 0.5) controls.target.lerp(p, 0.04);
   }
-  controls.update();
-  animateVents(t);
+  if (mode === '2d') {
+    draw2d(t);
+  } else {
+    controls.update();
+    animateVents(t);
+    renderer.render(scene, camera);
+  }
   updateLabels();
   updateTip(performance.now());
-  renderer.render(scene, camera);
 });
 </script>
 </body>

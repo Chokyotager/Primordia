@@ -289,8 +289,10 @@ fn stepper(mut sim: Sim, mut obs: Observer, rx: Receiver<Cmd>, status: Arc<Mutex
                     // save the final state so the run can be resumed exactly here
                     if !wants.contains_key(&sim.st.epoch) {
                         sim.request_snapshot();
-                        wants.insert(sim.st.epoch, Want { save: true, telemetry: true, ..Default::default() });
                     }
+                    let w = wants.entry(sim.st.epoch).or_default();
+                    w.save = true;
+                    w.telemetry = true;
                     for st in sim.take_snapshots(true) {
                         let w = wants.remove(&st.epoch).unwrap_or_default();
                         obs.deliver(st, w, eps, backend.clone());
