@@ -68,7 +68,7 @@ GPU utilisation during a full run with viewer, telemetry and web feed: 95–98%.
 
 ## Rules added beyond the spec
 
-All are off by default (the spec's behaviour), run identically on the CPU and the GPU, and are covered
+All default to the spec's behaviour, run identically on the CPU and the GPU, and are covered
 by golden and parity tests. They came out of the long live runs, in this order:
 
 | Setting | Rule | Why |
@@ -78,8 +78,10 @@ by golden and parity tests. They came out of the long live runs, in this order:
 | `individual.max_age` | a cell dies once it is this many epochs old | keeps turnover going if cells learn to survive the night |
 | `individual.sleep_scale` | `SLEEP n` lasts min(n, 255) × scale epochs | at most 31 epochs per call, so covering a 1,000-epoch night took dozens of calls |
 | `individual.sleep_shield` | neighbours cannot write to or digest a sleeping cell's tape (reads are allowed) | sleepers survived the night but waking neighbours copied over their programs, so sleeping could not be inherited |
+| `individual.sleep_absorb` | a sleeping cell keeps this fraction of its light absorption | with protection alone, constant short daytime naps took over (97% of cells asleep) and replaced bonded bodies; a sleeper with no income pays for sleeping by day but hardly at night |
 
-`runs/live-m3.toml` uses all five (starve 800, moon 0.02, lifespan 6,000, sleep ×16, shield on).
+`runs/live-m4.toml` uses all six (starve 800, moon 0.02, lifespan 6,000, sleep ×16, shield on, sleepers
+absorb nothing). `runs/live-m1.toml` to `live-m3.toml` are the earlier steps.
 
 ## Telemetry
 

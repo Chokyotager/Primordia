@@ -630,7 +630,10 @@ fn k_expo(@builtin(global_invocation_id) gid: vec3<u32>) {
 
 fn absorb_cell(c: u32) {
     if (!occ(c)) { return; }
-    let a = mulshr16(Q[Q_ABSORB], expo[c]);
+    var a = mulshr16(Q[Q_ABSORB], expo[c]);
+    if (H(c, H_SLEEP) > 0u && Q[Q_SLEEP_ABSORB] != 65536u) {
+        a = mulshr16(a, Q[Q_SLEEP_ABSORB]);
+    }
     let de = mulshr16(a, F(c, 0u));
     setF(c, 0u, F(c, 0u) - de);
     setH(c, H_E, sat_add(H(c, H_E), de));

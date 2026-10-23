@@ -72,6 +72,9 @@ pub struct IndividualCfg {
     /// A sleeping cell's tape cannot be written or digested by neighbours
     /// (a spore); reading it is still allowed.
     pub sleep_shield: bool,
+    /// Fraction of normal light absorption a sleeping cell keeps (1 = as in
+    /// the spec, 0 = a sleeper is a closed spore with no income).
+    pub sleep_absorb: f64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -406,6 +409,7 @@ impl Default for IndividualCfg {
             max_age: 0,
             sleep_scale: 1,
             sleep_shield: false,
+            sleep_absorb: 1.0,
         }
     }
 }
@@ -803,6 +807,7 @@ impl Config {
         ensure!(ind.l_max >= 1 && ind.l_max <= 256 && ind.l_max % 4 == 0, "l_max must be 4..=256 and a multiple of 4");
         ensure!(ind.l_init <= ind.l_max, "l_init > l_max");
         ensure!((1..=256).contains(&ind.sleep_scale), "individual.sleep_scale must be 1..=256");
+        ensure!((0.0..=1.0).contains(&ind.sleep_absorb), "individual.sleep_absorb must be in 0..=1");
         ensure!((0.0..=1.0).contains(&self.energy.sun.moon), "energy.sun.moon must be in 0..=1");
         ensure!(ind.step_budget <= 65535, "step_budget too large");
         let faces = self.faces().max(1) as f64;

@@ -255,6 +255,29 @@ fn t1_sleep_shield() {
     }
 }
 
+/// individual.sleep_absorb: a sleeping cell keeps that fraction of its light
+/// absorption (0 = none); an awake cell and the default are unaffected.
+#[test]
+fn t1_sleep_absorb() {
+    let take = |absorb: f64, asleep: bool| {
+        let mut cfg = deterministic_cfg(2);
+        cfg.individual.sleep_absorb = absorb;
+        let (p, mut st) = blank(&cfg);
+        let c = p.geom.index([5, 5, 0]);
+        put(&mut st, &p, c, &[0x41, 0x41], 0, 1000);
+        st.hdr[c * HDR + H_SLEEP] = if asleep { 10 } else { 0 };
+        *st.fm(c, F_F) = 20_000;
+        primordia_core::phases::absorb_upkeep(&mut st, &p);
+        20_000 - st.f(c, F_F)
+    };
+    let full = take(1.0, true);
+    assert!(full > 0);
+    assert_eq!(take(0.0, true), 0, "a sleeping spore absorbs nothing");
+    assert_eq!(take(0.0, false), full, "awake cells are unaffected");
+    let half = take(0.5, true);
+    assert!(half > 0 && half < full, "half {half} of {full}");
+}
+
 // ------------------------------------------------------------------ T2
 
 #[test]

@@ -699,7 +699,10 @@ pub fn absorb_upkeep(st: &mut State, p: &Params) {
                 return 0;
             }
             // absorption
-            let a = mulshr16(p.absorb_q16 as u32, expo[c]);
+            let mut a = mulshr16(p.absorb_q16 as u32, expo[c]);
+            if h[H_SLEEP] > 0 && p.sleep_absorb_q16 != 1 << 16 {
+                a = mulshr16(a, p.sleep_absorb_q16);
+            }
             let de = mulshr16(a, f[F_F]);
             f[F_F] -= de;
             h[H_E] = sat_add(h[H_E], de);

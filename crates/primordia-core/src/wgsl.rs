@@ -330,7 +330,8 @@ pub mod qi {
     pub const RX: usize = 64; // reactions, RX_STRIDE words each
     pub const RX_STRIDE: usize = 10;
     pub const MAX_RX: usize = 16;
-    pub const LEN: usize = RX + RX_STRIDE * MAX_RX;
+    pub const SLEEP_ABSORB: usize = RX + RX_STRIDE * MAX_RX;
+    pub const LEN: usize = SLEEP_ABSORB + 1;
 }
 
 pub mod qf {
@@ -435,6 +436,7 @@ pub fn phys_words(p: &Params) -> Vec<u32> {
     w[qi::DEAD_AFTER] = p.dead_after;
     w[qi::STARVE] = p.starve_after;
     w[qi::MAX_AGE] = p.max_age;
+    w[qi::SLEEP_ABSORB] = p.sleep_absorb_q16;
     w[qi::VOTE_Q16] = p.vote_q16 as u32;
     w[qi::MAX_BODY] = p.max_body;
     w[qi::VENT_RATE] = p.vent_cfg.rate;
@@ -521,6 +523,7 @@ pub fn phys_constants() -> String {
         ("Q_DEAD_AFTER", qi::DEAD_AFTER),
         ("Q_STARVE", qi::STARVE),
         ("Q_MAX_AGE", qi::MAX_AGE),
+        ("Q_SLEEP_ABSORB", qi::SLEEP_ABSORB),
         ("Q_VOTE_Q16", qi::VOTE_Q16),
         ("Q_MAX_BODY", qi::MAX_BODY),
         ("Q_VENT_RATE", qi::VENT_RATE),

@@ -41,10 +41,11 @@ The current long-running experiment is a 501² world with day and night, seeded 
 and its mirror image:
 
 ```
-./target/release/primordia run runs/live-m3.toml --events runs/seed-501.jsonl --autorun --web 0.0.0.0:8765
+./target/release/primordia run runs/live-m4.toml --events runs/seed-501.jsonl --autorun --web 0.0.0.0:8765
 ```
 
-It adds weak moonlight, a 3-day lifespan, longer sleeps and protected sleepers to the spec's rules
+It adds weak moonlight, a 3-day lifespan, longer sleeps, and protected sleepers that absorb no light to
+the spec's rules
 (see [DESIGN.md](DESIGN.md#rules-added-beyond-the-spec)), to find out whether cells and bodies learn to
 survive the night.
 

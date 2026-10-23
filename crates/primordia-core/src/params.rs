@@ -70,6 +70,8 @@ pub struct Params {
     pub max_age: u32,
     pub sleep_scale: u32,
     pub sleep_shield: bool,
+    /// Q16 fraction of absorption kept while asleep (65536 = all).
+    pub sleep_absorb_q16: u32,
 
     pub energy_on: bool,
     pub chem_on: bool,
@@ -253,6 +255,7 @@ impl Params {
             max_age: c.individual.max_age,
             sleep_scale: c.individual.sleep_scale,
             sleep_shield: c.individual.sleep_shield && !pair_concat,
+            sleep_absorb_q16: to_q16(c.individual.sleep_absorb) as u32,
             energy_on,
             chem_on: c.chemistry.enabled,
             matter_on: c.matter.enabled && !pair_concat,
