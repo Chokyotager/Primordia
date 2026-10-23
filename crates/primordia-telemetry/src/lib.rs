@@ -51,7 +51,7 @@ pub struct Recorder {
     opcodes: Table,
     ecology: Table,
     assay: Table,
-    registry: Vec<Species>,
+    registry: Registry,
     tb_start: Option<(u64, i32)>,
     last_interface: Option<(u64, usize)>,
     pub summary: Summary,
@@ -125,7 +125,7 @@ impl Recorder {
             opcodes: Table::new(dir, "opcodes", &cols(&[("epoch", I), ("opcode", I), ("count", I)]))?,
             ecology: Table::new(dir, "ecology", &cols(&[("epoch", I), ("block", I), ("mean_f", F), ("mean_t_kelvin", F), ("mean_chem", F), ("occupancy", F)]))?,
             assay: Table::new(dir, "assay", &cols(&[("epoch", I), ("rank", I), ("count", I), ("identity", F), ("replicator", I), ("genome", S), ("minimal", S)]))?,
-            registry: vec![],
+            registry: Registry::default(),
             tb_start: None,
             last_interface: None,
             summary: Summary::default(),
@@ -376,9 +376,8 @@ impl Recorder {
         if due(self.cfg.census_every.max(1)) {
             let cl = census(st, p, &mut self.registry, e, 20_000);
             s.species = cl.len();
-            s.species_total = self.registry.len();
+            s.species_total = self.registry.total as usize;
             for c in &cl {
-                let sp = &self.registry[c.species as usize];
                 self.species_t.push(vec![
                     V::I(e as i64),
                     V::I(c.species as i64),
@@ -389,8 +388,8 @@ impl Recorder {
                     V::F(c.extent),
                     V::F(c.mean_len),
                     V::I(c.hand as i64),
-                    V::I(sp.first_seen as i64),
-                    V::S(isa::to_hex(&sp.representative)),
+                    V::I(c.first_seen as i64),
+                    V::S(isa::to_hex(&c.representative)),
                 ])?;
             }
             self.series("species", e, s.species as f64);

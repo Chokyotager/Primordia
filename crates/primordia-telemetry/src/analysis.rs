@@ -178,9 +178,67 @@ pub struct Species {
     pub last_seen: u64,
 }
 
+/// Species seen in recent censuses, with a banded MinHash index so a
+/// lookup costs a few hash probes instead of a scan of every species ever seen.
+#[derive(Default)]
+pub struct Registry {
+    species: Vec<Species>,
+    index: HashMap<(u8, [u32; ROWS]), Vec<usize>>,
+    /// number of species ever registered (also the next id)
+    pub total: u64,
+    censuses: u64,
+}
+
+impl Registry {
+    fn band(sig: &[u32; NHASH], b: usize) -> (u8, [u32; ROWS]) {
+        let mut k = [0u32; ROWS];
+        k.copy_from_slice(&sig[b * ROWS..(b + 1) * ROWS]);
+        (b as u8, k)
+    }
+    /// Best match with estimated Jaccard >= 0.8 among species sharing a band.
+    fn find(&self, sig: &[u32; NHASH]) -> Option<usize> {
+        let mut best: Option<(usize, f64)> = None;
+        for b in 0..BANDS {
+            if let Some(v) = self.index.get(&Self::band(sig, b)) {
+                for &i in v {
+                    let j = sig_jaccard(&self.species[i].sig, sig);
+                    if j >= 0.8 && best.map(|x| j > x.1).unwrap_or(true) {
+                        best = Some((i, j));
+                    }
+                }
+            }
+        }
+        best.map(|x| x.0)
+    }
+    fn insert(&mut self, s: Species) -> usize {
+        let i = self.species.len();
+        for b in 0..BANDS {
+            self.index.entry(Self::band(&s.sig, b)).or_default().push(i);
+        }
+        self.species.push(s);
+        i
+    }
+    /// Forget species not seen for `keep` censuses (bounds memory and time).
+    fn prune(&mut self, min_last_seen: u64) {
+        if self.species.iter().all(|s| s.last_seen >= min_last_seen) {
+            return;
+        }
+        let old = std::mem::take(&mut self.species);
+        self.index.clear();
+        for s in old.into_iter().filter(|s| s.last_seen >= min_last_seen) {
+            self.insert(s);
+        }
+    }
+    pub fn live(&self) -> usize {
+        self.species.len()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Cluster {
     pub species: u64,
+    pub first_seen: u64,
+    pub representative: Vec<u8>,
     pub abundance: usize,
     pub centroid: [f64; 3],
     pub extent: f64,
@@ -191,7 +249,8 @@ pub struct Cluster {
 
 /// Cluster genomes (Jaccard >= 0.8 over byte 4-grams) and match the clusters
 /// against the species registry.
-pub fn census(st: &State, p: &Params, registry: &mut Vec<Species>, epoch: u64, max_cells: usize) -> Vec<Cluster> {
+pub fn census(st: &State, p: &Params, registry: &mut Registry, epoch: u64, max_cells: usize) -> Vec<Cluster> {
+    registry.censuses += 1;
     let occ: Vec<usize> = (0..st.n).filter(|&c| st.occupied(c) && st.len(c) > 0).collect();
     let step = (occ.len() as f64 / max_cells as f64).max(1.0);
     let mut cells = vec![];
@@ -278,21 +337,36 @@ pub fn census(st: &State, p: &Params, registry: &mut Vec<Species>, epoch: u64, m
             / k)
             .sqrt();
         let rep_sig = sigs[root];
-        let found = registry.iter_mut().filter(|s| sig_jaccard(&s.sig, &rep_sig) >= 0.8).max_by(|a, b| sig_jaccard(&a.sig, &rep_sig).partial_cmp(&sig_jaccard(&b.sig, &rep_sig)).unwrap());
-        let (id, new) = match found {
-            Some(s) => {
-                s.last_seen = epoch;
-                (s.id, false)
+        let (idx, new) = match registry.find(&rep_sig) {
+            Some(i) => {
+                registry.species[i].last_seen = epoch;
+                (i, false)
             }
             None => {
-                let id = registry.len() as u64;
-                registry.push(Species { id, sig: rep_sig, representative: gens[root].0.to_vec(), first_seen: epoch, last_seen: epoch });
-                (id, true)
+                let id = registry.total;
+                registry.total += 1;
+                (registry.insert(Species { id, sig: rep_sig, representative: gens[root].0.to_vec(), first_seen: epoch, last_seen: epoch }), true)
             }
         };
-        out.push(Cluster { species: id, abundance, centroid: cen, extent: ext, mean_len: len / k, hand: (nl - nd).signum() as i32, new });
+        let sp = &registry.species[idx];
+        out.push(Cluster {
+            species: sp.id,
+            first_seen: sp.first_seen,
+            representative: sp.representative.clone(),
+            abundance,
+            centroid: cen,
+            extent: ext,
+            mean_len: len / k,
+            hand: (nl - nd).signum() as i32,
+            new,
+        });
     }
     out.sort_by(|a, b| b.abundance.cmp(&a.abundance));
+    // keep species seen in the last 5 censuses (indices are rebuilt, ids stay)
+    if registry.censuses % 5 == 0 {
+        let horizon = epoch.saturating_sub(5 * (epoch / registry.censuses.max(1)).max(1));
+        registry.prune(horizon);
+    }
     out
 }
 
