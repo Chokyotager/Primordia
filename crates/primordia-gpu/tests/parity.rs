@@ -61,17 +61,23 @@ fn parity_mode(dims: u32, epochs: u32, paper: bool, resident: bool) {
     } else {
         cfg(dims)
     };
+    check(c, epochs, !paper, resident);
+}
+
+/// Step CPU and GPU side by side and require identical state every epoch.
+fn check(c: Config, epochs: u32, seeded: bool, resident: bool) -> Sim {
+    let dims = c.world.dims;
     let p = Params::new(&c);
     let gpu = match GpuExec::with_mode(&p, resident) {
         Ok(g) => g,
         Err(e) => {
             eprintln!("skipping GPU parity: {e:#}");
-            return;
+            return Sim::new(c, Box::new(CpuExec)).unwrap();
         }
     };
     let mut a = Sim::new(c.clone(), Box::new(CpuExec)).unwrap();
     let mut b = Sim::new(c.clone(), Box::new(gpu)).unwrap();
-    if !paper {
+    if seeded {
         seed(&mut a);
         seed(&mut b);
     }
@@ -99,6 +105,33 @@ fn parity_mode(dims: u32, epochs: u32, paper: bool, resident: bool) {
     }
     let occ = (0..a.st.n).filter(|&c| a.st.occupied(c)).count();
     eprintln!("dims {dims} resident {resident}: {epochs} epochs identical, {occ} occupied, hash {:016x}", a.st.hash());
+    a
+}
+
+/// Old-age death and moonlight: identical on both backends, nobody outlives
+/// max_age, and nights are lit at the moon level.
+#[test]
+fn t4_ageing_and_moonlight() {
+    let mut c = cfg(2);
+    c.individual.max_age = 50;
+    c.energy.sun.moon = 0.15;
+    c.validate().unwrap();
+    let p = Params::new(&c);
+    let night = primordia_core::phases::row_lights(&p, 30); // day_period 40: epoch 30 is mid-night
+    assert!(night.iter().all(|&r| r > 0), "moonlit night has light");
+    let mut dark = c.clone();
+    dark.energy.sun.moon = 0.0;
+    assert!(primordia_core::phases::row_lights(&Params::new(&dark), 30).iter().all(|&r| r == 0));
+    for resident in [false, true] {
+        // 70 epochs: the founding cohort (born at 0) has just reached max_age.
+        let a = check(c.clone(), 70, true, resident);
+        let st = &a.st;
+        let ages: Vec<u32> = (0..st.n).filter(|&i| st.occupied(i)).map(|i| (st.epoch as u32) - st.h(i, primordia_core::params::H_BIRTH)).collect();
+        assert!(!ages.is_empty(), "population survived");
+        // checked before the epoch advances, so a cell is last seen at age max_age
+        assert!(ages.iter().all(|&g| g <= 50), "oldest cell {}", ages.iter().max().unwrap());
+        eprintln!("ageing: {} alive, oldest {}", ages.len(), ages.iter().max().unwrap());
+    }
 }
 
 #[test]
@@ -152,6 +185,8 @@ fn t4_resident_fuzz() {
         c.shielding.granularity = if rnd() % 2 == 0 { primordia_core::config::Granularity::Byte } else { primordia_core::config::Granularity::Slice };
         c.bonds.break_rate = 1e-2;
         c.individual.starve_after = if rnd() % 2 == 0 { 20 } else { 0 };
+        c.individual.max_age = if rnd() % 2 == 0 { 30 } else { 0 };
+        c.energy.sun.moon = if rnd() % 2 == 0 { 0.1 } else { 0.0 };
         c.energy.upkeep.base = 4.0;
         if c.validate().is_err() {
             continue;

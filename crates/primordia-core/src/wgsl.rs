@@ -319,6 +319,7 @@ pub mod qi {
     pub const ARR_BOND: usize = 52;
     pub const POIS_OFF: usize = 53;
     pub const STARVE: usize = 54;
+    pub const MAX_AGE: usize = 55;
     pub const MASS: usize = 56; // 8 words
     pub const RX: usize = 64; // reactions, RX_STRIDE words each
     pub const RX_STRIDE: usize = 10;
@@ -427,6 +428,7 @@ pub fn phys_words(p: &Params) -> Vec<u32> {
     w[qi::BOND_BREAK] = p.bond_break_q32;
     w[qi::DEAD_AFTER] = p.dead_after;
     w[qi::STARVE] = p.starve_after;
+    w[qi::MAX_AGE] = p.max_age;
     w[qi::VOTE_Q16] = p.vote_q16 as u32;
     w[qi::MAX_BODY] = p.max_body;
     w[qi::VENT_RATE] = p.vent_cfg.rate;
@@ -512,6 +514,7 @@ pub fn phys_constants() -> String {
         ("Q_BOND_BREAK", qi::BOND_BREAK),
         ("Q_DEAD_AFTER", qi::DEAD_AFTER),
         ("Q_STARVE", qi::STARVE),
+        ("Q_MAX_AGE", qi::MAX_AGE),
         ("Q_VOTE_Q16", qi::VOTE_Q16),
         ("Q_MAX_BODY", qi::MAX_BODY),
         ("Q_VENT_RATE", qi::VENT_RATE),

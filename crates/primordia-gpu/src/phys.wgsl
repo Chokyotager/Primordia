@@ -1167,10 +1167,13 @@ fn dead_cell(c: u32) {
         }
     }
     let z = H(c, H_ZERO);
-    if (allzero) {
-        if (z < Q[Q_DEAD_AFTER]) { return; }
-    } else if (Q[Q_STARVE] == 0u || z < Q[Q_STARVE]) {
-        return;
+    let old = Q[Q_MAX_AGE] > 0u && Q[Q_EPOCH] - H(c, H_BIRTH) >= Q[Q_MAX_AGE];
+    if (!old) {
+        if (allzero) {
+            if (z < Q[Q_DEAD_AFTER]) { return; }
+        } else if (Q[Q_STARVE] == 0u || z < Q[Q_STARVE]) {
+            return;
+        }
     }
     let pb = 2u + 2u * Q[Q_K];
     for (var i = 0u; i < len; i = i + 1u) {

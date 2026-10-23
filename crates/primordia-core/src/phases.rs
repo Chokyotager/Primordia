@@ -61,7 +61,7 @@ fn cycle_factor(p: &Params, epoch: u64) -> f64 {
     let mut f = 1.0;
     if p.day_period > 0 {
         let s = det_sin(TWO_PI * (epoch % p.day_period) as f64 / p.day_period as f64);
-        f = if s > 0.0 { s } else { 0.0 };
+        f = if s > p.moon { s } else { p.moon };
     }
     if p.season_period > 0 {
         f *= 1.0 + p.season_amp * det_sin(TWO_PI * (epoch % p.season_period) as f64 / p.season_period as f64);
@@ -1089,8 +1089,12 @@ pub fn mutate_decay(st: &mut State, p: &Params, map: Option<&Vec<u32>>) {
 }
 
 /// The cell's dying counter has reached its limit: `dead_after` for an
-/// all-empty tape, otherwise `starve_after` (if starvation is on).
+/// all-empty tape, otherwise `starve_after` (if starvation is on); or it is
+/// older than `max_age`.
 pub fn dying(st: &State, p: &Params, c: usize) -> bool {
+    if p.max_age > 0 && (st.epoch as u32).wrapping_sub(st.h(c, H_BIRTH)) >= p.max_age {
+        return true;
+    }
     let z = st.h(c, H_ZERO);
     if st.tape(c).iter().all(|&b| b == 0) {
         z >= p.dead_after

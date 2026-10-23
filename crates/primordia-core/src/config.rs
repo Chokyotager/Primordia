@@ -65,6 +65,8 @@ pub struct IndividualCfg {
     /// A cell that stays dormant (out of energy) for this many epochs dies;
     /// 0 = never (dormant cells only die once their tape has decayed to zeros).
     pub starve_after: u32,
+    /// A cell dies of old age this many epochs after its birth; 0 = never.
+    pub max_age: u32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -95,6 +97,9 @@ pub struct SunCfg {
     pub season_amplitude: f64,
     /// Heat (0.01 K) per unit of light per epoch.
     pub heat: f64,
+    /// Moonlight: the day/night cycle never falls below this fraction of
+    /// full sun (0 = dark nights).
+    pub moon: f64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -391,6 +396,7 @@ impl Default for IndividualCfg {
             interaction: Interaction::Hybrid,
             dead_after: 64,
             starve_after: 0,
+            max_age: 0,
         }
     }
 }
@@ -410,6 +416,7 @@ impl Default for SunCfg {
             season_period: 0,
             season_amplitude: 0.0,
             heat: 0.02,
+            moon: 0.0,
         }
     }
 }
@@ -785,6 +792,7 @@ impl Config {
         let ind = &self.individual;
         ensure!(ind.l_max >= 1 && ind.l_max <= 256 && ind.l_max % 4 == 0, "l_max must be 4..=256 and a multiple of 4");
         ensure!(ind.l_init <= ind.l_max, "l_init > l_max");
+        ensure!((0.0..=1.0).contains(&self.energy.sun.moon), "energy.sun.moon must be in 0..=1");
         ensure!(ind.step_budget <= 65535, "step_budget too large");
         let faces = self.faces().max(1) as f64;
         for (name, k) in [

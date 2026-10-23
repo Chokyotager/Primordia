@@ -67,6 +67,7 @@ pub struct Params {
     pub random_facing: bool,
     pub dead_after: u32,
     pub starve_after: u32,
+    pub max_age: u32,
 
     pub energy_on: bool,
     pub chem_on: bool,
@@ -113,6 +114,7 @@ pub struct Params {
     pub day_period: u64,
     pub season_period: u64,
     pub season_amp: f64,
+    pub moon: f64,
     pub vents_on: bool,
     pub chem_only: bool,
 
@@ -246,6 +248,7 @@ impl Params {
             random_facing: c.individual.random_initial_facing,
             dead_after: c.individual.dead_after,
             starve_after: if energy_on { c.individual.starve_after } else { 0 },
+            max_age: c.individual.max_age,
             energy_on,
             chem_on: c.chemistry.enabled,
             matter_on: c.matter.enabled && !pair_concat,
@@ -288,6 +291,7 @@ impl Params {
             day_period: e.sun.day_period,
             season_period: e.sun.season_period,
             season_amp: e.sun.season_amplitude,
+            moon: e.sun.moon,
             vents_on: e.vents.enabled,
             chem_only: e.mode == EnergyMode::ChemicalOnly,
             reactions,
