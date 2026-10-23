@@ -135,6 +135,7 @@ impl Observer {
 fn run(rx: Receiver<Msg>, cfg: Config, p: Params, mut rec: Recorder, mut sink: Option<Box<dyn Sink>>, feed: Option<Arc<web::Feed>>, mut view: ViewSettings, shared: Arc<Mutex<Shared>>, idle: Arc<AtomicBool>, render: bool) -> Summary {
     let mut chron = Chronicler::new();
     let mut ctx = render::RenderCtx::default();
+    let mut last_series = Instant::now() - Duration::from_secs(60);
     let note = |shared: &Arc<Mutex<Shared>>, icon: &'static str, text: String, epoch: u64| {
         let mut s = shared.lock().unwrap();
         s.chronicle.push(Note { epoch, icon, text });
@@ -197,8 +198,12 @@ fn run(rx: Receiver<Msg>, cfg: Config, p: Params, mut rec: Recorder, mut sink: O
                 if w.web {
                     if let Some(f) = &feed {
                         let chronicle: Vec<Note> = shared.lock().unwrap().chronicle.iter().rev().take(30).cloned().collect();
-                        let (m, b) = web::payload_parts(&st, &p, &backend, &rec.summary, &rec.bands, eps, sun, &chronicle, &infos, &cols, &of);
+                        let (m, b) = web::payload_parts(&st, &p, &backend, &rec.summary, &rec.bands, eps, sun, &chronicle, &infos, &cols, &of, &rec.last_clusters);
                         f.set(m, b);
+                        if last_series.elapsed() >= Duration::from_secs(5) {
+                            f.set_series(&rec.bands, st.epoch);
+                            last_series = Instant::now();
+                        }
                     }
                 }
                 if w.render && render {

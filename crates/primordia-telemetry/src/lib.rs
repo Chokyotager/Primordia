@@ -2,6 +2,7 @@
 //! ecology, species and lineage, streamed to Parquet in the run directory.
 
 pub mod analysis;
+pub mod clusters;
 pub mod table;
 
 use analysis::*;
@@ -36,6 +37,20 @@ pub struct Summary {
     pub max_body: usize,
     pub organisms: usize,
     pub ledger_violations: u64,
+    /// Shares of living cells (0..1): asleep, dormant (zero energy), carrying
+    /// SLEEP in their program, with at least one bond, older than one day.
+    pub asleep: f64,
+    pub dormant: f64,
+    pub sleep_carriers: f64,
+    pub bonded: f64,
+    pub older_than_day: f64,
+    pub mean_age: f64,
+    /// Population at the last sunrise / the sunset before it.
+    pub night_survival: f64,
+    pub births_last_day: u64,
+    /// Longest run of nights survived by any tracked body / kin cluster.
+    pub body_nights: u32,
+    pub kin_nights: u32,
     pub energy_residual: i64,
     pub matter_residual: [i64; 3],
     pub atom_residual: i64,
@@ -63,7 +78,21 @@ pub struct Recorder {
     pub last_domains: Vec<i8>,
     pub last_assay: Vec<AssayResult>,
     pub max_series: usize,
+    life: Table,
+    days: Table,
+    clusters_t: Table,
+    tracker: clusters::Tracker,
+    /// Longest-lived clusters at the last cluster sample (both kinds).
+    pub last_clusters: Vec<clusters::Cluster>,
+    pop_sunset: Option<u64>,
+    pop_sunrise: Option<u64>,
+    births_day: u64,
 }
+
+/// Behaviour instructions whose frequency is logged as a live series.
+pub const TRACKED_OPS: [u8; 23] = [
+    0x12, 0x61, 0x62, 0x6e, 0x64, 0x63, 0x60, 0x69, 0x66, 0x67, 0x68, 0x1d, 0x1e, 0x6b, 0x65, 0x2c, 0x2d, 0x30, 0x31, 0x32, 0x33, 0x6f, 0x0d,
+];
 
 /// A bucket of consecutive samples of one metric.
 #[derive(Clone, Copy, Debug)]
@@ -164,6 +193,59 @@ impl Recorder {
             last_domains: vec![],
             last_assay: vec![],
             max_series: 20_000,
+            life: Table::new(
+                dir,
+                "life",
+                &cols(&[
+                    ("epoch", I),
+                    ("sunlight", F),
+                    ("asleep", F),
+                    ("dormant", F),
+                    ("sleep_carriers", F),
+                    ("bonded", F),
+                    ("mean_age", F),
+                    ("older_1d", F),
+                    ("older_2d", F),
+                ]),
+            )?,
+            days: Table::new(
+                dir,
+                "days",
+                &cols(&[
+                    ("epoch", I),
+                    ("day", I),
+                    ("pop_sunset", I),
+                    ("pop_sunrise", I),
+                    ("night_survival", F),
+                    ("births", I),
+                    ("deaths", I),
+                    ("asleep_dawn", F),
+                    ("dormant_dawn", F),
+                    ("largest_body_dawn", I),
+                ]),
+            )?,
+            clusters_t: Table::new(
+                dir,
+                "clusters",
+                &cols(&[
+                    ("epoch", I),
+                    ("kind", S),
+                    ("clusters", I),
+                    ("largest", I),
+                    ("linked", I),
+                    ("nights_1", I),
+                    ("nights_2", I),
+                    ("nights_3", I),
+                    ("max_nights", I),
+                    ("oldest_age", I),
+                    ("cells_surviving", F),
+                ]),
+            )?,
+            tracker: clusters::Tracker::default(),
+            last_clusters: vec![],
+            pop_sunset: None,
+            pop_sunrise: None,
+            births_day: 0,
         })
     }
 
@@ -206,6 +288,7 @@ impl Recorder {
     }
 
     pub fn record_births(&mut self, births: &[primordia_core::world::Birth]) -> Result<()> {
+        self.births_day += births.len() as u64;
         for b in births {
             self.lineage.push(vec![V::I(b[0] as i64), V::I(b[1] as i64), V::I(b[2] as i64), V::I(b[3] as i64), V::I(b[4] as i64), V::I(b[5] as i64)])?;
         }
@@ -235,6 +318,8 @@ impl Recorder {
             let mut occ = 0u64;
             let mut halted = 0u64;
             let mut sleeping = 0u64;
+            let (mut carriers, mut bonded, mut age_sum, mut old1, mut old2) = (0u64, 0u64, 0u64, 0u64, 0u64);
+            let day = p.day_period.max(1) as u32;
             let mut len = 0u64;
             let mut esum = 0u64;
             let (mut fsum, mut tsum) = (0u64, 0u64);
@@ -252,8 +337,49 @@ impl Recorder {
                     if h[H_SLEEP] > 0 {
                         sleeping += 1;
                     }
+                    if st.tape(c).contains(&isa::op::SLEEP) {
+                        carriers += 1;
+                    }
+                    if h[H_FLAGS] & BOND_MASK != 0 {
+                        bonded += 1;
+                    }
+                    let age = (e as u32).wrapping_sub(h[H_BIRTH]);
+                    age_sum += age as u64;
+                    old1 += (age > day) as u64;
+                    old2 += (age > 2 * day) as u64;
                 }
             }
+            let share = |x: u64| if occ > 0 { x as f64 / occ as f64 } else { 0.0 };
+            let sunlight = if p.sun_on && p.sun_i0_q16 > 0 {
+                let rows = phases::row_lights(p, e);
+                rows.iter().map(|&r| r as f64).sum::<f64>() / rows.len().max(1) as f64 / p.sun_i0_q16 as f64
+            } else {
+                0.0
+            };
+            s.asleep = share(sleeping);
+            s.dormant = share(halted);
+            s.sleep_carriers = share(carriers);
+            s.bonded = share(bonded);
+            s.older_than_day = share(old1);
+            s.mean_age = if occ > 0 { age_sum as f64 / occ as f64 } else { 0.0 };
+            self.life.push(vec![
+                V::I(e as i64),
+                V::F(sunlight),
+                V::F(s.asleep),
+                V::F(s.dormant),
+                V::F(s.sleep_carriers),
+                V::F(s.bonded),
+                V::F(s.mean_age),
+                V::F(s.older_than_day),
+                V::F(share(old2)),
+            ])?;
+            self.series("sunlight", e, sunlight);
+            self.series("asleep %", e, 100.0 * s.asleep);
+            self.series("dormant %", e, 100.0 * s.dormant);
+            self.series("SLEEP carriers %", e, 100.0 * s.sleep_carriers);
+            self.series("bonded cells %", e, 100.0 * s.bonded);
+            self.series("mean age", e, s.mean_age);
+            self.series("older than 1 day %", e, 100.0 * s.older_than_day);
             s.occupied = occ;
             s.halted = halted;
             s.mean_len = if occ > 0 { len as f64 / occ as f64 } else { 0.0 };
@@ -286,6 +412,15 @@ impl Recorder {
                         self.opcodes.push(vec![V::I(e as i64), V::I(b as i64), V::I(cnt as i64)])?;
                     }
                 }
+                // frequency relative to a uniformly random byte (1 = chance)
+                let total = hist.iter().sum::<u64>().max(1) as f64;
+                for b in TRACKED_OPS {
+                    self.series(&format!("op {}", isa::mnemonic(b)), e, hist[b as usize] as f64 / total * 256.0);
+                }
+                self.series("bodies", e, nb as f64);
+                self.series("largest body", e, max_b as f64);
+                self.series("mean body size", e, mean_b);
+                self.series("organisms", e, orgs as f64);
             }
             let (mut h0, mut bpb, mut hoe) = (f64::NAN, f64::NAN, f64::NAN);
             if due(self.cfg.entropy_every.max(1)) {
@@ -330,6 +465,75 @@ impl Recorder {
             self.series("mean T (K)", e, tsum as f64 / n / 100.0);
             self.series("mean F", e, fsum as f64 / n);
             self.series("mean E", e, if occ > 0 { esum as f64 / occ as f64 } else { 0.0 });
+            // day/night bookkeeping: sunset at half period, sunrise at 0
+            let dp = p.day_period;
+            if dp > 0 && e % dp == dp / 2 {
+                self.pop_sunset = Some(occ);
+                self.series("population at sunset", e, occ as f64);
+            }
+            if dp > 0 && e % dp == 0 && e > 0 {
+                let surv = self.pop_sunset.map(|ps| if ps > 0 { occ as f64 / ps as f64 } else { 0.0 });
+                let births = std::mem::take(&mut self.births_day);
+                let deaths = self.pop_sunrise.map(|p0| (births as i64 - (occ as i64 - p0 as i64)).max(0));
+                if let Some(v) = surv {
+                    s.night_survival = v;
+                    self.series("night survival %", e, 100.0 * v);
+                }
+                s.births_last_day = births;
+                self.series("population at sunrise", e, occ as f64);
+                self.series("births per day", e, births as f64);
+                if let Some(d) = deaths {
+                    self.series("deaths per day", e, d as f64);
+                }
+                self.series("asleep at dawn %", e, 100.0 * s.asleep);
+                self.series("dormant at dawn %", e, 100.0 * s.dormant);
+                self.series("largest body at dawn", e, max_b as f64);
+                self.days.push(vec![
+                    V::I(e as i64),
+                    V::I((e / dp) as i64),
+                    V::I(self.pop_sunset.map(|x| x as i64).unwrap_or(-1)),
+                    V::I(occ as i64),
+                    V::F(surv.unwrap_or(f64::NAN)),
+                    V::I(births as i64),
+                    V::I(deaths.unwrap_or(-1)),
+                    V::F(s.asleep),
+                    V::F(s.dormant),
+                    V::I(max_b),
+                ])?;
+                self.pop_sunrise = Some(occ);
+            }
+        }
+        if due(self.cfg.cluster_every) {
+            let (stats, all) = self.tracker.observe(st, p);
+            for (kind, k) in &stats {
+                let name = match kind {
+                    clusters::Kind::Body => "bodies",
+                    clusters::Kind::Kin => "kin clusters",
+                };
+                self.clusters_t.push(vec![
+                    V::I(e as i64),
+                    V::S(name.into()),
+                    V::I(k.clusters as i64),
+                    V::I(k.largest as i64),
+                    V::I(k.linked as i64),
+                    V::I(k.nights_1 as i64),
+                    V::I(k.nights_2 as i64),
+                    V::I(k.nights_3 as i64),
+                    V::I(k.max_nights as i64),
+                    V::I(k.oldest_age as i64),
+                    V::F(k.cells_surviving),
+                ])?;
+                self.series(&format!("{name} (>=50 cells)"), e, k.clusters as f64);
+                self.series(&format!("{name} surviving >=1 night"), e, k.nights_1 as f64);
+                self.series(&format!("{name} surviving >=3 nights"), e, k.nights_3 as f64);
+                self.series(&format!("{name}: most nights survived"), e, k.max_nights as f64);
+                self.series(&format!("cells in night-surviving {name} %"), e, 100.0 * k.cells_surviving);
+                match kind {
+                    clusters::Kind::Body => s.body_nights = k.max_nights,
+                    clusters::Kind::Kin => s.kin_nights = k.max_nights,
+                }
+            }
+            self.last_clusters = all.into_iter().take(12).collect();
         }
         if due(self.cfg.chirality_every.max(1)) {
             let ch = chirality(st, p);
@@ -467,7 +671,7 @@ impl Recorder {
 
     pub fn finish(&mut self) -> Result<Summary> {
         self.save_history()?;
-        for t in [&mut self.metrics, &mut self.chir, &mut self.species_t, &mut self.lineage, &mut self.opcodes, &mut self.ecology, &mut self.assay] {
+        for t in [&mut self.metrics, &mut self.chir, &mut self.species_t, &mut self.lineage, &mut self.opcodes, &mut self.ecology, &mut self.assay, &mut self.life, &mut self.days, &mut self.clusters_t] {
             t.close()?;
         }
         if let Some(d) = &self.dir {
@@ -479,7 +683,7 @@ impl Recorder {
 
 /// True when the recorder needs cell state after `epoch` epochs.
 pub fn needs_state(c: &primordia_core::config::TelemetryCfg, epoch: u64) -> bool {
-    [c.metrics_every, c.opcode_every, c.chirality_every, c.entropy_every, c.assay_every, c.census_every, c.ecology_every]
+    [c.metrics_every, c.opcode_every, c.chirality_every, c.entropy_every, c.assay_every, c.census_every, c.ecology_every, c.cluster_every]
         .iter()
         .any(|&k| k > 0 && epoch % k == 0)
 }

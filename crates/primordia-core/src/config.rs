@@ -347,6 +347,8 @@ pub struct TelemetryCfg {
     pub assay_every: u64,
     pub census_every: u64,
     pub ecology_every: u64,
+    /// Cluster persistence tracking (bodies and kin clusters across nights).
+    pub cluster_every: u64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -574,6 +576,7 @@ impl Default for TelemetryCfg {
             assay_every: 1000,
             census_every: 1000,
             ecology_every: 100,
+            cluster_every: 250,
         }
     }
 }

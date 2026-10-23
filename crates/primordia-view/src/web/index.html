@@ -67,6 +67,54 @@
   #tip { position: fixed; pointer-events: none; font-size: 12px; padding: 6px 10px; border-radius: 8px; background: rgba(12, 15, 24, 0.92);
     border: 1px solid var(--line); display: none; max-width: 300px; }
   #status { bottom: 12px; left: 50%; transform: translateX(-50%); font-size: 12px; color: var(--muted); }
+  /* charts overlay: chart chrome tokens (dark), series slots validated on --c-surface */
+  #charts { position: fixed; top: var(--top-h, 128px); left: 12px; right: 12px; bottom: 12px; display: none; flex-direction: column;
+    background: #0d1118; border: 1px solid var(--line); border-radius: 12px; pointer-events: auto; z-index: 5;
+    --c-surface: #131821; --c-ink: #f0efec; --c-ink2: #c3c2b7; --c-muted: #898781; --c-grid: #232a35; --c-axis: #383f4b;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; }
+  #charts.open { display: flex; }
+  #charts .bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  #charts .bar .sp { flex: 1; }
+  #charts .bar .lbl { color: var(--c-muted); font-size: 12px; margin-right: 2px; }
+  #charts .body { overflow-y: auto; padding: 12px 14px 20px; transition: opacity .2s; }
+  #charts .body.stale { opacity: 0.5; }
+  #charts h3 { margin: 18px 0 8px; font-size: 12px; color: var(--accent); letter-spacing: 0.1em; text-transform: uppercase; font-weight: 600; }
+  #charts h3 small { color: var(--c-muted); text-transform: none; letter-spacing: 0; font-weight: 400; margin-left: 8px; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+  .tile { background: var(--c-surface); border-radius: 10px; padding: 10px 12px; }
+  .tile .k { color: var(--c-ink2); font-size: 12px; }
+  .tile .v { color: var(--c-ink); font-size: 22px; font-weight: 600; margin-top: 2px; }
+  .tile .s { color: var(--c-muted); font-size: 11px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 8px; }
+  .grid.small { grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); }
+  .chart { background: var(--c-surface); border-radius: 10px; padding: 10px 12px 6px; min-width: 0; }
+  .chart .hd { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+  .chart .t { color: var(--c-ink); font-size: 13px; font-weight: 600; }
+  .chart .now { color: var(--c-ink); font-size: 13px; font-weight: 600; white-space: nowrap; }
+  .chart .sub { color: var(--c-muted); font-size: 11px; min-height: 15px; }
+  .chart .leg { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11px; color: var(--c-ink2); margin: 2px 0 2px; }
+  .chart .leg span { display: inline-flex; align-items: center; gap: 5px; }
+  .chart .leg i, #ctip i { display: inline-block; width: 12px; height: 2px; border-radius: 1px; }
+  .chart canvas { width: 100%; height: 130px; display: block; outline: none; }
+  .grid.small .chart canvas { height: 84px; }
+  .chart canvas:focus-visible { box-shadow: 0 0 0 2px var(--accent); border-radius: 4px; }
+  .chart .empty { color: var(--c-muted); font-size: 12px; height: 84px; display: flex; align-items: center; }
+  #ctip { position: fixed; pointer-events: none; z-index: 10; display: none; background: #0b0e14; border: 1px solid var(--line); border-radius: 8px;
+    padding: 7px 10px; font-size: 12px; color: #c3c2b7; min-width: 150px; }
+  #ctip .e { color: #898781; margin-bottom: 4px; }
+  #ctip .r { display: flex; align-items: center; gap: 7px; }
+  #ctip b { color: #f0efec; font-weight: 600; }
+  #ctip .rg { color: #898781; margin-left: auto; padding-left: 10px; }
+  table.mt { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  table.mt th { text-align: left; color: var(--c-muted); font-weight: 500; padding: 5px 8px; border-bottom: 1px solid var(--c-axis); position: sticky; top: 0; background: #0d1118; }
+  table.mt td { padding: 4px 8px; border-bottom: 1px solid var(--c-grid); color: var(--c-ink2); }
+  table.mt td.n { text-align: right; font-variant-numeric: tabular-nums; color: var(--c-ink); }
+  table.mt tr.sec td { color: var(--accent); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; padding-top: 12px; }
+  .clist { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 6px; }
+  .crow { background: var(--c-surface); border-radius: 8px; padding: 7px 10px; display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; font-size: 12px; }
+  .crow .a { color: var(--c-ink); font-weight: 600; }
+  .crow .b { color: var(--c-muted); }
+  .crow button { grid-row: span 2; align-self: center; }
   @media (max-width: 1500px) { .card.opt { display: none; } }
   @media (max-width: 1100px) { #right { display: none; } }
   @media (max-width: 760px) { #left { display: none; } }
@@ -97,6 +145,9 @@
   <div class="panel card opt"><div class="k">Handedness</div>
     <div class="meter"><div class="bar" id="hand-bar"></div><div class="mid"></div></div>
     <div class="s" id="c-hand"></div></div>
+  <div class="panel card"><div class="k">Last night</div><div class="v" id="c-surv" style="color:#9fb8ff">–</div><div class="s" id="c-surv-s">survived the night</div></div>
+  <div class="panel card"><div class="k">Asleep</div><div class="v" id="c-sleep" style="color:#c9a8ff">–</div><div class="s" id="c-sleep-s"></div></div>
+  <div class="panel card opt"><div class="k">Longest-lived</div><div class="v" id="c-old" style="color:#ffaa3c">–</div><div class="s" id="c-old-s">nights, best cluster</div></div>
   <div class="panel card"><div class="k">Sky</div><div class="v" id="c-sun">–</div><div class="s" id="c-vents"></div></div>
   <div id="camera" class="panel">
     <div class="row">
@@ -104,6 +155,7 @@
       <button id="b-3d" title="Lit 3D landscape">⛰ 3D</button>
       <button id="b-spin" title="Slowly rotate the view (3D)">⟳ Spin: off</button>
       <button id="b-tour" title="Visit the biggest colonies one after another">✈ Tour</button>
+      <button id="b-charts" title="All metrics as charts (C)">📈 Charts</button>
     </div>
     <div class="row">
       <button id="b-over">Overview</button>
@@ -137,10 +189,27 @@
     <div class="spark"><span>Complexity</span><canvas id="sp-hoe"></canvas></div>
     <div class="spark"><span>Handedness</span><canvas id="sp-ee"></canvas></div>
     <div class="spark"><span>Copiers</span><canvas id="sp-rep"></canvas></div>
+    <div class="spark"><span>Asleep %</span><canvas id="sp-sleep"></canvas></div>
+    <div class="spark"><span>Night survival</span><canvas id="sp-surv"></canvas></div>
+    <button id="b-charts2" style="margin-top:6px;width:100%">📈 All charts</button>
   </div>
 </div>
 
 <div id="status" class="hud panel">waiting for the simulation…</div>
+
+<div id="charts" role="dialog" aria-label="Charts">
+  <div class="bar">
+    <span class="lbl">Window</span>
+    <button data-w="all" class="on">Whole run</button><button data-w="200k">Last 200k</button><button data-w="50k">Last 50k</button><button data-w="10k">Last 10k</button>
+    <span class="lbl" style="margin-left:12px">View</span>
+    <button id="cv-charts" class="on">Charts</button><button id="cv-table">Table</button>
+    <span class="sp"></span>
+    <span class="lbl" id="c-upd"></span>
+    <button id="c-close" title="Close (Esc)">✕ Close</button>
+  </div>
+  <div class="body" id="c-body"></div>
+</div>
+<div id="ctip"></div>
 
 <script type="module">
 import * as THREE from 'three';
@@ -473,7 +542,15 @@ function draw2d(t) {
     mctx.lineWidth = 2; mctx.strokeStyle = rgb(sc.color); mctx.beginPath(); mctx.arc(px, py, r + 5, 0, Math.PI * 2); mctx.stroke();
     if (follow && !fly2 && !drag) { view.cx += (sc.center[0] + 0.5 - view.cx) * 0.05; view.cy += (sc.center[1] + 0.5 - view.cy) * 0.05; }
   }
+  // marker for a cluster picked in the charts panel
+  if (pin && performance.now() < pin.until) {
+    const [px, py] = toScreen(pin.x + 0.5, pin.y + 0.5), r = Math.max(16, pin.r * view.s) + 4 * Math.sin(t * 4);
+    mctx.lineWidth = 3; mctx.strokeStyle = '#fff'; mctx.beginPath(); mctx.arc(px, py, r, 0, Math.PI * 2); mctx.stroke();
+    mctx.lineWidth = 1; mctx.strokeStyle = 'rgba(255,255,255,0.6)'; mctx.beginPath(); mctx.arc(px, py, r + 7, 0, Math.PI * 2); mctx.stroke();
+    need2d = true;
+  }
 }
+let pin = null;
 map.addEventListener('wheel', e => {
   e.preventDefault(); if (!view) return; fly2 = null; follow = false;
   const [cx, cy] = toCell(e.clientX, e.clientY), f = Math.exp(-e.deltaY * 0.0015);
@@ -549,7 +626,7 @@ function renderAtlas() {
 const tags = new Map();
 let panelRects = [], lastLab = 0;
 function measurePanels() {
-  panelRects = ['top', 'left', 'right', 'status'].map(id => $(id)).filter(e => e && e.offsetParent !== null).map(e => e.getBoundingClientRect());
+  panelRects = ['top', 'left', 'right', 'status', 'charts'].map(id => $(id)).filter(e => e && e.offsetParent !== null).map(e => e.getBoundingClientRect());
   for (const el of document.querySelectorAll('#top > .panel')) panelRects.push(el.getBoundingClientRect());
   const top = $('top').getBoundingClientRect();
   document.documentElement.style.setProperty('--top-h', `${Math.ceil(top.bottom + 8)}px`);
@@ -681,6 +758,14 @@ function hud(m) {
   bar.style.left = ee >= 0 ? '50%' : `${50 + ee * 50}%`; bar.style.width = `${Math.abs(ee) * 50}%`; bar.style.background = ee >= 0 ? '#e65050' : '#5078f0';
   $('c-hand').textContent = `${ee >= 0 ? '+' : ''}${ee.toFixed(2)} · ${Math.abs(ee) < 0.1 ? 'balanced' : ee > 0 ? 'left (L)' : 'right (D)'}`;
   $('c-sun').textContent = m.sun > 0.05 ? `☀ ${Math.round(m.sun * 100)}%` : '🌙 night';
+  $('c-surv').textContent = s.night_survival > 0 ? `${(s.night_survival * 100).toFixed(0)}%` : '–';
+  $('c-surv-s').textContent = s.births_last_day ? `of cells · ${s.births_last_day.toLocaleString()} born that day` : 'of cells survived';
+  $('c-sleep').textContent = `${(s.asleep * 100).toFixed(1)}%`;
+  $('c-sleep-s').textContent = `${(s.sleep_carriers * 100).toFixed(1)}% carry SLEEP · ${(s.dormant * 100).toFixed(0)}% dormant`;
+  const oldest = Math.max(s.body_nights || 0, s.kin_nights || 0);
+  $('c-old').textContent = `${oldest} night${oldest === 1 ? '' : 's'}`;
+  $('c-old-s').textContent = `bodies ${s.body_nights || 0} · kin clusters ${s.kin_nights || 0}`;
+  if (charts.open) chartTiles(m);
   $('c-vents').textContent = `${m.vents.length} vent${m.vents.length === 1 ? '' : 's'} active`;
   const nk = m.chronicle.length + ':' + (m.chronicle[0] ? m.chronicle[0].epoch + m.chronicle[0].text : '');
   if (nk !== notesKey) { notesKey = nk;
@@ -688,6 +773,7 @@ function hud(m) {
   }
   spark('sp-pop', m.series.population, '#78dc8c'); spark('sp-hoe', m.series.complexity, '#ffcf70');
   spark('sp-ee', m.series.handedness, '#e68a8a'); spark('sp-rep', m.series.copiers, '#6ec8ff', 0, 100);
+  spark('sp-sleep', m.series.asleep, '#c9a8ff'); spark('sp-surv', m.series.survival, '#9fb8ff', 0, 100);
   $('status').textContent = `observing a live run (read-only) · ${m.backend}`;
   renderAtlas();
 }
@@ -699,6 +785,291 @@ function sky(sun) {
   sunLight.intensity = 1.3 + 1.0 * sun; hemi.intensity = 1.6 + 0.3 * sun;
   sunLight.position.set(WORLD_W * 0.6, 40 + 160 * sun, WORLD_W * 0.3);
 }
+
+// ---------------------------------------------------------------- charts
+// Small multiples of every logged metric. Each point is [epoch, mean, min, max]
+// over a slice of history: the line is the mean, the faint wash the min..max
+// range (mostly the day/night swing). One measure per chart, never two y-scales.
+const SLOT = ['--s1', '--s2', '--s3'];
+const both = (a, b) => [a, b];
+const SECTIONS = [
+  { title: 'Population & turnover', charts: [
+    { t: 'Living cells', s: ['population'] },
+    { t: 'Population at sunset and sunrise', s: ['population at sunset', 'population at sunrise'], n: ['sunset', 'sunrise'] },
+    { t: 'Night survival', s: ['night survival %'], u: '%', sub: 'sunrise population ÷ sunset population' },
+    { t: 'Births and deaths per day', s: ['births per day', 'deaths per day'], n: ['births', 'deaths'] },
+  ] },
+  { title: 'Sleep & the night', charts: [
+    { t: 'Cell states', s: ['asleep %', 'dormant %', 'SLEEP carriers %'], n: ['asleep', 'dormant (no energy)', 'carry SLEEP'], u: '%' },
+    { t: 'At dawn', s: ['asleep at dawn %', 'dormant at dawn %'], n: ['asleep', 'dormant'], u: '%' },
+    { t: 'Cells older than one day', s: ['older than 1 day %'], u: '%' },
+    { t: 'Mean cell age', s: ['mean age'], u: ' epochs' },
+    { t: 'Sunlight', s: ['sunlight'], u: '× full sun' },
+  ] },
+  { title: 'Bodies & clusters', note: 'bodies = bonded cells; kin clusters = adjacent cells with near-identical programs', charts: [
+    { t: 'Clusters of 50+ cells', s: both('bodies (>=50 cells)', 'kin clusters (>=50 cells)'), n: ['bodies', 'kin clusters'] },
+    { t: 'Survived at least 1 night', s: both('bodies surviving >=1 night', 'kin clusters surviving >=1 night'), n: ['bodies', 'kin clusters'] },
+    { t: 'Survived at least 3 nights', s: both('bodies surviving >=3 nights', 'kin clusters surviving >=3 nights'), n: ['bodies', 'kin clusters'] },
+    { t: 'Most nights survived by one cluster', s: both('bodies: most nights survived', 'kin clusters: most nights survived'), n: ['bodies', 'kin clusters'] },
+    { t: 'Cells in night-surviving clusters', s: both('cells in night-surviving bodies %', 'cells in night-surviving kin clusters %'), n: ['bodies', 'kin clusters'], u: '%' },
+    { t: 'Largest body', s: ['largest body', 'largest body at dawn'], n: ['any time', 'at dawn'] },
+    { t: 'Bodies of any size', s: ['bodies'] },
+    { t: 'Mean body size', s: ['mean body size'], u: ' cells' },
+    { t: 'Bonded cells', s: ['bonded cells %'], u: '%' },
+    { t: 'Organism candidates', s: ['organisms'] },
+  ] },
+  { title: 'Behaviour', note: 'instruction frequency in living programs; 1× = a random byte', ops: true },
+  { title: 'Code & evolution', charts: [
+    { t: 'Complexity (high-order entropy)', s: ['high-order entropy'] },
+    { t: 'Program length', s: ['mean tape length'], u: ' bytes' },
+    { t: 'Species', s: ['species'] },
+    { t: 'Copiers among the top 100 programs', s: ['replicators (top 100)'] },
+    { t: 'Handedness of code', s: ['EE code'], sub: '+ = more L, − = more D' },
+    { t: 'Handedness of monomers', s: ['EE monomers'] },
+    { t: 'Handedness of chemicals', s: ['EE chemicals'] },
+  ] },
+  { title: 'Energy & environment', charts: [
+    { t: 'Mean stored energy per cell', s: ['mean E'] },
+    { t: 'Mean free energy per site', s: ['mean F'] },
+    { t: 'Mean temperature', s: ['mean T (K)'], u: ' K' },
+  ] },
+  { title: 'Run health', charts: [
+    { t: 'Ledger residual', s: ['ledger |residual|'], sub: 'must stay 0: energy and matter are conserved exactly' },
+    { t: 'Births in the sampled epoch', s: ['births'] },
+  ] },
+];
+const charts = { open: false, w: store.get('chartWindow', 'all'), view: 'charts', data: null, built: '', cards: [], timer: null };
+const css = v => getComputedStyle($('charts')).getPropertyValue(v).trim();
+const fmt = (v, u = '') => {
+  if (v == null || !Number.isFinite(v)) return '–';
+  const a = Math.abs(v);
+  if (Number.isInteger(v) && a < 1e4) return v + u;
+  const s = a >= 1e6 ? (v / 1e6).toFixed(a >= 1e7 ? 1 : 2) + 'M' : a >= 1e4 ? (v / 1e3).toFixed(a >= 1e5 ? 0 : 1) + 'k'
+    : a >= 100 ? v.toFixed(0) : a >= 10 ? v.toFixed(1) : a >= 1 ? v.toFixed(2) : a === 0 ? '0' : v.toPrecision(2);
+  return s + u;
+};
+const fmtE = e => e >= 1e6 ? (e / 1e6).toFixed(e >= 1e7 ? 0 : 1) + 'M' : e >= 1e3 ? (e / 1e3).toFixed(0) + 'k' : String(Math.round(e));
+function niceTicks(lo, hi, n = 3) {
+  if (!(hi > lo)) { const d = Math.abs(lo) || 1; lo -= d * 0.5; hi += d * 0.5; }
+  const raw = (hi - lo) / n, mag = Math.pow(10, Math.floor(Math.log10(raw))), f = raw / mag;
+  const step = (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * mag;
+  const t0 = Math.floor(lo / step) * step, out = [];
+  for (let v = t0; v <= hi + step * 0.5; v += step) out.push(+v.toPrecision(12));
+  return out;
+}
+function allSections() {
+  const keys = Object.keys(charts.data ? charts.data.series : {}), used = new Set();
+  const secs = SECTIONS.map(sec => {
+    if (!sec.ops) { sec.charts.forEach(c => c.s.forEach(k => used.add(k))); return sec; }
+    const ops = keys.filter(k => k.startsWith('op ')).sort();
+    ops.forEach(k => used.add(k));
+    return { ...sec, small: true, charts: ops.map(k => ({ t: k.slice(3), s: [k], u: '×', ref: 1 })) };
+  });
+  const rest = keys.filter(k => !used.has(k)).sort();
+  if (rest.length) secs.push({ title: 'Other metrics', charts: rest.map(k => ({ t: k, s: [k] })) });
+  return secs;
+}
+function openCharts(v) {
+  charts.open = v; $('charts').classList.toggle('open', v); $('b-charts').classList.toggle('on', v);
+  $('ctip').style.display = 'none';
+  if (v) { measurePanels(); if (meta) chartTiles(meta); loadSeries(); clearInterval(charts.timer); charts.timer = setInterval(loadSeries, 5000); }
+  else clearInterval(charts.timer);
+}
+async function loadSeries() {
+  $('c-body').classList.add('stale');
+  try {
+    const r = await fetch(`series.json?w=${charts.w}`, { cache: 'no-store' });
+    if (r.ok) { charts.data = await r.json(); renderCharts(); $('c-upd').textContent = `data at epoch ${charts.data.epoch.toLocaleString()}`; }
+  } catch (e) { $('c-upd').textContent = 'connection lost — retrying…'; }
+  $('c-body').classList.remove('stale');
+}
+function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+function renderCharts() {
+  const body = $('c-body'), secs = allSections();
+  const key = charts.view + '|' + secs.map(s => s.title + s.charts.length).join();
+  if (key !== charts.built) {
+    charts.built = key; charts.cards = []; body.textContent = '';
+    body.append(el('div', 'tiles')); body.firstChild.id = 'c-tiles';
+    const ch = el('h3', null, 'Longest-lived clusters'); ch.append(el('small', null, 'click to fly there on the map')); body.append(ch);
+    const cl = el('div', 'clist'); cl.id = 'c-clusters'; body.append(cl);
+    if (charts.view === 'table') {
+      const t = el('table', 'mt'); t.id = 'c-table'; body.append(el('h3', null, 'All metrics in this window'), t);
+    } else {
+      for (const sec of secs) {
+        const h = el('h3', null, sec.title); if (sec.note) h.append(el('small', null, sec.note)); body.append(h);
+        const g = el('div', 'grid' + (sec.small ? ' small' : '')); body.append(g);
+        for (const c of sec.charts) g.append(makeCard(c));
+      }
+    }
+    if (meta) chartTiles(meta);
+  }
+  if (charts.view === 'table') renderTable(secs); else charts.cards.forEach(drawCard);
+}
+function makeCard(c) {
+  const card = el('div', 'chart'), hd = el('div', 'hd');
+  hd.append(el('div', 't', c.t), el('div', 'now')); card.append(hd);
+  card.append(el('div', 'sub', c.sub || ''));
+  if (c.s.length > 1) {
+    const lg = el('div', 'leg');
+    c.s.forEach((k, i) => { const sp = el('span'), key = el('i'); key.style.background = `var(${SLOT[i]})`; sp.append(key, document.createTextNode((c.n || c.s)[i])); lg.append(sp); });
+    card.append(lg);
+  }
+  const cv = el('canvas'); cv.tabIndex = 0; cv.setAttribute('role', 'img'); cv.setAttribute('aria-label', c.t);
+  card.append(cv);
+  const st = { c, card, cv, hover: null };
+  cv.addEventListener('pointermove', e => { const r = cv.getBoundingClientRect(); st.hover = { x: e.clientX - r.left, cx: e.clientX, cy: e.clientY }; drawCard(st); });
+  cv.addEventListener('pointerleave', () => { st.hover = null; drawCard(st); $('ctip').style.display = 'none'; });
+  cv.addEventListener('focus', () => { const r = cv.getBoundingClientRect(); st.hover = { x: r.width - 1, cx: r.right, cy: r.top + r.height / 2 }; drawCard(st); });
+  cv.addEventListener('blur', () => { st.hover = null; drawCard(st); $('ctip').style.display = 'none'; });
+  cv.addEventListener('keydown', e => {
+    if (!st.hover || !st.geo) return;
+    const step = st.geo.w / 60, r = cv.getBoundingClientRect();
+    if (e.key === 'ArrowLeft') st.hover.x = Math.max(0, st.hover.x - step); else if (e.key === 'ArrowRight') st.hover.x = Math.min(r.width - 1, st.hover.x + step); else return;
+    e.preventDefault(); st.hover.cx = r.left + st.hover.x; drawCard(st);
+  });
+  charts.cards.push(st);
+  return card;
+}
+const nearest = (pts, e) => { let lo = 0, hi = pts.length - 1; while (hi - lo > 1) { const m = (lo + hi) >> 1; if (pts[m][0] < e) lo = m; else hi = m; } return Math.abs(pts[lo][0] - e) <= Math.abs(pts[hi][0] - e) ? lo : hi; };
+function drawCard(st) {
+  const { c, cv, card } = st, D = charts.data ? charts.data.series : {};
+  const ser = c.s.map(k => (D[k] || []).filter(p => p[1] != null));
+  const pts = ser.flat();
+  const dpr = devicePixelRatio, W = cv.clientWidth, H = cv.clientHeight;
+  if (!W) return;
+  if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }
+  const g = cv.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, W, H);
+  const now = card.querySelector('.now');
+  if (!pts.length) { now.textContent = ''; g.fillStyle = css('--c-muted'); g.font = '12px system-ui, sans-serif'; g.fillText('no data yet', 6, H / 2); st.geo = null; return; }
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  for (const p of pts) { x0 = Math.min(x0, p[0]); x1 = Math.max(x1, p[0]); y0 = Math.min(y0, p[2] ?? p[1]); y1 = Math.max(y1, p[3] ?? p[1]); }
+  if (c.ref != null) { y0 = Math.min(y0, 0); y1 = Math.max(y1, c.ref); }
+  if (y0 > 0 && y0 < (y1 - y0) * 0.6) y0 = 0;            // anchor near-zero data at 0
+  const ticks = niceTicks(y0, y1, 3); y0 = Math.min(y0, ticks[0]); y1 = Math.max(y1, ticks[ticks.length - 1]);
+  g.font = '11px system-ui, sans-serif';
+  const yl = ticks.map(v => fmt(v)), padL = Math.max(...yl.map(s => g.measureText(s).width)) + 8, padB = 16, padT = 4, padR = 6;
+  const w = W - padL - padR, h = H - padT - padB;
+  const X = e => padL + (x1 > x0 ? (e - x0) / (x1 - x0) : 0.5) * w, Y = v => padT + h - (v - y0) / (y1 - y0 || 1) * h;
+  st.geo = { w, padL, x0, x1, X };
+  // grid + y ticks (recessive hairlines)
+  g.strokeStyle = css('--c-grid'); g.lineWidth = 1; g.fillStyle = css('--c-muted'); g.textAlign = 'right'; g.textBaseline = 'middle';
+  ticks.forEach((v, i) => { const y = Math.round(Y(v)) + 0.5; g.beginPath(); g.moveTo(padL, y); g.lineTo(W - padR, y); g.stroke(); g.fillText(yl[i], padL - 5, y); });
+  if (c.ref != null) { g.strokeStyle = css('--c-axis'); const y = Math.round(Y(c.ref)) + 0.5; g.beginPath(); g.moveTo(padL, y); g.lineTo(W - padR, y); g.stroke(); }
+  // x axis labels
+  g.textBaseline = 'alphabetic'; g.fillStyle = css('--c-muted');
+  g.textAlign = 'left'; g.fillText(fmtE(x0), padL, H - 3); g.textAlign = 'right'; g.fillText(`epoch ${fmtE(x1)}`, W - padR, H - 3);
+  // range wash, then mean lines
+  ser.forEach((p, i) => {
+    if (!p.length) return;
+    const col = css(SLOT[i]);
+    if (p[0].length >= 4) {
+      g.globalAlpha = ser.length > 1 ? 0.10 : 0.16; g.fillStyle = col; g.beginPath();
+      p.forEach((q, j) => j ? g.lineTo(X(q[0]), Y(q[3])) : g.moveTo(X(q[0]), Y(q[3])));
+      for (let j = p.length - 1; j >= 0; j--) g.lineTo(X(p[j][0]), Y(p[j][2]));
+      g.closePath(); g.fill(); g.globalAlpha = 1;
+    }
+    g.strokeStyle = col; g.lineWidth = 2; g.lineJoin = 'round'; g.lineCap = 'round'; g.beginPath();
+    p.forEach((q, j) => j ? g.lineTo(X(q[0]), Y(q[1])) : g.moveTo(X(q[0]), Y(q[1])));
+    if (p.length === 1) { g.arc(X(p[0][0]), Y(p[0][1]), 2, 0, Math.PI * 2); }
+    g.stroke();
+  });
+  // latest value (text ink, not series colour)
+  const last = ser.map(p => p.length ? p[p.length - 1][1] : null);
+  now.textContent = ser.length === 1 ? fmt(last[0], c.u || '') : last.map((v, i) => fmt(v, c.u || '')).join(' · ');
+  // hover crosshair + tooltip listing every series at that epoch
+  if (st.hover) {
+    const e = x0 + Math.max(0, Math.min(1, (st.hover.x - padL) / (w || 1))) * (x1 - x0);
+    const rows = ser.map((p, i) => p.length ? { i, q: p[nearest(p, e)] } : null).filter(Boolean);
+    if (rows.length) {
+      const ex = rows[0].q[0], cx = Math.round(X(ex)) + 0.5;
+      g.strokeStyle = css('--c-ink2'); g.lineWidth = 1; g.beginPath(); g.moveTo(cx, padT); g.lineTo(cx, padT + h); g.stroke();
+      for (const r of rows) {
+        const py = Y(r.q[1]);
+        g.fillStyle = css('--c-surface'); g.beginPath(); g.arc(X(r.q[0]), py, 6, 0, Math.PI * 2); g.fill();
+        g.fillStyle = css(SLOT[r.i]); g.beginPath(); g.arc(X(r.q[0]), py, 4, 0, Math.PI * 2); g.fill();
+      }
+      const tip = $('ctip'); tip.textContent = '';
+      tip.append(el('div', 'e', `epoch ≈ ${Math.round(ex).toLocaleString()}`));
+      for (const r of rows) {
+        const row = el('div', 'r'), key = el('i'); key.style.background = css(SLOT[r.i]);
+        row.append(key, el('b', null, fmt(r.q[1], c.u || '')), document.createTextNode(' ' + (c.n || c.s)[r.i]));
+        if (r.q.length >= 4 && r.q[2] !== r.q[3]) row.append(el('span', 'rg', `${fmt(r.q[2])}–${fmt(r.q[3])}`));
+        tip.append(row);
+      }
+      tip.style.display = 'block';
+      const tx = Math.min(innerWidth - tip.offsetWidth - 8, st.hover.cx + 14), ty = Math.max(8, st.hover.cy - tip.offsetHeight - 10);
+      tip.style.left = `${tx}px`; tip.style.top = `${ty}px`;
+    }
+  }
+}
+function renderTable(secs) {
+  const t = $('c-table'), D = charts.data.series; t.textContent = '';
+  const hr = el('tr'); ['Metric', 'Latest', 'Mean', 'Min', 'Max'].forEach((h, i) => { const th = el('th', null, h); if (i) th.style.textAlign = 'right'; hr.append(th); });
+  t.append(hr);
+  for (const sec of secs) {
+    const sr = el('tr', 'sec'), td = el('td', null, sec.title); td.colSpan = 5; sr.append(td); t.append(sr);
+    for (const c of sec.charts) c.s.forEach((k, i) => {
+      const p = (D[k] || []).filter(q => q[1] != null); if (!p.length) return;
+      const tr = el('tr'), u = c.u || '';
+      const mean = p.reduce((a, q) => a + q[1], 0) / p.length;
+      const lo = Math.min(...p.map(q => q[2] ?? q[1])), hi = Math.max(...p.map(q => q[3] ?? q[1]));
+      tr.append(el('td', null, c.s.length > 1 ? `${c.t} — ${(c.n || c.s)[i]}` : c.t));
+      [p[p.length - 1][1], mean, lo, hi].forEach(v => tr.append(el('td', 'n', fmt(v, u))));
+      t.append(tr);
+    });
+  }
+}
+const nights = n => `${n || 0} night${n === 1 ? '' : 's'}`;
+function chartTiles(m) {
+  const box = $('c-tiles'); if (!box) return;
+  const s = m.summary, pc = v => `${(100 * v).toFixed(v < 0.1 ? 1 : 0)}%`;
+  const tiles = [
+    ['Night survival', s.night_survival > 0 ? pc(s.night_survival) : '–', 'last night, sunrise ÷ sunset'],
+    ['Asleep now', pc(s.asleep), `${pc(s.dormant)} dormant (no energy)`],
+    ['Carry SLEEP', pc(s.sleep_carriers), 'cells whose program has SLEEP'],
+    ['Longest-lived body', nights(s.body_nights), 'bonded body, 50+ cells'],
+    ['Longest-lived kin cluster', nights(s.kin_nights), 'related neighbours, 50+ cells'],
+    ['Born last day', (s.births_last_day || 0).toLocaleString(), 'births between sunrises'],
+    ['Bonded cells', pc(s.bonded), `${s.bodies.toLocaleString()} bodies, largest ${s.max_body.toLocaleString()}`],
+    ['Mean cell age', `${fmt(s.mean_age)} epochs`, `${pc(s.older_than_day)} older than one day`],
+  ];
+  box.textContent = '';
+  for (const [k, v, sub] of tiles) { const t = el('div', 'tile'); t.append(el('div', 'k', k), el('div', 'v', v), el('div', 's', sub)); box.append(t); }
+  const cl = $('c-clusters'); if (!cl) return; cl.textContent = '';
+  if (!m.clusters || !m.clusters.length) { cl.append(el('div', 'tile', 'No clusters of 50+ cells tracked yet.')); return; }
+  for (const c of m.clusters.slice(0, 12)) {
+    const r = el('div', 'crow'), b = el('button', null, 'Fly there');
+    r.append(el('div', 'a', `${c.kind === 'body' ? 'Bonded body' : 'Kin cluster'} · ${c.size.toLocaleString()} cells`), b,
+      el('div', 'b', `${c.nights} night${c.nights === 1 ? '' : 's'} survived · ${Math.max(0, m.epoch - c.first_seen).toLocaleString()} epochs old`));
+    b.addEventListener('click', () => flyToCell(c.center, Math.sqrt(c.size)));
+    cl.append(r);
+  }
+}
+function flyToCell(q, r) {
+  openCharts(false); setTour(false); selected = null; follow = false;
+  pin = { x: q[0], y: q[1] || 0, r: Math.max(3, r * 0.7), until: performance.now() + 8000 };
+  if (mode === '2d') { fly2 = { from: { ...view }, to: { cx: q[0] + 0.5, cy: (q[1] || 0) + 0.5, s: Math.min(30, Math.max(view.s, 220 / Math.max(8, r * 2))) }, t: 0 }; need2d = true; }
+  else flyTo(cellToWorld(world, meta, q[0], q[1] || 0, q[2] || 0), Math.max(45, r * worldScale(world, meta) * 4), 1.0);
+}
+$('b-charts').addEventListener('click', () => openCharts(!charts.open));
+$('b-charts2').addEventListener('click', () => openCharts(true));
+$('c-close').addEventListener('click', () => openCharts(false));
+document.querySelectorAll('#charts [data-w]').forEach(b => {
+  b.classList.toggle('on', b.dataset.w === charts.w);
+  b.addEventListener('click', () => {
+    charts.w = b.dataset.w; store.set('chartWindow', charts.w);
+    document.querySelectorAll('#charts [data-w]').forEach(x => x.classList.toggle('on', x === b)); loadSeries();
+  });
+});
+for (const [id, v] of [['cv-charts', 'charts'], ['cv-table', 'table']]) $(id).addEventListener('click', () => {
+  charts.view = v; $('cv-charts').classList.toggle('on', v === 'charts'); $('cv-table').classList.toggle('on', v === 'table'); renderCharts();
+});
+addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT') return;
+  if (e.key === 'Escape' && charts.open) openCharts(false);
+  else if ((e.key === 'c' || e.key === 'C') && !e.ctrlKey && !e.metaKey && !e.altKey) openCharts(!charts.open);
+});
+addEventListener('resize', () => { if (charts.open) charts.cards.forEach(drawCard); });
 
 // ---------------------------------------------------------------- data
 async function poll() {
@@ -723,6 +1094,9 @@ async function poll() {
   setTimeout(poll, 1000);
 }
 poll();
+// bookmarkable: …/#charts opens the charts panel, …/#table its table view
+if (location.hash === '#table') { charts.view = 'table'; $('cv-charts').classList.remove('on'); $('cv-table').classList.add('on'); }
+if (location.hash === '#charts' || location.hash === '#table') openCharts(true);
 
 addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); resizeMap(); });
 setMode(mode);
