@@ -6,7 +6,7 @@
 <title>Primordia Observer</title>
 <style>
   :root {
-    --bg: #070a10; --panel: rgba(16, 20, 30, 0.78); --line: rgba(110, 140, 170, 0.25);
+    --bg: #070a10; --panel: rgba(14, 18, 28, 0.82); --line: rgba(110, 140, 170, 0.22);
     --text: #e4e9f2; --muted: #8a94a8; --accent: #6ed2be; --warm: #ffcf70;
   }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
@@ -15,34 +15,58 @@
   .hud { position: fixed; pointer-events: none; }
   .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
     backdrop-filter: blur(8px); padding: 10px 14px; pointer-events: auto; }
-  #top { top: 14px; left: 16px; right: 16px; display: flex; gap: 10px; flex-wrap: wrap; align-items: stretch; }
-  #title { display: flex; flex-direction: column; justify-content: center; }
+  button { font: inherit; color: var(--text); background: #1d2433; border: 1px solid var(--line); border-radius: 8px;
+    padding: 4px 10px; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.on { background: var(--accent); color: #08201b; border-color: var(--accent); font-weight: 600; }
+  #top { top: 12px; left: 12px; right: 12px; display: flex; gap: 8px; flex-wrap: wrap; align-items: stretch; }
+  #title { display: flex; flex-direction: column; justify-content: center; gap: 4px; }
   #title h1 { margin: 0; font-size: 20px; letter-spacing: 0.12em; color: var(--accent); }
   #title .sub { color: var(--muted); font-size: 12px; }
-  .badge { display: inline-block; margin-top: 4px; font-size: 11px; color: #0b1a17; background: var(--accent);
-    border-radius: 999px; padding: 1px 8px; width: max-content; }
-  .card { min-width: 118px; }
+  .badge { font-size: 11px; color: #0b1a17; background: var(--accent); border-radius: 999px; padding: 1px 8px; width: max-content; }
+  .card { min-width: 108px; }
   .card .k { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
-  .card .v { font-size: 22px; font-weight: 700; }
+  .card .v { font-size: 21px; font-weight: 700; }
   .card .s { color: var(--muted); font-size: 11px; }
-  .meter { position: relative; height: 14px; width: 160px; background: #283042; border-radius: 7px; margin: 6px 0 2px; overflow: hidden; }
+  .meter { position: relative; height: 12px; width: 150px; background: #283042; border-radius: 6px; margin: 7px 0 3px; overflow: hidden; }
   .meter .bar { position: absolute; top: 0; bottom: 0; }
   .meter .mid { position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: #fff; }
-  #right { top: 120px; right: 16px; width: 360px; bottom: 16px; display: flex; flex-direction: column; gap: 10px; }
+  #camera { display: flex; flex-direction: column; gap: 6px; justify-content: center; }
+  #camera .row { display: flex; gap: 6px; }
+  h2 { margin: 0 0 8px; font-size: 12px; color: var(--accent); letter-spacing: 0.1em; text-transform: uppercase; }
+  #left { top: 128px; left: 12px; width: 330px; bottom: 12px; display: flex; flex-direction: column; gap: 8px; }
+  #atlas { flex: 1; overflow-y: auto; }
+  .col { display: grid; grid-template-columns: 16px 1fr auto; gap: 8px; align-items: center; padding: 7px 8px; border-radius: 8px;
+    cursor: pointer; border: 1px solid transparent; }
+  .col:hover { background: rgba(110, 210, 190, 0.08); }
+  .col.sel { border-color: var(--accent); background: rgba(110, 210, 190, 0.12); }
+  .dot { width: 14px; height: 14px; border-radius: 50%; box-shadow: 0 0 10px currentColor; }
+  .col .n { font-weight: 600; }
+  .col .t { color: var(--muted); font-size: 11px; }
+  .col .z { font-variant-numeric: tabular-nums; font-size: 12px; text-align: right; }
+  .up { color: #78dc8c; } .down { color: #f07070; } .flat { color: var(--muted); }
+  #detail { font-size: 12.5px; }
+  #detail .prog { font-family: ui-monospace, monospace; font-size: 11px; color: #c8d2e0; margin-top: 6px; }
+  #right { top: 128px; right: 12px; width: 340px; bottom: 12px; display: flex; flex-direction: column; gap: 8px; }
   #chron { flex: 1; overflow-y: auto; }
-  #chron h2, #legend h2, #trends h2 { margin: 0 0 6px; font-size: 13px; color: var(--accent); letter-spacing: 0.08em; text-transform: uppercase; }
   .note { display: grid; grid-template-columns: 22px 1fr; gap: 6px; padding: 5px 0; border-bottom: 1px solid var(--line); font-size: 12.5px; }
   .note .e { color: var(--muted); font-size: 11px; font-family: ui-monospace, monospace; }
-  #legend { bottom: 16px; left: 16px; width: 300px; }
+  #trends { flex: none; }
+  .spark { display: grid; grid-template-columns: 82px 1fr; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); }
+  .spark canvas { width: 100%; height: 30px; }
+  details summary { cursor: pointer; color: var(--accent); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; }
   .lg { display: flex; align-items: center; gap: 8px; font-size: 12px; margin: 3px 0; }
   .sw { width: 14px; height: 14px; border-radius: 4px; flex: none; }
-  #trends { height: 205px; flex: none; }
-  .spark { display: grid; grid-template-columns: 90px 1fr; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); }
-  .spark canvas { width: 100%; height: 34px; }
-  #status { bottom: 16px; left: 50%; transform: translateX(-50%); font-size: 12px; color: var(--muted); }
-  #help { color: var(--muted); font-size: 11px; margin-top: 6px; }
-  label.toggle { font-size: 12px; color: var(--muted); cursor: pointer; }
-  @media (max-width: 900px) { #right { display: none; } #legend { display: none; } }
+  #labels { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
+  .tag { position: absolute; transform: translate(-50%, -100%); white-space: nowrap; font-size: 12px; padding: 3px 9px 3px 7px;
+    border-radius: 999px; background: rgba(10, 12, 18, 0.78); border: 1px solid rgba(255,255,255,0.15); pointer-events: auto; cursor: pointer; }
+  .tag i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; vertical-align: 0; }
+  .tag.sel { border-color: #fff; box-shadow: 0 0 12px rgba(255,255,255,0.35); }
+  #tip { position: fixed; pointer-events: none; font-size: 12px; padding: 6px 10px; border-radius: 8px; background: rgba(12, 15, 24, 0.92);
+    border: 1px solid var(--line); display: none; max-width: 300px; }
+  #status { bottom: 12px; left: 50%; transform: translateX(-50%); font-size: 12px; color: var(--muted); }
+  @media (max-width: 1100px) { #right { display: none; } }
+  @media (max-width: 760px) { #left { display: none; } }
 </style>
 <script type="importmap">
 { "imports": {
@@ -53,6 +77,8 @@
 </head>
 <body>
 <canvas id="scene"></canvas>
+<div id="labels"></div>
+<div id="tip"></div>
 
 <div id="top" class="hud">
   <div id="title" class="panel">
@@ -61,14 +87,41 @@
     <span class="badge">observer · read-only</span>
   </div>
   <div class="panel card"><div class="k">Living cells</div><div class="v" id="c-pop" style="color:#78dc8c">–</div><div class="s" id="c-pop-s"></div></div>
-  <div class="panel card"><div class="k">Families</div><div class="v" id="c-fam" style="color:#f0a0d2">–</div><div class="s">groups of similar programs</div></div>
+  <div class="panel card"><div class="k">Colonies</div><div class="v" id="c-col" style="color:#ffaa3c">–</div><div class="s">groups of related cells</div></div>
   <div class="panel card"><div class="k">Complexity</div><div class="v" id="c-hoe" style="color:var(--warm)">–</div><div class="s" id="c-hoe-s"></div></div>
   <div class="panel card"><div class="k">Copiers</div><div class="v" id="c-rep" style="color:#6ec8ff">–</div><div class="s">of the top 100 programs</div></div>
-  <div class="panel card"><div class="k">Largest body</div><div class="v" id="c-body" style="color:#c8aaff">–</div><div class="s" id="c-body-s"></div></div>
-  <div class="panel card"><div class="k">Handedness of code</div>
+  <div class="panel card"><div class="k">Handedness</div>
     <div class="meter"><div class="bar" id="hand-bar"></div><div class="mid"></div></div>
     <div class="s" id="c-hand"></div></div>
   <div class="panel card"><div class="k">Sky</div><div class="v" id="c-sun">–</div><div class="s" id="c-vents"></div></div>
+  <div id="camera" class="panel">
+    <div class="row">
+      <button id="b-spin" title="Slowly rotate the view">⟳ Spin: off</button>
+      <button id="b-tour" title="Visit the biggest colonies one after another">✈ Tour</button>
+    </div>
+    <div class="row">
+      <button id="b-over">Overview</button>
+      <button id="b-top">Top-down</button>
+      <button id="b-lab" class="on">Labels</button>
+    </div>
+  </div>
+</div>
+
+<div id="left" class="hud">
+  <div id="atlas" class="panel"><h2>Colonies — click to fly there</h2><div id="cols"></div></div>
+  <div id="detail" class="panel" style="display:none"></div>
+  <div class="panel">
+    <details>
+      <summary>How to read this</summary>
+      <div class="lg"><span class="sw" style="background:linear-gradient(90deg,#ff6363,#fac850,#46d296,#5a8cff,#f064d2)"></span>Each bright colour is one colony: a connected group of related cells (copies of each other)</div>
+      <div class="lg"><span class="sw" style="background:#383e4c"></span>Slate = loners, not part of a sizeable colony</div>
+      <div class="lg"><span class="sw" style="background:#f2f2f2"></span>Taller = more stored energy</div>
+      <div class="lg"><span class="sw" style="background:#5a5c62"></span>Faded = dormant (out of energy)</div>
+      <div class="lg"><span class="sw" style="background:#102c28"></span>Low green ground = food (free energy)</div>
+      <div class="lg"><span class="sw" style="background:#ffa028"></span>Orange plumes = hydrothermal vents</div>
+      <div class="lg" style="color:var(--muted)">Drag to orbit · scroll to zoom · right-drag to pan · hover the ground for details</div>
+    </details>
+  </div>
 </div>
 
 <div id="right" class="hud">
@@ -81,66 +134,49 @@
   </div>
 </div>
 
-<div id="legend" class="hud panel">
-  <h2>How to read this</h2>
-  <div class="lg"><span class="sw" style="background:linear-gradient(90deg,#5ec962,#4facE6,#f065a0,#fac448)"></span>Raised, coloured mats are living cells; each colour is a family of similar programs</div>
-  <div class="lg"><span class="sw" style="background:#f2f2f2"></span>Taller and brighter = more stored energy</div>
-  <div class="lg"><span class="sw" style="background:#5a5c62"></span>Grey = dormant (out of energy)</div>
-  <div class="lg"><span class="sw" style="background:#18463a"></span>Low ground glowing green = food (free energy)</div>
-  <div class="lg"><span class="sw" style="background:#6e2d12"></span>Rust-red ground = hot</div>
-  <div class="lg"><span class="sw" style="background:#ffa028"></span>Orange plumes = hydrothermal vents</div>
-  <div id="help">Drag to orbit · scroll to zoom · right-drag to pan ·
-    <label class="toggle"><input type="checkbox" id="spin" checked> slow spin</label></div>
-</div>
-
 <div id="status" class="hud panel">waiting for the simulation…</div>
 
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-const canvas = document.getElementById('scene');
+const $ = id => document.getElementById(id);
+const store = { get: (k, d) => { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+                set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} } };
+
+const canvas = $('scene');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setSize(innerWidth, innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 5000);
+const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 5000);
 const controls = new OrbitControls(camera, canvas);
 controls.enableDamping = true;
-controls.autoRotate = true;
 controls.autoRotateSpeed = 0.35;
-document.getElementById('spin').addEventListener('change', e => controls.autoRotate = e.target.checked);
 
-const hemi = new THREE.HemisphereLight(0x9fc4ff, 0x1a1208, 0.6);
+const hemi = new THREE.HemisphereLight(0x9fc4ff, 0x1a1208, 0.9);
 scene.add(hemi);
 const sunLight = new THREE.DirectionalLight(0xfff1d6, 1.2);
-scene.add(sunLight);
-scene.add(sunLight.target);
+scene.add(sunLight, sunLight.target);
 const DAY = new THREE.Color(0x5d93c9), NIGHT = new THREE.Color(0x0a1020);
 scene.background = NIGHT.clone();
-scene.fog = new THREE.Fog(NIGHT.clone(), 200, 900);
+scene.fog = new THREE.Fog(NIGHT.clone(), 220, 1000);
 
-// stars
+let stars;
 {
   const g = new THREE.BufferGeometry(), p = [];
-  for (let i = 0; i < 2500; i++) {
-    const v = new THREE.Vector3().randomDirection().multiplyScalar(1500);
-    if (v.y < 0) v.y = -v.y;
-    p.push(v.x, v.y, v.z);
-  }
+  for (let i = 0; i < 2500; i++) { const v = new THREE.Vector3().randomDirection().multiplyScalar(1500); if (v.y < 0) v.y = -v.y; p.push(v.x, v.y, v.z); }
   g.setAttribute('position', new THREE.Float32BufferAttribute(p, 3));
-  var stars = new THREE.Points(g, new THREE.PointsMaterial({ color: 0xffffff, size: 2, sizeAttenuation: false, transparent: true, opacity: 0.8, fog: false }));
+  stars = new THREE.Points(g, new THREE.PointsMaterial({ color: 0xffffff, size: 2, sizeAttenuation: false, transparent: true, opacity: 0.8, fog: false }));
   scene.add(stars);
 }
 
-// glow texture for vents
 function glowTexture() {
   const c = document.createElement('canvas'); c.width = c.height = 128;
-  const x = c.getContext('2d');
-  const g = x.createRadialGradient(64, 64, 0, 64, 64, 64);
+  const x = c.getContext('2d'), g = x.createRadialGradient(64, 64, 0, 64, 64, 64);
   g.addColorStop(0, 'rgba(255,240,200,1)'); g.addColorStop(0.25, 'rgba(255,170,60,0.85)');
   g.addColorStop(0.6, 'rgba(255,90,20,0.25)'); g.addColorStop(1, 'rgba(255,60,0,0)');
   x.fillStyle = g; x.fillRect(0, 0, 128, 128);
@@ -148,51 +184,68 @@ function glowTexture() {
 }
 const GLOW = glowTexture();
 
-let meta = null, world = null, ventGroup = new THREE.Group(), loading = false, lastEpoch = -1;
-scene.add(ventGroup);
+// ---------------------------------------------------------------- camera controls (viewer only)
+let spin = store.get('spin', false), tour = false, showLabels = store.get('labels', true), tourT = 0, tourI = 0;
+function setSpin(v) { spin = v; controls.autoRotate = v; $('b-spin').textContent = `⟳ Spin: ${v ? 'on' : 'off'}`; $('b-spin').classList.toggle('on', v); store.set('spin', v); }
+function setTour(v) { tour = v; $('b-tour').classList.toggle('on', v); tourT = 0; if (v) nextTour(); }
+setSpin(spin);
+$('b-spin').onclick = () => setSpin(!spin);
+$('b-tour').onclick = () => setTour(!tour);
+$('b-lab').classList.toggle('on', showLabels);
+$('b-lab').onclick = () => { showLabels = !showLabels; store.set('labels', showLabels); $('b-lab').classList.toggle('on', showLabels); };
+controls.addEventListener('start', () => { if (spin) setSpin(false); if (tour) setTour(false); fly = null; });
+
+let fly = null; // {from:{pos,target}, to:{pos,target}, t}
+function flyTo(target, dist, elev = 0.75) {
+  const dir = camera.position.clone().sub(controls.target).setY(0);
+  if (dir.lengthSq() < 1e-6) dir.set(0, 0, 1);
+  dir.normalize();
+  const pos = target.clone().add(dir.multiplyScalar(dist * Math.cos(elev))).add(new THREE.Vector3(0, dist * Math.sin(elev), 0));
+  fly = { fp: camera.position.clone(), ft: controls.target.clone(), tp: pos, tt: target.clone(), t: 0 };
+}
+$('b-over').onclick = () => { selected = null; flyTo(new THREE.Vector3(0, 0, 0), WORLD_W * 0.95, 0.65); renderAtlas(); };
+$('b-top').onclick = () => { fly = { fp: camera.position.clone(), ft: controls.target.clone(), tp: new THREE.Vector3(0, WORLD_W * 1.15, 0.01), tt: new THREE.Vector3(0, 0, 0), t: 0 }; };
+
+// ---------------------------------------------------------------- world
+let meta = null, world = null, bytes = null, loading = false, lastEpoch = -1, selected = null;
+const ventGroup = new THREE.Group(); scene.add(ventGroup);
 const WORLD_W = 160;
+const ring = new THREE.Mesh(new THREE.TorusGeometry(1, 0.06, 8, 64), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9 }));
+ring.rotation.x = Math.PI / 2; ring.visible = false; scene.add(ring);
 
 function heightOf(hb, flag) {
-  if (flag & 16) return 5.0;                    // wall
-  if (hb >= 128) return 1.4 + (hb - 128) / 127 * 2.2;
-  return hb / 100 * 0.7;
+  if (flag & 16) return 5.0;
+  if (hb >= 128) return 1.3 + (hb - 128) / 127 * 2.0;
+  return hb / 100 * 0.5;
 }
 
-// ---------------------------------------------------------------- 2D / 0D / 1D terrain
 function buildTerrain(m) {
   const [gw0, gh0] = [m.grid[0], Math.max(m.grid[1], 1)];
   const stride = Math.max(1, Math.ceil(Math.max(gw0, gh0) / 512));
   const gw = Math.ceil(gw0 / stride), gh = Math.max(2, Math.ceil(gh0 / stride));
-  const W = WORLD_W, D = WORLD_W * Math.max(gh0, 1) / gw0 * (gh0 === 1 ? 12 : 1);
-  const geo = new THREE.PlaneGeometry(W, Math.max(D, 4), gw - 1, gh - 1);
+  const W = WORLD_W, D = Math.max(4, WORLD_W * gh0 / gw0 * (gh0 === 1 ? 12 : 1));
+  const geo = new THREE.PlaneGeometry(W, D, gw - 1, gh - 1);
   geo.rotateX(-Math.PI / 2);
   geo.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(gw * gh * 3), 3));
-  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.82, metalness: 0.04 });
-  const mesh = new THREE.Mesh(geo, mat);
+  const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.82, metalness: 0.04 }));
   scene.add(mesh);
-  // base slab
-  const base = new THREE.Mesh(new THREE.BoxGeometry(W * 1.02, 2, Math.max(D, 4) * 1.02), new THREE.MeshStandardMaterial({ color: 0x0c1018, roughness: 1 }));
+  const base = new THREE.Mesh(new THREE.BoxGeometry(W * 1.02, 2, D * 1.02), new THREE.MeshStandardMaterial({ color: 0x0c1018, roughness: 1 }));
   base.position.y = -1.05; scene.add(base);
-  camera.position.set(0, W * 0.55, Math.max(D, 40) * 0.95);
+  camera.position.set(0, W * 0.6, D * 0.95);
   controls.target.set(0, 0, 0);
-  return { kind: 'terrain', mesh, base, gw, gh, gw0, gh0, stride, W, D: Math.max(D, 4) };
+  return { kind: 'terrain', mesh, gw, gh, gw0, gh0, stride, W, D };
 }
 
-function updateTerrain(w, m, bytes) {
-  const n = m.n, pos = w.mesh.geometry.attributes.position, col = w.mesh.geometry.attributes.color;
-  const flags = bytes.subarray(n * 4);
+function updateTerrain(w, m, b) {
+  const n = m.n, pos = w.mesh.geometry.attributes.position, col = w.mesh.geometry.attributes.color, flags = b.subarray(n * 4);
   for (let iy = 0; iy < w.gh; iy++) {
     const ly = w.gh0 === 1 ? 0 : Math.min(w.gh0 - 1, (w.gh - 1 - iy) * w.stride);
     for (let ix = 0; ix < w.gw; ix++) {
-      const lx = Math.min(w.gw0 - 1, ix * w.stride);
-      const c = lx + ly * w.gw0;
-      const v = ix + iy * w.gw;
+      const lx = Math.min(w.gw0 - 1, ix * w.stride), c = lx + ly * w.gw0, v = ix + iy * w.gw;
       if (c >= n) { pos.setY(v, -0.5); col.setXYZ(v, 0.02, 0.02, 0.03); continue; }
-      const f = flags[c];
-      pos.setY(v, heightOf(bytes[c * 4 + 3], f));
-      let r = bytes[c * 4] / 255, g = bytes[c * 4 + 1] / 255, b = bytes[c * 4 + 2] / 255;
-      if (f & 4) { r = Math.min(1, r * 1.15); g = Math.min(1, g * 1.15); b = Math.min(1, b * 1.15); }
-      col.setXYZ(v, r * r, g * g, b * b);       // to linear
+      pos.setY(v, heightOf(b[c * 4 + 3], flags[c]));
+      const r = b[c * 4] / 255, g = b[c * 4 + 1] / 255, bl = b[c * 4 + 2] / 255;
+      col.setXYZ(v, r * r, g * g, bl * bl);
     }
   }
   pos.needsUpdate = true; col.needsUpdate = true;
@@ -207,16 +260,12 @@ function cellToWorld(w, m, x, y, z) {
   const s = w.scale;
   return new THREE.Vector3((x - m.size[0] / 2) * s, z * s, (m.size[1] / 2 - y) * s);
 }
+function worldScale(w, m) { return w.kind === 'terrain' ? w.W / w.gw0 : w.scale; }
 
-// ---------------------------------------------------------------- 3D volume
 function buildVolume(m) {
-  const s = WORLD_W / Math.max(m.size[0], m.size[1]);
-  const max = 260000;
-  const geo = new THREE.BoxGeometry(s * 0.9, s * 0.9, s * 0.9);
-  const mat = new THREE.MeshStandardMaterial({ roughness: 0.7, metalness: 0.05 });
-  const mesh = new THREE.InstancedMesh(geo, mat, max);
-  mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-  scene.add(mesh);
+  const s = WORLD_W / Math.max(m.size[0], m.size[1]), max = 260000;
+  const mesh = new THREE.InstancedMesh(new THREE.BoxGeometry(s * 0.9, s * 0.9, s * 0.9), new THREE.MeshStandardMaterial({ roughness: 0.7, metalness: 0.05 }), max);
+  mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage); scene.add(mesh);
   const floor = new THREE.Mesh(new THREE.BoxGeometry(m.size[0] * s, 1, m.size[1] * s), new THREE.MeshStandardMaterial({ color: 0x141a24, roughness: 1 }));
   floor.position.y = -0.6; scene.add(floor);
   const box = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(m.size[0] * s, m.size[2] * s, m.size[1] * s)), new THREE.LineBasicMaterial({ color: 0x3a4a60 }));
@@ -225,123 +274,189 @@ function buildVolume(m) {
   controls.target.set(0, m.size[2] * s * 0.35, 0);
   return { kind: 'volume', mesh, scale: s, max };
 }
-
-function updateVolume(w, m, bytes) {
-  const n = m.n, flags = bytes.subarray(n * 4);
-  let occ = 0;
-  for (let c = 0; c < n; c++) if (flags[c] & 1) occ++;
-  const stride = Math.max(1, Math.ceil(occ / w.max));
-  const mtx = new THREE.Matrix4(), color = new THREE.Color();
-  const [sx, sy] = [m.size[0], m.size[1]];
+function updateVolume(w, m, b) {
+  const n = m.n, flags = b.subarray(n * 4);
+  let occ = 0; for (let c = 0; c < n; c++) if (flags[c] & 1) occ++;
+  const stride = Math.max(1, Math.ceil(occ / w.max)), mtx = new THREE.Matrix4(), color = new THREE.Color(), [sx, sy] = [m.size[0], m.size[1]];
   let k = 0, seen = 0;
   for (let c = 0; c < n && k < w.max; c++) {
-    const f = flags[c];
-    if (!(f & 1)) continue;
-    if ((seen++ % stride) !== 0) continue;
-    const x = c % sx, y = Math.floor(c / sx) % sy, z = Math.floor(c / (sx * sy));
-    const p = cellToWorld(w, m, x, y, z);
-    const e = Math.max(0.35, (bytes[c * 4 + 3] - 128) / 127);
-    mtx.makeScale(e, e, e).setPosition(p.x, p.y + w.scale / 2, p.z);
-    w.mesh.setMatrixAt(k, mtx);
-    color.setRGB(bytes[c * 4] / 255, bytes[c * 4 + 1] / 255, bytes[c * 4 + 2] / 255, THREE.SRGBColorSpace);
-    w.mesh.setColorAt(k, color);
-    k++;
+    if (!(flags[c] & 1) || (seen++ % stride) !== 0) continue;
+    const x = c % sx, y = Math.floor(c / sx) % sy, z = Math.floor(c / (sx * sy)), p = cellToWorld(w, m, x, y, z);
+    const e = Math.max(0.35, (b[c * 4 + 3] - 128) / 127);
+    mtx.makeScale(e, e, e).setPosition(p.x, p.y + w.scale / 2, p.z); w.mesh.setMatrixAt(k, mtx);
+    color.setRGB(b[c * 4] / 255, b[c * 4 + 1] / 255, b[c * 4 + 2] / 255, THREE.SRGBColorSpace); w.mesh.setColorAt(k, color); k++;
   }
-  w.mesh.count = k;
-  w.mesh.instanceMatrix.needsUpdate = true;
-  if (w.mesh.instanceColor) w.mesh.instanceColor.needsUpdate = true;
+  w.mesh.count = k; w.mesh.instanceMatrix.needsUpdate = true; if (w.mesh.instanceColor) w.mesh.instanceColor.needsUpdate = true;
 }
 
-// ---------------------------------------------------------------- vents
 const PLUME = 70;
-function rebuildVents(m, bytes) {
+function rebuildVents(m, b) {
   ventGroup.clear();
-  const lights = 6;
   m.vents.forEach((v, i) => {
-    const g = new THREE.Group();
-    let p = cellToWorld(world, m, v[0], v[1] || 0, v[2] || 0);
-    if (world.kind === 'terrain' && bytes) {
-      const c = v[0] + (v[1] || 0) * m.grid[0];
-      p.y = heightOf(bytes[c * 4 + 3], bytes[m.n * 4 + c]);
-    }
+    const g = new THREE.Group(), p = cellToWorld(world, m, v[0], v[1] || 0, v[2] || 0);
+    if (world.kind === 'terrain' && b) { const c = v[0] + (v[1] || 0) * m.grid[0]; p.y = heightOf(b[c * 4 + 3], b[m.n * 4 + c]); }
     g.position.copy(p);
     const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: GLOW, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
     glow.scale.set(9, 9, 1); glow.position.y = 1.2; g.add(glow);
-    const pg = new THREE.BufferGeometry(), pp = new Float32Array(PLUME * 3), seed = new Float32Array(PLUME);
+    const pg = new THREE.BufferGeometry(), seed = new Float32Array(PLUME);
     for (let k = 0; k < PLUME; k++) seed[k] = Math.random();
-    pg.setAttribute('position', new THREE.BufferAttribute(pp, 3));
+    pg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(PLUME * 3), 3));
     const pts = new THREE.Points(pg, new THREE.PointsMaterial({ map: GLOW, size: 2.2, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, color: 0xffb060 }));
     pts.userData.seed = seed; g.add(pts);
-    if (i < lights) { const l = new THREE.PointLight(0xff8a30, 60, 40, 1.6); l.position.y = 3; g.add(l); }
+    if (i < 6) { const l = new THREE.PointLight(0xff8a30, 60, 40, 1.6); l.position.y = 3; g.add(l); }
     g.userData = { glow, pts, phase: Math.random() * 6.28 };
     ventGroup.add(g);
   });
 }
 function animateVents(t) {
   for (const g of ventGroup.children) {
-    const { glow, pts, phase } = g.userData;
-    const pulse = 0.75 + 0.25 * Math.sin(t * 2.4 + phase);
+    const { glow, pts, phase } = g.userData, pulse = 0.75 + 0.25 * Math.sin(t * 2.4 + phase);
     glow.scale.set(9 * pulse, 9 * pulse, 1);
     const a = pts.geometry.attributes.position, seed = pts.userData.seed;
-    for (let k = 0; k < PLUME; k++) {
-      const life = (t * 0.35 + seed[k]) % 1;
-      const ang = seed[k] * 40 + t * 0.6;
-      a.setXYZ(k, Math.cos(ang) * life * 2.2, 1 + life * 16, Math.sin(ang) * life * 2.2);
-    }
+    for (let k = 0; k < PLUME; k++) { const life = (t * 0.35 + seed[k]) % 1, ang = seed[k] * 40 + t * 0.6; a.setXYZ(k, Math.cos(ang) * life * 2.2, 1 + life * 16, Math.sin(ang) * life * 2.2); }
     a.needsUpdate = true;
-    pts.material.opacity = 0.85;
   }
 }
 
+// ---------------------------------------------------------------- colonies
+const rgb = c => `rgb(${c[0]},${c[1]},${c[2]})`;
+function colonyPos(c) {
+  const p = cellToWorld(world, meta, c.center[0], c.center[1] || 0, c.center[2] || 0);
+  if (world.kind === 'terrain') p.y = 2.4;
+  return p;
+}
+function selectColony(id, flyThere = true) {
+  selected = id;
+  const c = meta.colonies.find(x => x.id === id);
+  if (c && flyThere) flyTo(colonyPos(c), Math.max(45, c.radius * worldScale(world, meta) * 7), 1.0);
+  renderAtlas();
+}
+function nextTour() {
+  if (!meta || !meta.colonies.length) return;
+  const list = meta.colonies.slice(0, 8);
+  tourI = (tourI + 1) % list.length;
+  selectColony(list[tourI].id);
+}
+function story(c) {
+  const g = c.growth > 20 ? `growing fast (+${c.growth.toFixed(0)} per 100 epochs)` : c.growth > 1 ? `growing (+${c.growth.toFixed(0)} per 100 epochs)` :
+    c.growth < -20 ? `shrinking fast (${c.growth.toFixed(0)} per 100 epochs)` : c.growth < -1 ? `shrinking (${c.growth.toFixed(0)} per 100 epochs)` : 'stable in size';
+  const hand = Math.abs(c.hand) < 0.15 ? 'mixed-handed code' : c.hand > 0 ? `left-handed code (${c.hand.toFixed(2)})` : `right-handed code (${c.hand.toFixed(2)})`;
+  return `<b style="color:${rgb(c.color)}">${c.name}</b><br>${c.size.toLocaleString()} cells, about ${(2 * c.radius).toFixed(0)} cells across, first seen at epoch ${c.since}; ${g}.<br>
+    ${(c.copiers * 100).toFixed(0)}% copiers · ${(c.bonded * 100).toFixed(0)}% bonded · ${(c.dormant * 100).toFixed(0)}% dormant · ${hand} · programs ≈ ${c.len.toFixed(0)} bytes
+    <div class="prog">${c.program}</div>`;
+}
+function renderAtlas() {
+  if (!meta) return;
+  $('cols').innerHTML = meta.colonies.map(c => {
+    const cls = c.growth > 1 ? 'up' : c.growth < -1 ? 'down' : 'flat', arrow = c.growth > 1 ? '▲' : c.growth < -1 ? '▼' : '●';
+    return `<div class="col ${c.id === selected ? 'sel' : ''}" data-id="${c.id}">
+      <span class="dot" style="background:${rgb(c.color)};color:${rgb(c.color)}"></span>
+      <div><div class="n">${c.name}</div><div class="t">${(c.copiers * 100).toFixed(0)}% copiers · ${(c.bonded * 100).toFixed(0)}% bonded</div></div>
+      <div class="z"><span class="${cls}">${arrow}</span> ${c.size.toLocaleString()}</div></div>`;
+  }).join('') || '<div style="color:var(--muted)">No sizeable colonies yet.</div>';
+  for (const el of document.querySelectorAll('.col')) el.onclick = () => { setTour(false); selectColony(+el.dataset.id); };
+  const c = meta.colonies.find(x => x.id === selected);
+  $('detail').style.display = selected ? 'block' : 'none';
+  if (c) $('detail').innerHTML = story(c);
+  else if (selected) $('detail').innerHTML = '<span style="color:var(--muted)">The colony you selected has dissolved or merged into a neighbour.</span>';
+}
+
+// floating name tags
+const tags = new Map();
+function updateLabels() {
+  const box = $('labels');
+  if (!meta || !world || !showLabels) { box.style.display = 'none'; return; }
+  box.style.display = 'block';
+  const seen = new Set(), placed = [];
+  for (const c of meta.colonies.slice(0, 14)) {
+    seen.add(c.id);
+    let el = tags.get(c.id);
+    if (!el) { el = document.createElement('div'); el.className = 'tag'; el.onclick = () => { setTour(false); selectColony(c.id); }; box.appendChild(el); tags.set(c.id, el); }
+    el.innerHTML = `<i style="background:${rgb(c.color)}"></i>${c.name} · ${c.size.toLocaleString()}`;
+    el.classList.toggle('sel', c.id === selected);
+    const p = colonyPos(c); p.y += 1.5; p.project(camera);
+    const x = (p.x + 1) / 2 * innerWidth, y = (1 - p.y) / 2 * innerHeight;
+    let hide = p.z > 1 || x < 0 || x > innerWidth || y < 0 || y > innerHeight;
+    if (!hide) { for (const q of placed) if (Math.abs(q[0] - x) < 130 && Math.abs(q[1] - y) < 22) { hide = true; break; } }
+    if (c.id === selected) hide = false;
+    el.style.display = hide ? 'none' : 'block';
+    if (!hide) { placed.push([x, y]); el.style.left = `${x}px`; el.style.top = `${y}px`; }
+  }
+  for (const [id, el] of tags) if (!seen.has(id)) { el.remove(); tags.delete(id); }
+}
+
+// hover: which cell and which colony is under the pointer
+const ray = new THREE.Raycaster(), mouse = new THREE.Vector2();
+let pointer = null;
+canvas.addEventListener('pointermove', e => { pointer = [e.clientX, e.clientY]; });
+canvas.addEventListener('pointerleave', () => { pointer = null; $('tip').style.display = 'none'; });
+canvas.addEventListener('dblclick', () => { const k = hoverColony(); if (k) { setTour(false); selectColony(k.id); } });
+let lastHover = 0;
+function hoverColony() {
+  if (!pointer || !world || world.kind !== 'terrain' || !bytes) return null;
+  mouse.set(pointer[0] / innerWidth * 2 - 1, -(pointer[1] / innerHeight) * 2 + 1);
+  ray.setFromCamera(mouse, camera);
+  const hit = ray.intersectObject(world.mesh)[0];
+  if (!hit) return null;
+  const x = Math.floor((hit.point.x / world.W + 0.5) * world.gw0), y = Math.floor((-hit.point.z / world.D + 0.5) * world.gh0);
+  if (x < 0 || y < 0 || x >= world.gw0 || y >= world.gh0) return null;
+  const c = x + y * world.gw0, n = meta.n, f = bytes[n * 4 + c], k = bytes[n * 5 + c];
+  return { x, y, f, colony: k ? meta.colonies[k - 1] : null, id: k ? meta.colonies[k - 1].id : 0 };
+}
+function updateTip(now) {
+  if (now - lastHover < 80) return;
+  lastHover = now;
+  const h = hoverColony(), tip = $('tip');
+  if (!h) { tip.style.display = 'none'; return; }
+  let s = `<b>(${h.x}, ${h.y})</b> `;
+  if (h.f & 16) s += 'wall';
+  else if (!(h.f & 1)) s += 'empty ground';
+  else {
+    s += h.colony ? `<span style="color:${rgb(h.colony.color)}">${h.colony.name}</span>` : 'a loner cell';
+    const t = []; if (h.f & 2) t.push('dormant'); if (h.f & 4) t.push('copier'); if (h.f & 8) t.push('bonded');
+    if (t.length) s += ` · ${t.join(', ')}`;
+    if (h.colony) s += '<br><span style="color:var(--muted)">double-click to follow this colony</span>';
+  }
+  tip.innerHTML = s; tip.style.display = 'block';
+  tip.style.left = `${pointer[0] + 16}px`; tip.style.top = `${pointer[1] + 16}px`;
+}
+
 // ---------------------------------------------------------------- HUD
-const $ = id => document.getElementById(id);
 function spark(id, pts, color, lo, hi) {
-  const c = $(id), ctx = c.getContext('2d');
-  const w = c.width = c.clientWidth * devicePixelRatio, h = c.height = c.clientHeight * devicePixelRatio;
+  const c = $(id), ctx = c.getContext('2d'), w = c.width = c.clientWidth * devicePixelRatio, h = c.height = c.clientHeight * devicePixelRatio;
   ctx.clearRect(0, 0, w, h);
   if (!pts || pts.length < 2) return;
   const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]).filter(Number.isFinite);
-  const x0 = Math.min(...xs), x1 = Math.max(...xs);
-  const y0 = lo ?? Math.min(...ys), y1 = hi ?? Math.max(...ys);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = lo ?? Math.min(...ys), y1 = hi ?? Math.max(...ys);
   ctx.strokeStyle = color; ctx.lineWidth = 1.5 * devicePixelRatio; ctx.beginPath();
-  pts.forEach((p, i) => {
-    if (!Number.isFinite(p[1])) return;
-    const x = (p[0] - x0) / Math.max(1e-9, x1 - x0) * w, y = h - (p[1] - y0) / Math.max(1e-9, y1 - y0) * (h - 4) - 2;
-    i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
-  });
+  pts.forEach((p, i) => { if (!Number.isFinite(p[1])) return; const x = (p[0] - x0) / Math.max(1e-9, x1 - x0) * w, y = h - (p[1] - y0) / Math.max(1e-9, y1 - y0) * (h - 4) - 2; i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
   ctx.stroke();
 }
 function hud(m) {
   const s = m.summary;
-  $('epoch').textContent = `epoch ${m.epoch} · ${m.eps.toFixed(1)} epochs/s · ${m.dims}D, ${m.n.toLocaleString()} sites`;
+  $('epoch').textContent = `epoch ${m.epoch.toLocaleString()} · ${m.eps.toFixed(1)} epochs/s · ${m.dims}D, ${m.n.toLocaleString()} sites`;
   $('c-pop').textContent = s.occupied.toLocaleString();
   $('c-pop-s').textContent = `+${m.births} born, −${m.deaths} died`;
-  $('c-fam').textContent = s.species;
+  $('c-col').textContent = m.colonies.length;
   $('c-hoe').textContent = s.hoe.toFixed(2);
   $('c-hoe-s').textContent = s.hoe > 1 ? 'structured: life-like' : s.hoe > 0.3 ? 'some structure' : 'random soup';
   $('c-rep').textContent = `${s.replicators}`;
-  $('c-body').textContent = s.max_body;
-  $('c-body-s').textContent = `${s.bodies.toLocaleString()} bonded bodies`;
   const ee = Math.max(-1, Math.min(1, s.ee_code)), bar = $('hand-bar');
-  bar.style.left = ee >= 0 ? '50%' : `${50 + ee * 50}%`; bar.style.width = `${Math.abs(ee) * 50}%`;
-  bar.style.background = ee >= 0 ? '#e65050' : '#5078f0';
+  bar.style.left = ee >= 0 ? '50%' : `${50 + ee * 50}%`; bar.style.width = `${Math.abs(ee) * 50}%`; bar.style.background = ee >= 0 ? '#e65050' : '#5078f0';
   $('c-hand').textContent = `${ee >= 0 ? '+' : ''}${ee.toFixed(2)} · ${Math.abs(ee) < 0.1 ? 'balanced' : ee > 0 ? 'left (L)' : 'right (D)'}`;
   $('c-sun').textContent = m.sun > 0.05 ? `☀ ${Math.round(m.sun * 100)}%` : '🌙 night';
   $('c-vents').textContent = `${m.vents.length} vent${m.vents.length === 1 ? '' : 's'} active`;
   $('notes').innerHTML = m.chronicle.map(n => `<div class="note"><div>${n.icon}</div><div><div class="e">epoch ${n.epoch}</div>${n.text.replace(/</g, '&lt;')}</div></div>`).join('');
-  spark('sp-pop', m.series.population, '#78dc8c');
-  spark('sp-hoe', m.series.complexity, '#ffcf70');
-  spark('sp-ee', m.series.handedness, '#e68a8a', -1, 1);
-  spark('sp-rep', m.series.copiers, '#6ec8ff', 0, 100);
-  $('status').textContent = `observing live run · backend ${m.backend}`;
+  spark('sp-pop', m.series.population, '#78dc8c'); spark('sp-hoe', m.series.complexity, '#ffcf70');
+  spark('sp-ee', m.series.handedness, '#e68a8a', -1, 1); spark('sp-rep', m.series.copiers, '#6ec8ff', 0, 100);
+  $('status').textContent = `observing a live run (read-only) · ${m.backend}`;
+  renderAtlas();
 }
-
 function sky(sun) {
   const c = NIGHT.clone().lerp(DAY, Math.min(1, sun * 1.2));
   scene.background = c; scene.fog.color.copy(c);
   stars.material.opacity = Math.max(0, 1 - sun * 2.5);
-  sunLight.intensity = 0.45 + 2.0 * sun;
-  hemi.intensity = 0.9 + 0.5 * sun;
+  sunLight.intensity = 0.45 + 2.0 * sun; hemi.intensity = 0.9 + 0.5 * sun;
   sunLight.position.set(WORLD_W * 0.6, 40 + 160 * sun, WORLD_W * 0.3);
 }
 
@@ -350,37 +465,48 @@ async function poll() {
   try {
     const r = await fetch('meta.json', { cache: 'no-store' });
     if (r.ok) {
-      meta = await r.json();
-      hud(meta); sky(meta.sun);
-      if (meta.epoch !== lastEpoch && !loading) {
+      const m = await r.json();
+      if (m.epoch !== lastEpoch && !loading) {
         loading = true;
         const fr = await fetch('frame.bin', { cache: 'no-store' });
-        const bytes = new Uint8Array(await fr.arrayBuffer());
+        const b = new Uint8Array(await fr.arrayBuffer());
+        meta = m; bytes = b;
         if (!world) world = meta.dims === 3 ? buildVolume(meta) : buildTerrain(meta);
-        if (world.kind === 'terrain') updateTerrain(world, meta, bytes); else updateVolume(world, meta, bytes);
-        rebuildVents(meta, bytes);
+        if (world.kind === 'terrain') updateTerrain(world, meta, b); else updateVolume(world, meta, b);
+        rebuildVents(meta, b);
         lastEpoch = meta.epoch; loading = false;
+        hud(meta); sky(meta.sun);
       }
-    } else {
-      $('status').textContent = 'waiting for the simulation to publish its first frame…';
-    }
-  } catch (e) {
-    loading = false;
-    $('status').textContent = 'connection lost — retrying…';
-  }
+    } else { $('status').textContent = 'waiting for the simulation to publish its first frame…'; }
+  } catch (e) { loading = false; $('status').textContent = 'connection lost — retrying…'; }
   setTimeout(poll, 1000);
 }
 poll();
 
-addEventListener('resize', () => {
-  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight);
-});
+addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
 const clock = new THREE.Clock();
 renderer.setAnimationLoop(() => {
-  const t = clock.getElapsedTime();
+  const dt = clock.getDelta(), t = clock.elapsedTime;
+  if (fly) {
+    fly.t = Math.min(1, fly.t + dt / 1.6);
+    const k = fly.t < 0.5 ? 2 * fly.t * fly.t : 1 - Math.pow(-2 * fly.t + 2, 2) / 2;
+    camera.position.lerpVectors(fly.fp, fly.tp, k); controls.target.lerpVectors(fly.ft, fly.tt, k);
+    if (fly.t >= 1) fly = null;
+  }
+  if (tour) { tourT += dt; if (tourT > 9) { tourT = 0; nextTour(); } }
+  // keep the camera on a selected colony as it moves
+  const sc = selected && meta ? meta.colonies.find(x => x.id === selected) : null;
+  ring.visible = !!sc;
+  if (sc) {
+    const p = colonyPos(sc), r = Math.max(2, sc.radius * worldScale(world, meta) * 1.3);
+    ring.position.copy(p); ring.position.y = 3.2 + 0.3 * Math.sin(t * 3); ring.scale.set(r, r, r);
+    ring.material.color.setRGB(sc.color[0] / 255, sc.color[1] / 255, sc.color[2] / 255);
+    if (!fly && controls.target.distanceTo(p) > 0.5) controls.target.lerp(p, 0.04);
+  }
   controls.update();
   animateVents(t);
+  updateLabels();
+  updateTip(performance.now());
   renderer.render(scene, camera);
 });
 </script>

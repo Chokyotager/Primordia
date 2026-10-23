@@ -529,6 +529,8 @@ pub fn colony_name(id: u32) -> String {
 #[derive(Default)]
 pub struct Tracker {
     prev: Vec<Colony>,
+    /// colony id per cell in the previous frame (0 = none)
+    prev_of: Vec<u32>,
     next_id: u32,
     last_epoch: u64,
 }
@@ -540,7 +542,7 @@ pub struct RenderCtx {
 
 impl Default for RenderCtx {
     fn default() -> Self {
-        RenderCtx { hist1d: vec![], tracker: Tracker { prev: vec![], next_id: 1, last_epoch: 0 } }
+        RenderCtx { hist1d: vec![], tracker: Tracker { next_id: 1, ..Default::default() } }
     }
 }
 
@@ -678,53 +680,50 @@ pub fn colonies(st: &State, p: &Params, infos: &[CellInfo], tr: &mut Tracker) ->
         col.prefix = votes.iter().map(|v| (0..256).max_by_key(|&b| v[b]).unwrap() as u8).collect();
         out.push(col);
     }
-    // match to the previous frame: similar opening and nearby centre
-    let maxd = (g.size[0].max(g.size[1]) as f32 * 0.15).max(8.0);
-    let mut used = vec![false; tr.prev.len()];
+    // Identity: a colony inherits the id of the previous colony that most of
+    // its cells belonged to (greedy, biggest colonies first); otherwise it is new.
     let dt = st.epoch.saturating_sub(tr.last_epoch).max(1) as f32;
-    for col in out.iter_mut() {
-        let mut best: Option<(usize, f32)> = None;
-        for (i, pc) in tr.prev.iter().enumerate() {
-            if used[i] {
-                continue;
-            }
-            let same = col.prefix.iter().zip(&pc.prefix).filter(|(a, b)| a == b).count();
-            if same < 10 {
-                continue;
-            }
-            let mut d2 = 0f32;
-            for a in 0..g.dims.max(1) as usize {
-                let s = g.size[a] as f32;
-                let mut dd = (col.center[a] - pc.center[a]).abs();
-                dd = dd.min(s - dd);
-                d2 += dd * dd;
-            }
-            let dist = d2.sqrt();
-            if dist > maxd + pc.radius {
-                continue;
-            }
-            let score = dist - same as f32 * 2.0;
-            if best.map(|b| score < b.1).unwrap_or(true) {
-                best = Some((i, score));
+    let have_prev = tr.prev_of.len() == n;
+    let mut taken = std::collections::HashSet::new();
+    for (gi, col) in out.iter_mut().enumerate() {
+        let mut votes: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+        if have_prev {
+            for &c in &groups[gi] {
+                let id = tr.prev_of[c as usize];
+                if id != 0 {
+                    *votes.entry(id).or_insert(0) += 1;
+                }
             }
         }
-        match best {
-            Some((i, _)) => {
-                used[i] = true;
-                let pc = &tr.prev[i];
+        let best = votes.into_iter().filter(|(id, _)| !taken.contains(id)).max_by_key(|&(id, v)| (v, std::cmp::Reverse(id)));
+        let prev = best.and_then(|(id, v)| {
+            let pc = tr.prev.iter().find(|p| p.id == id)?;
+            // enough overlap relative to either colony
+            if v * 4 >= groups[gi].len().min(pc.size) { Some(pc.clone()) } else { None }
+        });
+        match prev {
+            Some(pc) => {
+                taken.insert(pc.id);
                 col.id = pc.id;
                 col.first_seen = pc.first_seen;
                 col.growth = (col.size as f32 - pc.size as f32) / dt * 100.0;
             }
             None => {
-                col.id = tr.next_id;
-                tr.next_id += 1;
+                col.id = tr.next_id.max(1);
+                tr.next_id = col.id + 1;
                 col.first_seen = st.epoch;
             }
         }
         col.name = colony_name(col.id);
         col.color = COLONY_COLORS[(col.id as usize * 7) % COLONY_COLORS.len()];
     }
+    let mut pof = vec![0u32; n];
+    for (gi, cells) in groups.iter().enumerate() {
+        for &c in cells {
+            pof[c as usize] = out[gi].id;
+        }
+    }
+    tr.prev_of = pof;
     tr.prev = out.clone();
     tr.last_epoch = st.epoch;
     let mut of = vec![0u32; n];

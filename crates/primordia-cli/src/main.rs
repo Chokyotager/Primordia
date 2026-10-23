@@ -56,6 +56,10 @@ enum Cmd {
         /// Run phase 6 only on the GPU (state copied every epoch) instead of fully resident
         #[arg(long)]
         exec_only: bool,
+        /// Continue from a snapshot (<run>/snapshots/e*.psnap); `config` is then ignored
+        /// in favour of that run's config.toml (plus any --set overrides)
+        #[arg(long)]
+        resume: Option<PathBuf>,
     },
     /// Grid sweep over config keys x seeds.
     Batch {
@@ -290,8 +294,12 @@ fn main() -> Result<()> {
                 println!("{n}");
             }
         }
-        Cmd::Run { config, seed, headless, epochs, out, cpu, set, progress, events, autorun, web, exec_only } => {
-            let cfg = load_config(&config, seed, &set)?;
+        Cmd::Run { config, seed, headless, epochs, out, cpu, set, progress, events, autorun, web, exec_only, resume } => {
+            let parent_dir = resume.as_ref().map(|sp| sp.parent().and_then(|d| d.parent()).map(|d| d.to_path_buf()).context("snapshot must live in <run>/snapshots/")).transpose()?;
+            let cfg = match &parent_dir {
+                Some(d) => load_config(&d.join("config.toml").display().to_string(), seed, &set)?,
+                None => load_config(&config, seed, &set)?,
+            };
             let epochs = epochs.unwrap_or(cfg.epochs);
             let dir = out.unwrap_or_else(|| default_dir(&cfg, &config));
             let p = Params::new(&cfg);
@@ -299,11 +307,25 @@ fn main() -> Result<()> {
             let name = be.name();
             println!("primordia run: {} cells, dims {}, backend {name}, out {}", p.geom.n, p.geom.dims, dir.display());
             let mut rd = RunDir::create(&dir, &cfg, &name, None)?;
-            let mut sim = Sim::from_state(cfg.clone(), p.clone(), State::init(&cfg, &p), be)?;
-            if let Some(ev) = events {
-                for e in read_events(&ev)? {
-                    sim.push_event(e);
+            let st0 = match &resume {
+                Some(sp) => {
+                    let (mut st, _) = State::read_snapshot(sp, &p)?;
+                    st.reset_ledger(&p);
+                    println!("resuming from {} at epoch {}", sp.display(), st.epoch);
+                    st
                 }
+                None => State::init(&cfg, &p),
+            };
+            let start_epoch = st0.epoch;
+            let mut sim = Sim::from_state(cfg.clone(), p.clone(), st0, be)?;
+            let mut evs = match (&events, &parent_dir) {
+                (Some(ev), _) => read_events(ev)?,
+                (None, Some(d)) => read_events(&d.join("events.jsonl"))?,
+                _ => vec![],
+            };
+            evs.retain(|e| e.epoch >= start_epoch);
+            for e in evs {
+                sim.push_event(e);
             }
             if headless {
                 let feed = match &web {

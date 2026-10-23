@@ -22,33 +22,40 @@ cargo build --release
 intervention list, `--autorun` starts the viewer running, and `--web 0.0.0.0:8765` serves the read-only
 three.js browser viewer (works with `--headless` too).
 
-### GPU-resident mode (default)
+### GPU-resident, pipelined (default)
 
-The whole state stays on the GPU: `crates/primordia-gpu/src/phys.wgsl` ports every phase except interventions
-and vent bookkeeping, and `exec.wgsl` ports the interpreter. Each epoch reads back only the ledger and tally sums,
-the births and, when someone voted, the body-move convergence flag. The full state is downloaded only when
-telemetry, hashing, snapshots or the viewer need it. The CPU golden model uses the same 32-bit-exact arithmetic
-helpers (`fixed.rs`), and `gpu/tests/parity.rs` checks the resident path bit for bit against it every epoch,
-including a fuzz test over boundaries, walls, vents and interventions.
+The whole state stays on the GPU: `phys.wgsl` ports every phase except interventions and vent bookkeeping,
+and `exec.wgsl` ports the interpreter. Each epoch is one command buffer, and up to 6 epochs are in flight.
+Tallies and births come back through a ring of staging buffers mapped asynchronously. Whether the bodies
+phase runs is decided on the GPU (indirect dispatch gated by the vote count; union-find labelling rounds
+gated by a "changed" flag), so no epoch waits on a read-back. Telemetry, run-directory hashes and snapshots,
+the viewers and the web feed run on an observer thread from asynchronous state snapshots.
+`gpu/tests/parity.rs` checks it bit for bit against the CPU golden model, including the
+pipelined/asynchronous path. `PRIMORDIA_PROFILE=1 primordia bench` breaks GPU time down by phase.
 
-| World | exec-only GPU | resident GPU |
-| --- | --- | --- |
-| 2D 1023² full physics | 1.8 epochs/s | 18 epochs/s |
-| 2D 501² full physics | 8.7 epochs/s | 41 epochs/s (183/s on an evolved world) |
-| 3D 99³ full physics | 1.8 epochs/s | 9.8 epochs/s |
+| World (RTX 5070) | interpreter on GPU only | resident | resident + pipelined + kernel work |
+| --- | --- | --- | --- |
+| 2D 1023² full physics | 1.8 ep/s | 18 | **48** |
+| 2D 501² full physics | 8.7 | 41 | **127** |
+| 3D 99³ full physics | 1.8 | 9.8 | **34** |
+| paper-0d (8192 steps) | 9.7 | 10.6 | **32** |
+
+GPU utilisation during a full run with viewer, telemetry and web feed: 95–98%.
 
 ### Viewers
 
-* Native (egui): the default "Life" view colours cells by family (programs that share their opening bytes),
-  shows brightness by energy, greys out dormant cells, glows the ground with food and heat, and draws vents as
-  pulsing beacons. At high zoom, cells become discs joined by their bonds. It also has a legend,
-  plain-language hover cards, dashboard cards (population, families, complexity, copiers, largest body,
-  a handedness meter, conservation), a Chronicle of notable events, trend plots, the inspector/debugger,
-  and the intervention tools (collapsed by default).
-* Browser (three.js, `--web`): a read-only observer. The world is a lit landscape (colonies raised and
-  coloured, food and heat in the ground, vents as glowing plumes, sky and sun following the day/night
-  cycle), with a HUD showing the same dashboard, chronicle and trends. The server answers only GET
-  requests for `/`, `/meta.json` and `/frame.bin`.
+* Native (egui). The default "Colonies" view finds colonies: spatially connected groups of related cells
+  whose programs share their opening bytes. Each gets a stable identity, colour and name across frames
+  (overlap tracking). The atlas tab lists them (size, growth, copiers, bonding, handedness, typical program);
+  click one to fly there, use "follow" to track it, or `[` / `]` to cycle. The map shows name labels, vents
+  as beacons, a minimap when zoomed in, bonds and discs at high zoom, and plain-language hover cards.
+  Tabs also hold the Chronicle and the Inspector; dashboard cards and trends sit above and below; the
+  interventions are collapsed under Tools.
+* Browser (three.js, `--web 0.0.0.0:8765`): a read-only observer. It shows a landscape coloured by colony,
+  a colony atlas with fly-to, floating name tags, a Tour mode, Overview / Top-down cameras, a spin toggle
+  (off by default, remembered), hover cards, a chronicle and trends. The server answers only GET requests.
+* `primordia run x --resume <run>/snapshots/e….psnap` continues a run from a snapshot. Closing the viewer
+  saves a final snapshot.
 
 ## Layout
 

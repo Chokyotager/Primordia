@@ -37,8 +37,9 @@ impl Feed {
     }
 }
 
-/// (meta JSON, frame bytes). Frame: n x (r, g, b, height) followed by n flag
-/// bytes (bit0 occupied, bit1 dormant, bit2 copier, bit3 bonded, bit4 wall).
+/// (meta JSON, frame bytes). Frame: n x (r, g, b, height), then n flag bytes
+/// (bit0 occupied, bit1 dormant, bit2 copier, bit3 bonded, bit4 wall), then n
+/// colony bytes (index into meta.colonies + 1, 0 = none).
 pub fn payload(sim: &Sim, rec: &Recorder, eps: f64, sun: f32, chronicle: &[Note]) -> (String, Vec<u8>) {
     let infos = render::cell_infos(&sim.st);
     let (cols, of) = render::colonies(&sim.st, &sim.p, &infos, &mut render::Tracker::default());
@@ -85,6 +86,9 @@ pub fn payload_parts(
             b |= 16;
         }
         f.push(b);
+    }
+    for c in 0..st.n {
+        f.push(colony_of.get(c).map(|&k| k.min(255) as u8).unwrap_or(0));
     }
     let grid = match g.dims {
         0 => {

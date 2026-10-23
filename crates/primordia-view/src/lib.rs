@@ -286,6 +286,11 @@ fn stepper(mut sim: Sim, mut obs: Observer, rx: Receiver<Cmd>, status: Arc<Mutex
         while let Ok(c) = rx.try_recv() {
             match c {
                 Cmd::Quit => {
+                    // save the final state so the run can be resumed exactly here
+                    if !wants.contains_key(&sim.st.epoch) {
+                        sim.request_snapshot();
+                        wants.insert(sim.st.epoch, Want { save: true, telemetry: true, ..Default::default() });
+                    }
                     for st in sim.take_snapshots(true) {
                         let w = wants.remove(&st.epoch).unwrap_or_default();
                         obs.deliver(st, w, eps, backend.clone());
@@ -703,7 +708,7 @@ impl App {
     }
 
     fn fly_to(&mut self, c: &Colony) {
-        let z = (60.0 / (c.radius * 2.5 + 8.0)).clamp(1.5, 40.0) * 4.0;
+        let z = (60.0 / (c.radius * 2.5 + 8.0)).clamp(1.5, 40.0) * 2.5;
         self.fly = Some(([c.center[0], c.center[1]], z));
         self.selected = Some(c.id);
     }
