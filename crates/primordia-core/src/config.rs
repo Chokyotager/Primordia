@@ -69,6 +69,9 @@ pub struct IndividualCfg {
     pub max_age: u32,
     /// `SLEEP n` sleeps for min(n, 255) x this many epochs (1 = as in the spec).
     pub sleep_scale: u32,
+    /// A sleeping cell's tape cannot be written or digested by neighbours
+    /// (a spore); reading it is still allowed.
+    pub sleep_shield: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -400,6 +403,7 @@ impl Default for IndividualCfg {
             starve_after: 0,
             max_age: 0,
             sleep_scale: 1,
+            sleep_shield: false,
         }
     }
 }

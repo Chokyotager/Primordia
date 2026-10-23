@@ -222,6 +222,39 @@ fn t1_sleep_scale() {
     }
 }
 
+/// With individual.sleep_shield a sleeping neighbour cannot be copied over;
+/// once it wakes (or without the shield) the same copy succeeds.
+#[test]
+fn t1_sleep_shield() {
+    for shield in [false, true] {
+        let mut cfg = deterministic_cfg(2);
+        cfg.mutation.copy.sub = 0.0;
+        cfg.mutation.copy.ins = 0.0;
+        cfg.mutation.copy.del = 0.0;
+        cfg.shielding.enabled = false;
+        cfg.chirality.stereo_copy = false;
+        cfg.individual.step_budget = 16;
+        cfg.individual.sleep_shield = shield;
+        let (p, mut st) = blank(&cfg);
+        let c = p.geom.index([5, 5, 0]);
+        let o = p.orient.valid[2][0]; // facing +x
+        let t = p.geom.index([6, 5, 0]);
+        put(&mut st, &p, c, &isa::MINIMAL_REPLICATOR, o, 10_000);
+        put(&mut st, &p, t, &[0, 0, 0, 0], o, 0);
+        st.hdr[t * HDR + H_SLEEP] = 100;
+        *st.fm(t, p.f_pool(isa::CL_A as usize)) = 4;
+        run1(&mut st, &p, c);
+        let want: &[u8] = if shield { &[0, 0, 0, 0] } else { &isa::MINIMAL_REPLICATOR };
+        assert_eq!(st.tape(t), want, "shield {shield}: sleeping target");
+        if shield {
+            st.hdr[t * HDR + H_SLEEP] = 0;
+            st.hdr[c * HDR + H_FLAGS] &= !FL_EXEC;
+            run1(&mut st, &p, c);
+            assert_eq!(st.tape(t), &isa::MINIMAL_REPLICATOR, "awake target is copied");
+        }
+    }
+}
+
 // ------------------------------------------------------------------ T2
 
 #[test]

@@ -128,7 +128,8 @@ inputs that reproduce them are: `runs/live-s8.toml` (the long-running live world
   dormant (zero energy) for that many epochs without a break, so that space keeps opening up;
   `energy.sun.moon` keeps night-time light at a floor (a fraction of full sun); `individual.max_age` kills
   a cell once it is that many epochs old; `individual.sleep_scale` multiplies the length of each `SLEEP`
-  (default 1, as in the spec). All four run identically on the CPU and the GPU.
+  (default 1, as in the spec); `individual.sleep_shield` stops neighbours writing to or digesting a sleeping
+  cell's tape. All five run identically on the CPU and the GPU.
 * **paper-2d** uses the checkerboard scheduler with face neighbours, not the paper's radius-2 random-claim
   scheduler. paper-0d/2d use `step_budget = 8192`, as cubff does.
 * **Defaults that the spec leaves open:** jumps, `PUSH`, fillers and `JREL` cost 1; `DIGEST` costs 2 per

@@ -139,6 +139,9 @@ impl<'a> Cpu<'a> {
     /// Soft geometric shielding for a write into foreign cell `t`.
     fn shield_ok(&mut self, st: &State, t: usize) -> bool {
         let p = self.p;
+        if p.sleep_shield && t != self.me && st.h(t, H_SLEEP) > 0 {
+            return false;
+        }
         if !p.shield_on || t == self.me {
             return true;
         }

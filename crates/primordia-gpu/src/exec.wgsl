@@ -245,6 +245,7 @@ fn flip_frame(v: u32, bit: u32) -> u32 {
 }
 
 fn shield_ok(t: u32) -> bool {
+    if (has(F_SLEEP_SHIELD) && t != me && hdr[t * HDR + H_SLEEP] > 0u) { return false; }
     if (!has(F_SHIELD) || t == me) { return true; }
     var key = 6u;
     var dir_to_me = NONE;
