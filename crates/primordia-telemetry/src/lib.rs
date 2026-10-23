@@ -57,9 +57,39 @@ pub struct Recorder {
     pub summary: Summary,
     /// Recent time series for live plots (metric name -> (epoch, value)).
     pub series: BTreeMap<String, Vec<[f64; 2]>>,
+    /// The same metrics as mean / min / max buckets over the whole run
+    /// (merged pairwise when full, so day/night swings never alias).
+    pub bands: BTreeMap<String, Vec<Band>>,
     pub last_domains: Vec<i8>,
     pub last_assay: Vec<AssayResult>,
     pub max_series: usize,
+}
+
+/// A bucket of consecutive samples of one metric.
+#[derive(Clone, Copy, Debug)]
+pub struct Band {
+    pub e0: f64,
+    pub e1: f64,
+    pub n: f64,
+    pub sum: f64,
+    pub lo: f64,
+    pub hi: f64,
+}
+
+impl Band {
+    pub fn merge(bs: &[Band]) -> Band {
+        let mut m = bs[0];
+        for b in &bs[1..] {
+            m = Band { e0: m.e0.min(b.e0), e1: m.e1.max(b.e1), n: m.n + b.n, sum: m.sum + b.sum, lo: m.lo.min(b.lo), hi: m.hi.max(b.hi) };
+        }
+        m
+    }
+    pub fn mid(&self) -> f64 {
+        (self.e0 + self.e1) / 2.0
+    }
+    pub fn mean(&self) -> f64 {
+        self.sum / self.n
+    }
 }
 
 fn cols(c: &[(&'static str, Ty)]) -> Vec<(&'static str, Ty)> {
@@ -130,6 +160,7 @@ impl Recorder {
             last_interface: None,
             summary: Summary::default(),
             series: BTreeMap::new(),
+            bands: BTreeMap::new(),
             last_domains: vec![],
             last_assay: vec![],
             max_series: 20_000,
@@ -138,10 +169,17 @@ impl Recorder {
 
     fn series(&mut self, name: &str, e: u64, v: f64) {
         let s = self.series.entry(name.to_string()).or_default();
+        let b = self.bands.entry(name.to_string()).or_default();
+        if v.is_finite() {
+            b.push(Band { e0: e as f64, e1: e as f64, n: 1.0, sum: v, lo: v, hi: v });
+        }
+        if b.len() > self.max_series {
+            *b = b.chunks(2).map(Band::merge).collect();
+            *s = b.iter().map(|b| [b.mid(), b.mean()]).collect();
+        }
         s.push([e as f64, v]);
-        if s.len() > self.max_series {
-            let keep: Vec<[f64; 2]> = s.iter().step_by(2).copied().collect();
-            *s = keep;
+        if s.len() > 2 * self.max_series {
+            *s = s.iter().step_by(2).copied().collect();
         }
     }
 
@@ -395,10 +433,40 @@ impl Recorder {
             self.series("species", e, s.species as f64);
         }
         self.summary = s;
+        if due(cfg.telemetry.snapshot_every) {
+            self.save_history()?;
+        }
+        Ok(())
+    }
+
+    /// Write the plot history to `<run>/history.json` (beside the snapshots),
+    /// so a run resumed from this directory keeps its graphs.
+    pub fn save_history(&self) -> Result<()> {
+        let Some(d) = &self.dir else { return Ok(()) };
+        let h: BTreeMap<&String, Vec<[f64; 6]>> = self.bands.iter().map(|(k, v)| (k, v.iter().map(|b| [b.e0, b.e1, b.n, b.sum, b.lo, b.hi]).collect())).collect();
+        let tmp = d.join("history.json.tmp");
+        std::fs::write(&tmp, serde_json::to_vec(&h)?)?;
+        std::fs::rename(tmp, d.join("history.json"))?;
+        Ok(())
+    }
+
+    /// Seed the plot history from a parent run's `history.json`, keeping
+    /// only samples at or before `upto` (the epoch being resumed from).
+    pub fn load_history(&mut self, path: &Path, upto: u64) -> Result<()> {
+        let h: BTreeMap<String, Vec<[f64; 6]>> = serde_json::from_slice(&std::fs::read(path)?)?;
+        for (k, v) in h {
+            let mut b: Vec<Band> = v.into_iter().filter(|x| x[1] <= upto as f64).map(|x| Band { e0: x[0], e1: x[1], n: x[2], sum: x[3], lo: x[4], hi: x[5] }).collect();
+            while b.len() > self.max_series {
+                b = b.chunks(2).map(Band::merge).collect();
+            }
+            self.series.insert(k.clone(), b.iter().map(|b| [b.mid(), b.mean()]).collect());
+            self.bands.insert(k, b);
+        }
         Ok(())
     }
 
     pub fn finish(&mut self) -> Result<Summary> {
+        self.save_history()?;
         for t in [&mut self.metrics, &mut self.chir, &mut self.species_t, &mut self.lineage, &mut self.opcodes, &mut self.ecology, &mut self.assay] {
             t.close()?;
         }

@@ -43,7 +43,7 @@ impl Feed {
 pub fn payload(sim: &Sim, rec: &Recorder, eps: f64, sun: f32, chronicle: &[Note]) -> (String, Vec<u8>) {
     let infos = render::cell_infos(&sim.st);
     let (cols, of) = render::colonies(&sim.st, &sim.p, &infos, &mut render::Tracker::default());
-    payload_parts(&sim.st, &sim.p, &sim.backend.name(), &rec.summary, &rec.series, eps, sun, chronicle, &infos, &cols, &of)
+    payload_parts(&sim.st, &sim.p, &sim.backend.name(), &rec.summary, &rec.bands, eps, sun, chronicle, &infos, &cols, &of)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -52,7 +52,7 @@ pub fn payload_parts(
     p: &primordia_core::Params,
     backend: &str,
     summary: &primordia_telemetry::Summary,
-    series: &std::collections::BTreeMap<String, Vec<[f64; 2]>>,
+    bands: &std::collections::BTreeMap<String, Vec<primordia_telemetry::Band>>,
     eps: f64,
     sun: f32,
     chronicle: &[Note],
@@ -98,10 +98,10 @@ pub fn payload_parts(
         _ => g.size,
     };
     let s = summary;
-    let tail = |k: &str| -> Vec<[f64; 2]> {
-        let v = series.get(k).cloned().unwrap_or_default();
-        let step = (v.len() / 300).max(1);
-        v.into_iter().step_by(step).collect()
+    // At most ~300 points per plot: [epoch, mean, min, max] per slice of history.
+    let tail = |k: &str| -> Vec<[f64; 4]> {
+        let v = bands.get(k).map(|v| v.as_slice()).unwrap_or_default();
+        v.chunks(v.len().div_ceil(300).max(1)).map(primordia_telemetry::Band::merge).map(|b| [b.mid(), b.mean(), b.lo, b.hi]).collect()
     };
     let meta = serde_json::json!({
         "epoch": st.epoch,

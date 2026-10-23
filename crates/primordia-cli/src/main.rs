@@ -226,12 +226,22 @@ fn print_summary(s: &Summary) {
 /// on this thread; telemetry and run-directory output happen on the observer
 /// thread from asynchronous snapshots.
 fn run_headless(sim: &mut Sim, rd: RunDir, epochs: u64, progress: u64) -> Result<Summary> {
-    run_headless_feed(sim, rd, epochs, progress, None)
+    run_headless_feed(sim, rd, epochs, progress, None, None)
 }
 
-fn run_headless_feed(sim: &mut Sim, rd: RunDir, epochs: u64, progress: u64, feed: Option<std::sync::Arc<primordia_view::web::Feed>>) -> Result<Summary> {
+/// Carry a parent run's plot history into a resumed run (best effort).
+fn seed_history(rec: &mut Recorder, parent: Option<&std::path::Path>, upto: u64) {
+    let Some(path) = parent.map(|d| d.join("history.json")).filter(|p| p.exists()) else { return };
+    match rec.load_history(&path, upto) {
+        Ok(()) => println!("plot history carried over from {}", path.display()),
+        Err(e) => eprintln!("warning: could not load {}: {e:#}", path.display()),
+    }
+}
+
+fn run_headless_feed(sim: &mut Sim, rd: RunDir, epochs: u64, progress: u64, feed: Option<std::sync::Arc<primordia_view::web::Feed>>, parent: Option<&std::path::Path>) -> Result<Summary> {
     use primordia_view::observer::{Msg, Observer, Want};
-    let rec = Recorder::new(Some(&rd.dir), sim)?;
+    let mut rec = Recorder::new(Some(&rd.dir), sim)?;
+    seed_history(&mut rec, parent, sim.st.epoch);
     let events = sim.events.clone();
     let view = primordia_view::ViewSettings::default(&sim.p);
     let mut obs = Observer::spawn(sim.cfg.clone(), sim.p.clone(), rec, Some(Box::new(rd)), feed, view, false);
@@ -341,11 +351,12 @@ fn main() -> Result<()> {
                     }
                     None => None,
                 };
-                let s = run_headless_feed(&mut sim, rd, epochs, progress, feed)?;
+                let s = run_headless_feed(&mut sim, rd, epochs, progress, feed, parent_dir.as_deref())?;
                 print_summary(&s);
                 println!("{}", serde_json::to_string_pretty(&s)?);
             } else {
-                let rec = Recorder::new(Some(&dir), &sim)?;
+                let mut rec = Recorder::new(Some(&dir), &sim)?;
+                seed_history(&mut rec, parent_dir.as_deref(), start_epoch);
                 for e in &sim.events {
                     rd.log_event(e)?;
                 }

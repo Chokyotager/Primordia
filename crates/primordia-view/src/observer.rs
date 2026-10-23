@@ -197,7 +197,7 @@ fn run(rx: Receiver<Msg>, cfg: Config, p: Params, mut rec: Recorder, mut sink: O
                 if w.web {
                     if let Some(f) = &feed {
                         let chronicle: Vec<Note> = shared.lock().unwrap().chronicle.iter().rev().take(30).cloned().collect();
-                        let (m, b) = web::payload_parts(&st, &p, &backend, &rec.summary, &rec.series, eps, sun, &chronicle, &infos, &cols, &of);
+                        let (m, b) = web::payload_parts(&st, &p, &backend, &rec.summary, &rec.bands, eps, sun, &chronicle, &infos, &cols, &of);
                         f.set(m, b);
                     }
                 }
