@@ -17,8 +17,38 @@ cargo build --release
 ./target/release/primordia batch sweep.toml
 ```
 
-`--set key=value` overrides any config key (TOML value syntax), `--cpu` uses the CPU golden model for the
-execution phase, `--events file.jsonl` applies a logged intervention list, `--autorun` starts the viewer running.
+`--set key=value` overrides any config key (TOML value syntax), `--cpu` uses the CPU golden model,
+`--exec-only` keeps physics on the CPU and only interprets on the GPU, `--events file.jsonl` applies a logged
+intervention list, `--autorun` starts the viewer running, and `--web 0.0.0.0:8765` serves the read-only
+three.js browser viewer (works with `--headless` too).
+
+### GPU-resident mode (default)
+
+The whole state stays on the GPU: `crates/primordia-gpu/src/phys.wgsl` ports every phase except interventions
+and vent bookkeeping, and `exec.wgsl` ports the interpreter. Each epoch reads back only the ledger and tally sums,
+the births and, when someone voted, the body-move convergence flag. The full state is downloaded only when
+telemetry, hashing, snapshots or the viewer need it. The CPU golden model uses the same 32-bit-exact arithmetic
+helpers (`fixed.rs`), and `gpu/tests/parity.rs` checks the resident path bit for bit against it every epoch,
+including a fuzz test over boundaries, walls, vents and interventions.
+
+| World | exec-only GPU | resident GPU |
+| --- | --- | --- |
+| 2D 1023² full physics | 1.8 epochs/s | 18 epochs/s |
+| 2D 501² full physics | 8.7 epochs/s | 41 epochs/s (183/s on an evolved world) |
+| 3D 99³ full physics | 1.8 epochs/s | 9.8 epochs/s |
+
+### Viewers
+
+* Native (egui): the default "Life" view colours cells by family (programs that share their opening bytes),
+  shows brightness by energy, greys out dormant cells, glows the ground with food and heat, and draws vents as
+  pulsing beacons. At high zoom, cells become discs joined by their bonds. It also has a legend,
+  plain-language hover cards, dashboard cards (population, families, complexity, copiers, largest body,
+  a handedness meter, conservation), a Chronicle of notable events, trend plots, the inspector/debugger,
+  and the intervention tools (collapsed by default).
+* Browser (three.js, `--web`): a read-only observer. The world is a lit landscape (colonies raised and
+  coloured, food and heat in the ground, vents as glowing plumes, sky and sun following the day/night
+  cycle), with a HUD showing the same dashboard, chronicle and trends. The server answers only GET
+  requests for `/`, `/meta.json` and `/frame.bin`.
 
 ## Layout
 

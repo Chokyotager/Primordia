@@ -85,13 +85,13 @@ pub struct ViewSettings {
     pub chem_h: usize,
     pub sig_j: usize,
     pub slice: [u32; 3],
-    pub params: Params,
+    pub params: std::sync::Arc<Params>,
 }
 
 impl ViewSettings {
     pub fn default(p: &Params) -> ViewSettings {
         let s = p.geom.size;
-        ViewSettings { mode: Mode::Life, chem_k: 0, chem_h: 0, sig_j: 0, slice: [s[0] / 2, s[1] / 2, s[2] / 2], params: p.clone() }
+        ViewSettings { mode: Mode::Life, chem_k: 0, chem_h: 0, sig_j: 0, slice: [s[0] / 2, s[1] / 2, s[2] / 2], params: std::sync::Arc::new(p.clone()) }
     }
     /// UI-side copy: only geometry is needed for coordinate mapping.
     pub fn from_out(dims: u32, size: [u32; 3]) -> ViewSettings {
@@ -99,7 +99,7 @@ impl ViewSettings {
         c.world.dims = dims;
         c.world.size = if dims == 0 { vec![size[0]] } else { size[..dims as usize].to_vec() };
         let p = Params::new(&c);
-        ViewSettings { mode: Mode::Life, chem_k: 0, chem_h: 0, sig_j: 0, slice: [size[0] / 2, size[1] / 2, size[2] / 2], params: p }
+        ViewSettings { mode: Mode::Life, chem_k: 0, chem_h: 0, sig_j: 0, slice: [size[0] / 2, size[1] / 2, size[2] / 2], params: std::sync::Arc::new(p) }
     }
 }
 
@@ -150,15 +150,15 @@ pub fn ramp(x: f32) -> [u8; 3] {
     [r, g, b]
 }
 
-/// Similar genomes share their minimum 4-gram hash (MinHash with one function).
+/// Family key: programs run from their first byte and copies are written
+/// from the start of the partner's tape, so relatives share their opening
+/// bytes even when their tails differ.
 pub fn genome_hash(t: &[u8]) -> u32 {
-    let mut m = u32::MAX;
-    for w in t.windows(4) {
-        let g = u32::from_le_bytes([w[0], w[1], w[2], w[3]]);
-        let h = g.wrapping_mul(0x9E3779B1).rotate_left(13).wrapping_mul(0x85EBCA77);
-        m = m.min(h);
+    let mut h = 0x811c_9dc5u32;
+    for &b in t.iter().take(12) {
+        h = (h ^ b as u32).wrapping_mul(0x0100_0193);
     }
-    m
+    h ^ (h >> 15)
 }
 
 /// Heuristic: the program contains a copy loop (CPY, a head increment and a backward jump).

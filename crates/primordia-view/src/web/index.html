@@ -119,7 +119,7 @@ scene.add(hemi);
 const sunLight = new THREE.DirectionalLight(0xfff1d6, 1.2);
 scene.add(sunLight);
 scene.add(sunLight.target);
-const DAY = new THREE.Color(0x5d93c9), NIGHT = new THREE.Color(0x05070d);
+const DAY = new THREE.Color(0x5d93c9), NIGHT = new THREE.Color(0x0a1020);
 scene.background = NIGHT.clone();
 scene.fog = new THREE.Fog(NIGHT.clone(), 200, 900);
 
@@ -340,8 +340,8 @@ function sky(sun) {
   const c = NIGHT.clone().lerp(DAY, Math.min(1, sun * 1.2));
   scene.background = c; scene.fog.color.copy(c);
   stars.material.opacity = Math.max(0, 1 - sun * 2.5);
-  sunLight.intensity = 0.15 + 2.2 * sun;
-  hemi.intensity = 0.35 + 0.5 * sun;
+  sunLight.intensity = 0.45 + 2.0 * sun;
+  hemi.intensity = 0.9 + 0.5 * sun;
   sunLight.position.set(WORLD_W * 0.6, 40 + 160 * sun, WORLD_W * 0.3);
 }
 

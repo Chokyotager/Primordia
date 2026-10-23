@@ -257,12 +257,18 @@ fn worker(mut sim: Sim, mut rec: Recorder, mut hook: Hook, rx: Receiver<Cmd>, ou
     let mut view = ViewSettings::default(&sim.p);
     let mut lineage: HashMap<u32, u32> = HashMap::new();
     let mut last_render = Instant::now() - Duration::from_secs(10);
-    let mut render_cost = Duration::from_millis(10);
+    let busy = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (job_tx, job_rx) = channel::<RenderJob>();
+    {
+        let out = out.clone();
+        let busy = busy.clone();
+        let feed = feed.clone();
+        std::thread::spawn(move || render_thread(job_rx, out, busy, feed));
+    }
     let mut rate_t = Instant::now();
     let mut rate_e = sim.st.epoch;
     let mut eps = 0.0;
     let mut dirty = true;
-    let mut history_1d: Vec<Vec<u8>> = vec![];
     let mut chron = Chronicler::new();
     let mut last_web = Instant::now() - Duration::from_secs(10);
     {
@@ -332,8 +338,9 @@ fn worker(mut sim: Sim, mut rec: Recorder, mut hook: Hook, rx: Receiver<Cmd>, ou
             if sub {
                 let mut frames = vec![];
                 let v = view.clone();
+                let pp = v.params.clone();
                 sim.step_substeps(|st, i| {
-                    let mut f = render::render(st, &v.params, &v, &[], &mut vec![]);
+                    let mut f = render::render(st, &pp, &v, &[], &mut vec![]);
                     f.images.iter_mut().for_each(|im| im.label = format!("{} — sub-step {}", im.label, i));
                     frames.push(f);
                 });
@@ -371,33 +378,34 @@ fn worker(mut sim: Sim, mut rec: Recorder, mut hook: Hook, rx: Receiver<Cmd>, ou
                 rate_e = sim.st.epoch;
             }
         }
-        // throttle rendering so that it never costs more than ~1/3 of the time
-        let min_gap = (render_cost * 2).max(Duration::from_millis(60));
-        let web_due = feed.is_some() && last_web.elapsed() > Duration::from_millis(1500).max(render_cost * 3);
-        if (dirty && last_render.elapsed() > min_gap) || web_due {
-            let t0 = Instant::now();
+        // Rendering runs on its own thread from a copy of the state, so the
+        // simulation keeps stepping while a frame is coloured.
+        let web_due = feed.is_some() && last_web.elapsed() > Duration::from_millis(1500);
+        let draw_due = dirty && last_render.elapsed() > Duration::from_millis(80);
+        if (draw_due || web_due) && !busy.load(std::sync::atomic::Ordering::Acquire) {
             sim.sync();
-            if dirty && last_render.elapsed() > min_gap {
-                let f = render::render(&sim.st, &sim.p, &view, &rec.last_domains, &mut history_1d);
-                let mut o = out.lock().unwrap();
-                o.frame = Some(Arc::new(f));
-                o.summary = rec.summary.clone();
-                o.series = rec.series.clone();
-                o.top_genomes = rec.last_assay.iter().filter(|a| a.replicator).map(|a| isa::to_hex(&a.minimal)).collect();
-                o.sun = sun_level(&sim);
-                o.births = sim.st.tally.births;
-                o.deaths = sim.st.tally.deaths;
+            busy.store(true, std::sync::atomic::Ordering::Release);
+            let chronicle = if web_due { out.lock().unwrap().chronicle.iter().rev().take(30).cloned().collect() } else { vec![] };
+            let _ = job_tx.send(RenderJob {
+                st: sim.st.clone(),
+                view: view.clone(),
+                domains: rec.last_domains.clone(),
+                summary: rec.summary.clone(),
+                series: rec.series.clone(),
+                top: rec.last_assay.iter().filter(|a| a.replicator).map(|a| isa::to_hex(&a.minimal)).collect(),
+                sun: sun_level(&sim),
+                births: sim.st.tally.births,
+                deaths: sim.st.tally.deaths,
+                draw: draw_due,
+                web: if web_due { Some((eps, chronicle, sim.backend.name())) } else { None },
+            });
+            if draw_due {
                 dirty = false;
                 last_render = Instant::now();
             }
-            if let Some(f) = &feed {
-                if web_due {
-                    let chronicle = out.lock().unwrap().chronicle.iter().rev().take(30).cloned().collect::<Vec<_>>();
-                    f.publish(&sim, &rec, eps, sun_level(&sim), &chronicle);
-                    last_web = Instant::now();
-                }
+            if web_due {
+                last_web = Instant::now();
             }
-            render_cost = t0.elapsed();
         }
         {
             let mut o = out.lock().unwrap();
@@ -408,6 +416,43 @@ fn worker(mut sim: Sim, mut rec: Recorder, mut hook: Hook, rx: Receiver<Cmd>, ou
         if !do_step {
             std::thread::sleep(Duration::from_millis(15));
         }
+    }
+}
+
+struct RenderJob {
+    st: primordia_core::State,
+    view: ViewSettings,
+    domains: Vec<i8>,
+    summary: Summary,
+    series: BTreeMap<String, Vec<[f64; 2]>>,
+    top: Vec<String>,
+    sun: f32,
+    births: u64,
+    deaths: u64,
+    draw: bool,
+    web: Option<(f64, Vec<Note>, String)>,
+}
+
+fn render_thread(rx: Receiver<RenderJob>, out: Arc<Mutex<Out>>, busy: Arc<std::sync::atomic::AtomicBool>, feed: Option<Arc<web::Feed>>) {
+    let mut history_1d: Vec<Vec<u8>> = vec![];
+    while let Ok(j) = rx.recv() {
+        let p = j.view.params.clone();
+        if j.draw {
+            let f = render::render(&j.st, &p, &j.view, &j.domains, &mut history_1d);
+            let mut o = out.lock().unwrap();
+            o.frame = Some(Arc::new(f));
+            o.summary = j.summary.clone();
+            o.series = j.series.clone();
+            o.top_genomes = j.top;
+            o.sun = j.sun;
+            o.births = j.births;
+            o.deaths = j.deaths;
+        }
+        if let (Some(f), Some((eps, chron, backend))) = (&feed, j.web) {
+            let (m, b) = web::payload_parts(&j.st, &p, &backend, &j.summary, &j.series, eps, j.sun, &chron);
+            f.set(m, b);
+        }
+        busy.store(false, std::sync::atomic::Ordering::Release);
     }
 }
 
@@ -1015,8 +1060,8 @@ impl eframe::App for App {
         });
 
         // ---------------- bottom: plots
-        egui::Panel::bottom("plots").exact_size(if self.show_plots { 230.0 } else { 30.0 }).show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
+        egui::Panel::bottom("plots").exact_size(if self.show_plots { 240.0 } else { 34.0 }).show(ui, |ui| {
+            ui.horizontal(|ui| {
                 ui.checkbox(&mut self.show_plots, RichText::new("Trends").strong());
                 if self.show_plots {
                     for k in series.keys() {
@@ -1024,9 +1069,11 @@ impl eframe::App for App {
                             self.plots.insert(k.clone(), false);
                         }
                     }
-                    for (k, on) in self.plots.iter_mut() {
-                        ui.checkbox(on, RichText::new(k).small());
-                    }
+                    ui.menu_button("choose metrics ▾", |ui| {
+                        for (k, on) in self.plots.iter_mut() {
+                            ui.checkbox(on, k.as_str());
+                        }
+                    });
                 }
             });
             if !self.show_plots {

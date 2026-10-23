@@ -27,7 +27,10 @@ impl Feed {
     /// Publish the current state (the caller must have synced the simulation).
     pub fn publish(&self, sim: &Sim, rec: &Recorder, eps: f64, sun: f32, chronicle: &[Note]) {
         let (m, f) = payload(sim, rec, eps, sun, chronicle);
-        *self.latest.lock().unwrap() = Some((Arc::new(m), Arc::new(f)));
+        self.set(m, f);
+    }
+    pub fn set(&self, meta: String, frame: Vec<u8>) {
+        *self.latest.lock().unwrap() = Some((Arc::new(meta), Arc::new(frame)));
     }
     fn get(&self) -> Option<(Arc<String>, Arc<Vec<u8>>)> {
         self.latest.lock().unwrap().clone()
@@ -37,8 +40,20 @@ impl Feed {
 /// (meta JSON, frame bytes). Frame: n x (r, g, b, height) followed by n flag
 /// bytes (bit0 occupied, bit1 dormant, bit2 copier, bit3 bonded, bit4 wall).
 pub fn payload(sim: &Sim, rec: &Recorder, eps: f64, sun: f32, chronicle: &[Note]) -> (String, Vec<u8>) {
-    let st = &sim.st;
-    let p = &sim.p;
+    payload_parts(&sim.st, &sim.p, &sim.backend.name(), &rec.summary, &rec.series, eps, sun, chronicle)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn payload_parts(
+    st: &primordia_core::State,
+    p: &primordia_core::Params,
+    backend: &str,
+    summary: &primordia_telemetry::Summary,
+    series: &std::collections::BTreeMap<String, Vec<[f64; 2]>>,
+    eps: f64,
+    sun: f32,
+    chronicle: &[Note],
+) -> (String, Vec<u8>) {
     let g = &p.geom;
     let infos = render::cell_infos(st);
     let (cols, h) = render::life_cells(st, p, &infos);
@@ -74,9 +89,9 @@ pub fn payload(sim: &Sim, rec: &Recorder, eps: f64, sun: f32, chronicle: &[Note]
         }
         _ => g.size,
     };
-    let s = &rec.summary;
+    let s = summary;
     let tail = |k: &str| -> Vec<[f64; 2]> {
-        let v = rec.series.get(k).cloned().unwrap_or_default();
+        let v = series.get(k).cloned().unwrap_or_default();
         let step = (v.len() / 300).max(1);
         v.into_iter().step_by(step).collect()
     };
@@ -100,7 +115,7 @@ pub fn payload(sim: &Sim, rec: &Recorder, eps: f64, sun: f32, chronicle: &[Note]
             "handedness": tail("EE code"),
             "copiers": tail("replicators (top 100)"),
         },
-        "backend": sim.backend.name(),
+        "backend": backend,
     });
     (meta.to_string(), f)
 }
