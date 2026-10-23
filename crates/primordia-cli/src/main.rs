@@ -179,27 +179,31 @@ impl RunDir {
         writeln!(self.events, "{}", serde_json::to_string(e)?)?;
         Ok(())
     }
-    pub fn after_epoch(&mut self, sim: &mut Sim) -> Result<()> {
-        let e = sim.st.epoch;
-        let t = &sim.cfg.telemetry;
-        let hash_due = t.hash_every > 0 && e % t.hash_every == 0;
-        let snap_due = t.snapshot_every > 0 && e % t.snapshot_every == 0;
-        if hash_due || snap_due {
-            sim.sync();
+    pub fn snapshot_state(&self, st: &State, cfg: &Config) -> Result<PathBuf> {
+        let path = self.dir.join("snapshots").join(format!("e{:010}.psnap", st.epoch));
+        st.write_snapshot(&path, config_hash(cfg))?;
+        Ok(path)
+    }
+}
+
+impl primordia_view::observer::Sink for RunDir {
+    fn event(&mut self, e: &Event) -> Result<()> {
+        self.log_event(e)
+    }
+    fn state(&mut self, st: &State, cfg: &Config) -> Result<()> {
+        let e = st.epoch;
+        let t = &cfg.telemetry;
+        if t.hash_every > 0 && e % t.hash_every == 0 {
+            writeln!(self.hashes, "{},{:016x}", e, st.hash())?;
+            self.hashes.flush()?;
         }
-        if hash_due {
-            writeln!(self.hashes, "{},{:016x}", e, sim.st.hash())?;
-        }
-        if sim.cfg.telemetry.snapshot_every > 0 && e % sim.cfg.telemetry.snapshot_every == 0 {
-            self.snapshot(sim)?;
+        if t.snapshot_every > 0 && e % t.snapshot_every == 0 {
+            self.snapshot_state(st, cfg)?;
         }
         Ok(())
     }
-    pub fn snapshot(&self, sim: &mut Sim) -> Result<PathBuf> {
-        sim.sync();
-        let path = self.dir.join("snapshots").join(format!("e{:010}.psnap", sim.st.epoch));
-        sim.st.write_snapshot(&path, config_hash(&sim.cfg))?;
-        Ok(path)
+    fn save_now(&mut self, st: &State, cfg: &Config) -> Result<PathBuf> {
+        self.snapshot_state(st, cfg)
     }
 }
 
@@ -210,48 +214,66 @@ fn print_summary(s: &Summary) {
     );
 }
 
-/// Headless run loop shared by run, branch and batch.
-fn run_headless(sim: &mut Sim, rd: &mut RunDir, epochs: u64, progress: u64) -> Result<Summary> {
+/// Headless run loop shared by run, branch and batch. The GPU is kept busy
+/// on this thread; telemetry and run-directory output happen on the observer
+/// thread from asynchronous snapshots.
+fn run_headless(sim: &mut Sim, rd: RunDir, epochs: u64, progress: u64) -> Result<Summary> {
     run_headless_feed(sim, rd, epochs, progress, None)
 }
 
-fn run_headless_feed(sim: &mut Sim, rd: &mut RunDir, epochs: u64, progress: u64, feed: Option<std::sync::Arc<primordia_view::web::Feed>>) -> Result<Summary> {
-    let mut rec = Recorder::new(Some(&rd.dir), sim)?;
-    let mut chron = primordia_view::Chronicler::new();
-    let mut notes: Vec<primordia_view::Note> = vec![];
-    let mut last_feed = Instant::now() - std::time::Duration::from_secs(60);
+fn run_headless_feed(sim: &mut Sim, rd: RunDir, epochs: u64, progress: u64, feed: Option<std::sync::Arc<primordia_view::web::Feed>>) -> Result<Summary> {
+    use primordia_view::observer::{Msg, Observer, Want};
+    let rec = Recorder::new(Some(&rd.dir), sim)?;
+    let events = sim.events.clone();
+    let view = primordia_view::ViewSettings::default(&sim.p);
+    let mut obs = Observer::spawn(sim.cfg.clone(), sim.p.clone(), rec, Some(Box::new(rd)), feed, view, false);
+    for e in events {
+        obs.send(Msg::Event(e));
+    }
     let t0 = Instant::now();
     let start = sim.st.epoch;
-    for e in &sim.events {
-        rd.log_event(e)?;
-    }
+    let backend = sim.backend.name();
+    let mut wants: std::collections::BTreeMap<u64, Want> = Default::default();
+    let deliver = |sim: &mut Sim, obs: &Observer, wants: &mut std::collections::BTreeMap<u64, Want>, wait: bool| {
+        let rate = (sim.st.epoch - start) as f64 / t0.elapsed().as_secs_f64().max(1e-9);
+        for st in sim.take_snapshots(wait) {
+            let w = wants.remove(&st.epoch).unwrap_or_default();
+            obs.deliver(st, w, rate, backend.clone());
+        }
+    };
     while sim.st.epoch < start + epochs {
         sim.step();
-        rec.record(sim)?;
-        rd.after_epoch(sim)?;
-        if let Some(f) = &feed {
-            chron.observe(sim, &rec.summary, &mut notes);
-            if last_feed.elapsed() > std::time::Duration::from_millis(1500) {
-                sim.sync();
-                let rate = (sim.st.epoch - start) as f64 / t0.elapsed().as_secs_f64();
-                let recent: Vec<_> = notes.iter().rev().take(30).cloned().collect();
-                f.publish(sim, &rec, rate, primordia_view::sun_level(sim), &recent);
-                last_feed = Instant::now();
-            }
+        let b = sim.take_births();
+        if !b.is_empty() {
+            obs.send(Msg::Births(b));
+        }
+        let mut w = obs.want(sim.st.epoch, false);
+        if sim.st.epoch == start + epochs && sim.cfg.telemetry.snapshot_every > 0 {
+            w.save = true;
+        }
+        if w.telemetry || w.sink || w.web || w.save {
+            sim.request_snapshot();
+            wants.insert(sim.st.epoch, w);
+        }
+        deliver(sim, &obs, &mut wants, false);
+        for r in sim.rejected.drain(..) {
+            eprintln!("warning: {r}");
         }
         if progress > 0 && sim.st.epoch % progress == 0 {
             let rate = (sim.st.epoch - start) as f64 / t0.elapsed().as_secs_f64();
             print!("[{:6.1} ep/s] ", rate);
-            print_summary(&rec.summary);
+            print_summary(&obs.shared.lock().unwrap().summary);
         }
     }
-    if sim.cfg.telemetry.snapshot_every > 0 {
-        rd.snapshot(sim)?;
-    }
-    for r in &sim.rejected {
-        eprintln!("rejected event: {r}");
-    }
-    let s = rec.finish()?;
+    deliver(sim, &obs, &mut wants, true);
+    let b = sim.take_births();
+    obs.send(Msg::Births(b));
+    sim.sync();
+    let mut s = obs.finish();
+    s.ledger_violations = sim.st.ledger.violations;
+    s.energy_residual = sim.st.ledger.energy_residual;
+    s.matter_residual = sim.st.ledger.matter_residual;
+    s.atom_residual = sim.st.ledger.atom_residual;
     Ok(s)
 }
 
@@ -293,7 +315,7 @@ fn main() -> Result<()> {
                     }
                     None => None,
                 };
-                let s = run_headless_feed(&mut sim, &mut rd, epochs, progress, feed)?;
+                let s = run_headless_feed(&mut sim, rd, epochs, progress, feed)?;
                 print_summary(&s);
                 println!("{}", serde_json::to_string_pretty(&s)?);
             } else {
@@ -301,16 +323,8 @@ fn main() -> Result<()> {
                 for e in &sim.events {
                     rd.log_event(e)?;
                 }
-                primordia_view::run_viewer(sim, rec, Box::new(move |s: &mut Sim, ev: Option<&Event>, snap: bool| -> Result<Option<PathBuf>> {
-                    if let Some(e) = ev {
-                        rd.log_event(e)?;
-                    }
-                    rd.after_epoch(s)?;
-                    if snap {
-                        return Ok(Some(rd.snapshot(s)?));
-                    }
-                    Ok(None)
-                }), primordia_view::ViewerOptions { autorun, web })?;
+                let rd = rd;
+                primordia_view::run_viewer(sim, rec, Some(Box::new(rd)), primordia_view::ViewerOptions { autorun, web })?;
             }
         }
         Cmd::Replay { run_dir, to, cpu } => replay(&run_dir, to, cpu)?,
@@ -326,11 +340,11 @@ fn main() -> Result<()> {
             let (st, _) = State::read_snapshot(&snapshot, &p)?;
             let dir = out.unwrap_or_else(|| PathBuf::from(format!("{}-branch-e{}", parent_dir.display(), st.epoch)));
             let (be, name) = backend(&p, cpu || !cfg.gpu.exec);
-            let mut rd = RunDir::create(&dir, &cfg, &name, Some(&snapshot.display().to_string()))?;
+            let rd = RunDir::create(&dir, &cfg, &name, Some(&snapshot.display().to_string()))?;
             std::fs::write(dir.join("branch.json"), serde_json::to_string_pretty(&serde_json::json!({"snapshot": snapshot, "diff": d.to_string(), "start_epoch": st.epoch}))?)?;
             let mut sim = Sim::from_state(cfg.clone(), p, st, be)?;
             sim.st.reset_ledger(&sim.p.clone());
-            let s = run_headless(&mut sim, &mut rd, epochs.unwrap_or(cfg.epochs), 100)?;
+            let s = run_headless(&mut sim, rd, epochs.unwrap_or(cfg.epochs), 100)?;
             print_summary(&s);
         }
         Cmd::Twin { config, epochs, set, cpu } => twin(&config, epochs, &set, cpu)?,
@@ -634,10 +648,10 @@ fn batch(sweep: &Path, cpu: bool) -> Result<()> {
             let dir = out.join(format!("c{ci}-s{seed}"));
             let p = Params::new(&cfg);
             let (be, name) = backend(&p, cpu || !cfg.gpu.exec);
-            let mut rd = RunDir::create(&dir, &cfg, &name, None)?;
+            let rd = RunDir::create(&dir, &cfg, &name, None)?;
             let mut sim = Sim::from_state(cfg.clone(), p.clone(), State::init(&cfg, &p), be)?;
             let t0 = Instant::now();
-            let s = run_headless(&mut sim, &mut rd, cfg.epochs, progress)?;
+            let s = run_headless(&mut sim, rd, cfg.epochs, progress)?;
             let secs = t0.elapsed().as_secs_f64();
             println!(
                 "[{label}] seed {seed:>3}: HOE {:6.3}  first-repl {:>7}  repl {:>3}  EE {:+.3}  t_b {:>7}  pop {:>7}  ({secs:.0}s)",

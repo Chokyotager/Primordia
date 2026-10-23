@@ -147,33 +147,44 @@ impl Recorder {
 
     /// Record everything due after the epoch that just finished.
     /// True when `record` will read cell state after this epoch (so a
-    /// resident simulation must be synced first).
+    /// resident simulation must provide a snapshot).
     pub fn needs_state(&self, epoch: u64) -> bool {
-        let c = &self.cfg;
-        [c.metrics_every.max(1), c.opcode_every.max(1), c.chirality_every.max(1), c.entropy_every.max(1), c.assay_every.max(1), c.census_every.max(1), c.ecology_every.max(1)]
-            .iter()
-            .any(|&k| epoch % k == 0)
+        needs_state(&self.cfg, epoch)
     }
 
+    /// Record everything due after the epoch that just finished (blocking:
+    /// syncs a resident simulation when cell state is needed).
     pub fn record(&mut self, sim: &mut Sim) -> Result<()> {
-        // lineage: every birth this epoch (no state needed)
-        for b in &sim.take_births() {
-            self.lineage.push(vec![V::I(b[0] as i64), V::I(b[1] as i64), V::I(b[2] as i64), V::I(b[3] as i64), V::I(b[4] as i64), V::I(b[5] as i64)])?;
-        }
+        let b = sim.take_births();
+        self.record_births(&b)?;
         if self.needs_state(sim.st.epoch) {
             sim.sync();
+            let cfg = sim.cfg.clone();
+            self.record_state(&sim.st, &sim.p, &cfg)
         } else {
-            let st = &sim.st;
-            self.summary.epoch = st.epoch;
-            self.summary.ledger_violations = st.ledger.violations;
-            self.summary.energy_residual = st.ledger.energy_residual;
-            self.summary.matter_residual = st.ledger.matter_residual;
-            self.summary.atom_residual = st.ledger.atom_residual;
-            return Ok(());
+            self.record_ledger(&sim.st);
+            Ok(())
         }
-        let sim = &*sim;
-        let st = &sim.st;
-        let p = &sim.p;
+    }
+
+    pub fn record_births(&mut self, births: &[primordia_core::world::Birth]) -> Result<()> {
+        for b in births {
+            self.lineage.push(vec![V::I(b[0] as i64), V::I(b[1] as i64), V::I(b[2] as i64), V::I(b[3] as i64), V::I(b[4] as i64), V::I(b[5] as i64)])?;
+        }
+        Ok(())
+    }
+
+    /// Update only the ledger part of the summary.
+    pub fn record_ledger(&mut self, st: &primordia_core::State) {
+        self.summary.epoch = st.epoch;
+        self.summary.ledger_violations = st.ledger.violations;
+        self.summary.energy_residual = st.ledger.energy_residual;
+        self.summary.matter_residual = st.ledger.matter_residual;
+        self.summary.atom_residual = st.ledger.atom_residual;
+    }
+
+    /// Record from a state snapshot taken after epoch `st.epoch - 1`.
+    pub fn record_state(&mut self, st: &primordia_core::State, p: &primordia_core::Params, cfg: &primordia_core::Config) -> Result<()> {
         let e = st.epoch; // epochs completed
         let due = |every: u64| every > 0 && e % every == 0;
         let mut s = std::mem::take(&mut self.summary);
@@ -340,7 +351,7 @@ impl Recorder {
         }
         if due(self.cfg.assay_every.max(1)) {
             let top = top_genomes(st, 100);
-            let cfg = sim.cfg.clone();
+            let cfg = cfg.clone();
             use rayon::prelude::*;
             let res: Vec<AssayResult> = top.par_iter().map(|(g, n)| assay_genome(&cfg, g, *n)).collect();
             s.replicators = res.iter().filter(|r| r.replicator).count();
@@ -397,6 +408,13 @@ impl Recorder {
         }
         Ok(self.summary.clone())
     }
+}
+
+/// True when the recorder needs cell state after `epoch` epochs.
+pub fn needs_state(c: &primordia_core::config::TelemetryCfg, epoch: u64) -> bool {
+    [c.metrics_every, c.opcode_every, c.chirality_every, c.entropy_every, c.assay_every, c.census_every, c.ecology_every]
+        .iter()
+        .any(|&k| k > 0 && epoch % k == 0)
 }
 
 /// Operational organism candidates (§13.2, simplified): bonded bodies of

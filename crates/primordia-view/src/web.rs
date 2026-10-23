@@ -40,7 +40,9 @@ impl Feed {
 /// (meta JSON, frame bytes). Frame: n x (r, g, b, height) followed by n flag
 /// bytes (bit0 occupied, bit1 dormant, bit2 copier, bit3 bonded, bit4 wall).
 pub fn payload(sim: &Sim, rec: &Recorder, eps: f64, sun: f32, chronicle: &[Note]) -> (String, Vec<u8>) {
-    payload_parts(&sim.st, &sim.p, &sim.backend.name(), &rec.summary, &rec.series, eps, sun, chronicle)
+    let infos = render::cell_infos(&sim.st);
+    let (cols, of) = render::colonies(&sim.st, &sim.p, &infos, &mut render::Tracker::default());
+    payload_parts(&sim.st, &sim.p, &sim.backend.name(), &rec.summary, &rec.series, eps, sun, chronicle, &infos, &cols, &of)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -53,10 +55,12 @@ pub fn payload_parts(
     eps: f64,
     sun: f32,
     chronicle: &[Note],
+    infos: &[crate::CellInfo],
+    colonies: &[render::Colony],
+    colony_of: &[u32],
 ) -> (String, Vec<u8>) {
     let g = &p.geom;
-    let infos = render::cell_infos(st);
-    let (cols, h) = render::life_cells(st, p, &infos);
+    let (cols, h) = render::life_cells(st, p, infos, colony_of, colonies);
     let mut f = Vec::with_capacity(st.n * 5);
     for c in 0..st.n {
         f.extend_from_slice(&cols[c]);
@@ -116,6 +120,12 @@ pub fn payload_parts(
             "copiers": tail("replicators (top 100)"),
         },
         "backend": backend,
+        "colonies": colonies.iter().map(|c| serde_json::json!({
+            "id": c.id, "name": c.name, "color": c.color, "size": c.size, "center": c.center, "radius": c.radius,
+            "copiers": c.copiers, "bonded": c.bonded, "dormant": c.dormant, "hand": c.hand, "energy": c.energy,
+            "len": c.mean_len, "growth": c.growth, "since": c.first_seen,
+            "program": c.prefix.iter().take(10).map(|&b| primordia_core::isa::mnemonic(b)).collect::<Vec<_>>().join(" "),
+        })).collect::<Vec<_>>(),
     });
     (meta.to_string(), f)
 }

@@ -753,6 +753,38 @@ fn k_lab_hook(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 }
 
+// One round: hook onto smaller neighbour labels, then shortcut twice.
+@compute @workgroup_size(64)
+fn k_lab_round(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let c = gidx(gid);
+    if (c >= Q[Q_N]) { return; }
+    var lc = lab(c);
+    if (lc == NONE) { return; }
+    let bm = bonds(c);
+    var changed = false;
+    for (var d = 0u; d < 6u; d = d + 1u) {
+        if ((bm & (1u << d)) == 0u) { continue; }
+        let t = nb_raw(c, d);
+        if (t == NONE) { continue; }
+        let lt = lab(t);
+        if (lt < lc) {
+            let o1 = atomicMin(&bw[B_LAB() + cellof(lc)], lt);
+            let o2 = atomicMin(&bw[B_LAB() + c], lt);
+            if (o1 > lt || o2 > lt) { changed = true; }
+            lc = min(lc, lt);
+        }
+    }
+    for (var k = 0u; k < 2u; k = k + 1u) {
+        let l = lab(c);
+        let r = lab(cellof(l));
+        if (r < l) {
+            atomicMin(&bw[B_LAB() + c], r);
+            changed = true;
+        }
+    }
+    if (changed) { set_changed(); }
+}
+
 @compute @workgroup_size(64)
 fn k_lab_jump(@builtin(global_invocation_id) gid: vec3<u32>) {
     let c = gidx(gid);
@@ -795,7 +827,7 @@ fn k_body_gate() {
 @compute @workgroup_size(1)
 fn k_lab_gate() {
     let more = atomicLoad(&tally[2u * T_CHANGED]) != 0u;
-    if (!more) { set_groups(0u, false); }
+    if (!more) { set_groups(0u, false); } else { atomicAdd(&tally[2u * T_ROUNDS], 1u); }
     atomicStore(&tally[2u * T_CHANGED], 0u);
 }
 

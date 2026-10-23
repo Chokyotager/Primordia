@@ -89,6 +89,10 @@ fn w16(x: i32) -> i32 {
 }
 
 fn rem_i(x: i32, t: i32) -> i32 {
+    // fast paths avoid integer division in the common cases
+    if (x >= 0 && x < t) { return x; }
+    if (x >= t && x < 2 * t) { return x - t; }
+    if (x < 0 && x >= -t) { return x + t; }
     return ((x % t) + t) % t;
 }
 
@@ -424,17 +428,20 @@ fn sense(d: u32) -> i32 {
     return 0;
 }
 
+// The executor's energy lives in a register (g_e) during the slice and is
+// written back by e_flush() before anything else may read it.
+var<private> g_e: u32;
+fn e_flush() { hdr[me * HDR + H_E] = g_e; }
+
 fn pay(cost: u32) -> bool {
     if (!has(F_ENERGY)) { return true; }
-    let i = me * HDR + H_E;
-    let e = hdr[i];
-    if (e < cost) {
-        spent = spent + e;
-        hdr[i] = 0u;
+    if (g_e < cost) {
+        spent = spent + g_e;
+        g_e = 0u;
         hdr[me * HDR + H_FLAGS] = hdr[me * HDR + H_FLAGS] | FL_HALT;
         return false;
     }
-    hdr[i] = e - cost;
+    g_e = g_e - cost;
     spent = spent + cost;
     return true;
 }
@@ -508,7 +515,7 @@ fn cat(h: u32, sel: i32, ipu: u32, total: u32) {
     fields[fidx(me, f_chem(p0, hand))] += ev;
     if (p1 != NONE) { fields[fidx(me, f_chem(p1, hand))] += ev; }
     let gain = mulshr16(ev, P[rb + 4u + hand]);
-    hdr[me * HDR + H_E] = hdr[me * HDR + H_E] + gain;
+    g_e = g_e + gain;
     site[me * SITE + S_RXN] = site[me * SITE + S_RXN] + gain;
 }
 
@@ -577,8 +584,8 @@ fn step() -> i32 {
         let t = nbw(me, facing());
         if (t != NONE) {
             if (!occ(t)) {
-                let e = H(me, H_E) / 2u;
-                hdr[me * HDR + H_E] = H(me, H_E) - e;
+                let e = g_e / 2u;
+                g_e = g_e - e;
                 new_child(t, n, e);
                 dirty = true;
                 for (var i = 0u; i < n; i = i + 1u) {
@@ -648,7 +655,9 @@ fn step() -> i32 {
         if (!pay(c2)) { return END; }
         if (vote) { site[me * SITE + S_VOTE] = d + 1u; }
         if (tgt != NONE) {
+            e_flush();
             swap_cells(me, tgt);
+            g_e = H(me, H_E);
             return END;
         }
         return 1;
@@ -656,100 +665,132 @@ fn step() -> i32 {
 
     if (!pay(cost)) { return END; }
     var next = 1;
-    if (b == 0x00u) {
-    } else if (b == 0x01u) { // DUP
+    switch b {
+    case 0x00u: {
+    }
+    case 0x01u: { // DUP
         let a = pop(); if (g_err) { return END; }
         if (!push(a)) { return END; }
         if (!push(a)) { return END; }
-    } else if (b == 0x02u) {
+    }
+    case 0x02u: {
         let a = pop(); if (g_err) { return END; }
-    } else if (b == 0x03u) { // SWAP
+    }
+    case 0x03u: { // SWAP
         let a = pop(); if (g_err) { return END; }
         let c = pop(); if (g_err) { return END; }
         if (!push(a)) { return END; }
         if (!push(c)) { return END; }
-    } else if (b == 0x04u) { // OVER
+    }
+    case 0x04u: { // OVER
         let a = pop(); if (g_err) { return END; }
         let c = pop(); if (g_err) { return END; }
         if (!push(c)) { return END; }
         if (!push(a)) { return END; }
         if (!push(c)) { return END; }
-    } else if (b == 0x05u) {
+    }
+    case 0x05u: {
         let a = pop(); if (g_err) { return END; }
         if (!push(a + 1)) { return END; }
-    } else if (b == 0x06u) {
+    }
+    case 0x06u: {
         let a = pop(); if (g_err) { return END; }
         if (!push(a - 1)) { return END; }
-    } else if (b == 0x07u) {
+    }
+    case 0x07u: {
         let a = pop(); if (g_err) { return END; }
         let c = pop(); if (g_err) { return END; }
         if (!push(c + a)) { return END; }
-    } else if (b == 0x08u) {
+    }
+    case 0x08u: {
         let a = pop(); if (g_err) { return END; }
         let c = pop(); if (g_err) { return END; }
         if (!push(c - a)) { return END; }
-    } else if (b == 0x09u) {
+    }
+    case 0x09u: {
         let a = pop(); if (g_err) { return END; }
         if (!push(a << 4u)) { return END; }
-    } else if (b == 0x0Au) {
+    }
+    case 0x0Au: {
         let a = pop(); if (g_err) { return END; }
         if (!push(-a)) { return END; }
-    } else if (b == 0x0Bu) {
+    }
+    case 0x0Bu: {
         let a = pop(); if (g_err) { return END; }
         let c = pop(); if (g_err) { return END; }
         if (!push(a & c)) { return END; }
-    } else if (b == 0x0Cu) {
+    }
+    case 0x0Cu: {
         let c = pop(); if (g_err) { return END; }
         if (c != 0) { next = 2; }
-    } else if (b == 0x0Du) {
+    }
+    case 0x0Du: {
         let c = pop(); if (g_err) { return END; }
         if (c == 0) { next = 2; }
-    } else if (b == 0x0Eu) {
+    }
+    case 0x0Eu: {
         let n = pop(); if (g_err) { return END; }
         next = n;
-    } else if (b == 0x0Fu) {
+    }
+    case 0x0Fu: {
         let n = pop(); if (g_err) { return END; }
         let c = pop(); if (g_err) { return END; }
         if (c != 0) { next = n; }
-    } else if (b == 0x10u) { // RD
+    }
+    case 0x10u: { // RD
         var v = rd(u32(rem_i(h0, ti)));
         if (g_mirrored) { v = mirror_b(v); }
         if (!push(i32(v))) { return END; }
-    } else if (b == 0x11u) { // WR
+    }
+    case 0x11u: { // WR
         let x = pop(); if (g_err) { return END; }
         var v = u32(x & 0xFF);
         if (g_mirrored) { v = mirror_b(v); }
         write_byte(u32(rem_i(h1, ti)), v, ipu, total);
-    } else if (b == 0x12u) { // CPY
+    }
+    case 0x12u: { // CPY
         let v = rd(u32(rem_i(h0, ti)));
         write_byte(u32(rem_i(h1, ti)), v, ipu, total);
-    } else if (b == 0x13u) { h0 = h0 + 1;
-    } else if (b == 0x14u) { h0 = h0 - 1;
-    } else if (b == 0x15u) { h1 = h1 + 1;
-    } else if (b == 0x16u) { h1 = h1 - 1;
-    } else if (b == 0x17u) {
+    }
+    case 0x13u: { h0 = h0 + 1;
+    }
+    case 0x14u: { h0 = h0 - 1;
+    }
+    case 0x15u: { h1 = h1 + 1;
+    }
+    case 0x16u: { h1 = h1 - 1;
+    }
+    case 0x17u: {
         let v = pop(); if (g_err) { return END; }
         h0 = i32(ipu) + v;
-    } else if (b == 0x18u) {
+    }
+    case 0x18u: {
         let v = pop(); if (g_err) { return END; }
         h1 = i32(ipu) + v;
-    } else if (b == 0x19u) {
+    }
+    case 0x19u: {
         if (!push(h0 - i32(ipu))) { return END; }
-    } else if (b == 0x1Au) {
+    }
+    case 0x1Au: {
         if (!push(h1 - i32(ipu))) { return END; }
-    } else if (b == 0x1Bu) {
+    }
+    case 0x1Bu: {
         let x = h0; h0 = h1; h1 = x;
-    } else if (b == 0x1Cu) {
+    }
+    case 0x1Cu: {
         if (!push(i32(ls))) { return END; }
-    } else if (b == 0x1Fu) {
+    }
+    case 0x1Fu: {
         if (!push(i32(lp))) { return END; }
-    } else if (b == 0x1Du) { // GROW
+    }
+    case 0x1Du: { // GROW
         dirty = true;
         if (!fixed_len && ls < g_lmax) {
             tset(me, ls, 0u);
             hdr[me * HDR + H_LEN] = ls + 1u;
         }
-    } else if (b == 0x1Eu) { // SHRINK
+    }
+    case 0x1Eu: { // SHRINK
         dirty = true;
         if (!fixed_len && ls > 0u) {
             let b2 = tb(me, ls - 1u);
@@ -757,34 +798,40 @@ fn step() -> i32 {
             release(me, b2);
             hdr[me * HDR + H_LEN] = ls - 1u;
         }
-    } else if (b >= 0x20u && b <= 0x25u) {
+    }
+    case 0x20u, 0x21u, 0x22u, 0x23u, 0x24u, 0x25u: {
         turn(b);
         dirty = true;
-    } else if (b == 0x26u || b == 0x27u) {
+    }
+    case 0x26u, 0x27u: {
         if (bonds_on && g_dims >= 2u) {
             let o = orient(me);
             var d = OR_LEFT[o];
             if (b == 0x27u) { d = OR_RIGHT[o]; }
             bond(d, true);
         }
-    } else if (b == 0x28u || b == 0x29u) {
+    }
+    case 0x28u, 0x29u: {
         let o = orient(me);
         var d = OR_LEFT[o];
         if (b == 0x29u) { d = OR_RIGHT[o]; }
         var s = 0;
         if (g_dims >= 2u) { s = sense(d); }
         if (!push(s)) { return END; }
-    } else if (b == 0x2Cu || b == 0x2Du) {
+    }
+    case 0x2Cu, 0x2Du: {
         let r = pop(); if (g_err) { return END; }
         cat(b & 1u, r, ipu, total);
-    } else if (b == 0x30u || b == 0x31u) {
+    }
+    case 0x30u, 0x31u: {
         let j = pop(); if (g_err) { return END; }
         let S = P[P_S];
         if (has(F_SIG) && S > 0u) {
             let i = fidx(me, f_sig(u32(rem_i(j, i32(S))), b & 1u));
             fields[i] = sat_add(fields[i], P[P_SIG_EMIT]);
         }
-    } else if (b == 0x32u || b == 0x33u) {
+    }
+    case 0x32u, 0x33u: {
         let j = pop(); if (g_err) { return END; }
         let S = P[P_S];
         var v = 0;
@@ -792,7 +839,8 @@ fn step() -> i32 {
             v = i32(min(fields[fidx(me, f_sig(u32(rem_i(j, i32(S))), b & 1u))], 32767u));
         }
         if (!push(v)) { return END; }
-    } else if (b == 0x34u || b == 0x35u) {
+    }
+    case 0x34u, 0x35u: {
         let k = pop(); if (g_err) { return END; }
         let K = P[P_K];
         var v = 0;
@@ -800,22 +848,30 @@ fn step() -> i32 {
             v = i32(min(fields[fidx(me, f_chem(u32(rem_i(k, i32(K))), b & 1u))], 32767u));
         }
         if (!push(v)) { return END; }
-    } else if (b >= 0x36u && b <= 0x3Fu) {
-    } else if (b >= 0x40u && b <= 0x5Fu) {
+    }
+    case 0x36u, 0x37u, 0x38u, 0x39u, 0x3Au, 0x3Bu, 0x3Cu, 0x3Du, 0x3Eu, 0x3Fu: {
+    }
+    case 0x40u, 0x41u, 0x42u, 0x43u, 0x44u, 0x45u, 0x46u, 0x47u, 0x48u, 0x49u, 0x4Au, 0x4Bu, 0x4Cu, 0x4Du, 0x4Eu, 0x4Fu, 0x50u, 0x51u, 0x52u, 0x53u, 0x54u, 0x55u, 0x56u, 0x57u, 0x58u, 0x59u, 0x5Au, 0x5Bu, 0x5Cu, 0x5Du, 0x5Eu, 0x5Fu: {
         if (!push(i32(b - 0x40u))) { return END; }
-    } else if (b == 0x61u) {
+    }
+    case 0x61u: {
         if (bonds_on && g_dims >= 1u) { bond(facing(), true); }
-    } else if (b == 0x62u) {
+    }
+    case 0x62u: {
         if (bonds_on && g_dims >= 1u) { bond(facing(), false); }
-    } else if (b == 0x63u) {
+    }
+    case 0x63u: {
         var s = 0;
         if (g_dims >= 1u) { s = sense(facing()); }
         if (!push(s)) { return END; }
-    } else if (b == 0x64u) {
-        if (!push(i32(min(H(me, H_E) / P[P_E_SCALE], 255u)))) { return END; }
-    } else if (b == 0x65u) {
+    }
+    case 0x64u: {
+        if (!push(i32(min(g_e / P[P_E_SCALE], 255u)))) { return END; }
+    }
+    case 0x65u: {
         if (!push(clamp(i32(fields[fidx(me, 1u)] / 100u) - 200, 0, 255))) { return END; }
-    } else if (b == 0x66u) { // SHARE
+    }
+    case 0x66u: { // SHARE
         let x = pop(); if (g_err) { return END; }
         let n = u32(max(x, 0));
         if (g_dims >= 1u && !fixed_len) {
@@ -823,13 +879,14 @@ fn step() -> i32 {
             if ((bonds(me) & (1u << d)) != 0u) {
                 let t = nbw(me, d);
                 if (t != NONE) {
-                    let amt = min(n, H(me, H_E));
-                    hdr[me * HDR + H_E] = H(me, H_E) - amt;
+                    let amt = min(n, g_e);
+                    g_e = g_e - amt;
                     hdr[t * HDR + H_E] = H(t, H_E) + amt;
                 }
             }
         }
-    } else if (b == 0x6Au) { // TUMBLE
+    }
+    case 0x6Au: { // TUMBLE
         dirty = true;
         let r = rnd();
         if (g_dims >= 1u) {
@@ -837,30 +894,39 @@ fn step() -> i32 {
             if (g_mirrored) { o = OR_MIRROR[o]; }
             set_orient(me, o);
         }
-    } else if (b == 0x6Bu) {
+    }
+    case 0x6Bu: {
         if (!push(i32(min(fields[fidx(me, 0u)] / P[P_F_SCALE], 255u)))) { return END; }
-    } else if (b == 0x6Cu) {
+    }
+    case 0x6Cu: {
         var v = 0;
         if (has(F_MATTER)) { v = i32(min(pool(me, 2u), 255u)); }
         if (!push(v)) { return END; }
-    } else if (b == 0x6Du) {
+    }
+    case 0x6Du: {
         let r = rnd();
         if (!push(i32(r & 0xFFu))) { return END; }
-    } else if (b == 0x6Eu) { // SLEEP
+    }
+    case 0x6Eu: { // SLEEP
         let n = pop(); if (g_err) { return END; }
         if (n > 0 && !fixed_len) {
             hdr[me * HDR + H_SLEEP] = u32(min(n, 255));
             return END;
         }
-    } else if (b == 0x6Fu) {
+    }
+    case 0x6Fu: {
         return END;
-    } else if (b >= 0x70u && b <= 0x7Fu) {
-    } else if (b >= 0x80u && b <= 0xBFu) {
+    }
+    case 0x70u, 0x71u, 0x72u, 0x73u, 0x74u, 0x75u, 0x76u, 0x77u, 0x78u, 0x79u, 0x7Au, 0x7Bu, 0x7Cu, 0x7Du, 0x7Eu, 0x7Fu: {
+    }
+    case 0x80u, 0x81u, 0x82u, 0x83u, 0x84u, 0x85u, 0x86u, 0x87u, 0x88u, 0x89u, 0x8Au, 0x8Bu, 0x8Cu, 0x8Du, 0x8Eu, 0x8Fu, 0x90u, 0x91u, 0x92u, 0x93u, 0x94u, 0x95u, 0x96u, 0x97u, 0x98u, 0x99u, 0x9Au, 0x9Bu, 0x9Cu, 0x9Du, 0x9Eu, 0x9Fu, 0xA0u, 0xA1u, 0xA2u, 0xA3u, 0xA4u, 0xA5u, 0xA6u, 0xA7u, 0xA8u, 0xA9u, 0xAAu, 0xABu, 0xACu, 0xADu, 0xAEu, 0xAFu, 0xB0u, 0xB1u, 0xB2u, 0xB3u, 0xB4u, 0xB5u, 0xB6u, 0xB7u, 0xB8u, 0xB9u, 0xBAu, 0xBBu, 0xBCu, 0xBDu, 0xBEu, 0xBFu: {
         next = 2 + i32(b & 0x3Fu);
-    } else {
+    }
+    default: {
         next = -1 - i32(b & 0x3Fu);
     }
-    if (has(F_ENERGY) && H(me, H_E) == 0u) {
+    }
+    if (has(F_ENERGY) && g_e == 0u) {
         hdr[me * HDR + H_FLAGS] = hdr[me * HDR + H_FLAGS] | FL_HALT;
         return END;
     }
@@ -922,6 +988,7 @@ fn exec_slice(c: u32, fp: u32) {
     if (partner_first) { h1 = i32(lp); } else { h1 = i32(ls); }
     var steps = 0u;
     let budget = P[P_BUDGET];
+    g_e = H(c, H_E);
     loop {
         if (steps >= budget) { break; }
         steps = steps + 1u;
@@ -929,6 +996,7 @@ fn exec_slice(c: u32, fp: u32) {
         if (d == END) { break; }
         ip = ip + d;
     }
+    e_flush();
     if (spent > 0u) {
         site[c * SITE + S_SPENT] = site[c * SITE + S_SPENT] + spent;
         let heat = mulshr16(spent, P[P_HEAT]);

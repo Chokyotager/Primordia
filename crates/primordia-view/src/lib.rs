@@ -1,30 +1,30 @@
-//! Native egui viewer (§14): an illustrated live map, dashboard, chronicle of
-//! notable events, plots, an inspector with a CPU-golden-model debugger, and
-//! logged interventions. Optionally publishes a read-only feed for the
-//! three.js browser viewer (`web`).
+//! Native egui viewer (§14). Three threads: the stepper keeps the GPU fed
+//! and applies interventions, the observer (`observer.rs`) records telemetry
+//! and draws frames from asynchronous snapshots, and the UI shows them: a
+//! colony map with an atlas for navigation, a dashboard, a chronicle of
+//! notable events, trend plots and an inspector with a CPU debugger.
+//! Optionally publishes a read-only feed for the three.js viewer (`web`).
 
+pub mod observer;
 mod render;
 pub mod web;
 
 use anyhow::Result;
 use eframe::egui;
 use egui::{Color32, RichText};
+use observer::{Msg, Observer, Shared, Sink, Want};
 use primordia_core::events::Event;
 use primordia_core::exec::{TraceStep, exec_slice, flag_snapshot};
 use primordia_core::isa;
 use primordia_core::params::*;
-use primordia_core::{Sim, phases};
+use primordia_core::{Params, Sim, phases};
 use primordia_telemetry::{Recorder, Summary};
-use render::{Mode, ViewSettings};
+pub use render::{Colony, Mode, ViewSettings};
 use serde_json::json;
 use std::collections::{BTreeMap, HashMap};
-use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-
-/// Called after every epoch (and for each intervention / snapshot request).
-pub type Hook = Box<dyn FnMut(&mut Sim, Option<&Event>, bool) -> Result<Option<PathBuf>> + Send>;
 
 #[derive(Clone, Copy, Default, Debug)]
 pub struct CellInfo {
@@ -66,6 +66,9 @@ pub struct Frame {
     pub dims: u32,
     /// per-cell summary for hover descriptions (2D only)
     pub cells: Vec<CellBrief>,
+    pub colonies: Vec<Colony>,
+    /// colony index + 1 per cell, 0 for none (2D only)
+    pub colony_of: Vec<u32>,
 }
 
 #[derive(Default, Clone)]
@@ -84,26 +87,19 @@ pub struct Note {
     pub text: String,
 }
 
+/// Status published by the stepper thread.
 #[derive(Default)]
-struct Out {
-    frame: Option<Arc<Frame>>,
-    sub_frames: Vec<Frame>,
-    summary: Summary,
-    series: BTreeMap<String, Vec<[f64; 2]>>,
-    inspect: Option<Inspect>,
-    chronicle: Vec<Note>,
-    eps: f64,
+struct Status {
     epoch: u64,
+    eps: f64,
     running: bool,
     backend: String,
     dims: u32,
     size: [u32; 3],
     k_species: Vec<String>,
     n_signals: usize,
-    top_genomes: Vec<String>,
-    sun: f32,
-    births: u64,
-    deaths: u64,
+    inspect: Option<Inspect>,
+    sub_frames: Vec<Frame>,
     web: Option<String>,
 }
 
@@ -111,7 +107,6 @@ enum Cmd {
     Run(bool),
     Step(u64),
     SubSteps,
-    RedrawEvery(u64),
     View(ViewSettings),
     Event(Event),
     Inspect(usize),
@@ -126,23 +121,26 @@ pub struct ViewerOptions {
     pub web: Option<String>,
 }
 
-pub fn run_viewer(sim: Sim, rec: Recorder, hook: Hook, opts: ViewerOptions) -> Result<()> {
-    let out = Arc::new(Mutex::new(Out::default()));
+pub fn run_viewer(sim: Sim, rec: Recorder, sink: Option<Box<dyn Sink>>, opts: ViewerOptions) -> Result<()> {
+    let status = Arc::new(Mutex::new(Status::default()));
     let feed = match &opts.web {
         Some(addr) => {
             let f = web::Feed::new();
             web::serve(addr, f.clone())?;
-            out.lock().unwrap().web = Some(addr.clone());
+            status.lock().unwrap().web = Some(addr.clone());
             Some(f)
         }
         None => None,
     };
+    let view = ViewSettings::default(&sim.p);
+    let obs = Observer::spawn(sim.cfg.clone(), sim.p.clone(), rec, sink, feed, view.clone(), true);
+    let shared = obs.shared.clone();
     let (tx, rx) = channel();
-    let o2 = out.clone();
+    let s2 = status.clone();
     let autorun = opts.autorun;
-    let worker = std::thread::spawn(move || worker(sim, rec, hook, rx, o2, autorun, feed));
-    let nopts = eframe::NativeOptions { viewport: egui::ViewportBuilder::default().with_inner_size([1600.0, 1000.0]).with_title("Primordia"), ..Default::default() };
-    let app = App::new(tx.clone(), out);
+    let worker = std::thread::spawn(move || stepper(sim, obs, rx, s2, autorun));
+    let nopts = eframe::NativeOptions { viewport: egui::ViewportBuilder::default().with_inner_size([1680.0, 1020.0]).with_title("Primordia"), ..Default::default() };
+    let app = App::new(tx.clone(), status, shared, view);
     let r = eframe::run_native("Primordia", nopts, Box::new(|cc| {
         style(&cc.egui_ctx);
         Ok(Box::new(app))
@@ -168,7 +166,7 @@ fn style(ctx: &egui::Context) {
     });
 }
 
-// ------------------------------------------------------------------ worker
+// ------------------------------------------------------------------ chronicle
 
 /// Watches the run and writes plain-language notes about notable events.
 pub struct Chronicler {
@@ -182,12 +180,22 @@ pub struct Chronicler {
     last_boom: u64,
 }
 
+impl Default for Chronicler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Chronicler {
     pub fn new() -> Self {
         Chronicler { first_repl: false, hoe_over: false, max_body: 1, vents: vec![], pop_hist: vec![], hand: 0, families: 0, last_boom: 0 }
     }
     pub fn observe(&mut self, sim: &Sim, s: &Summary, out: &mut Vec<Note>) {
-        let e = sim.st.epoch;
+        self.observe_state(&sim.st, &sim.p, s, out)
+    }
+
+    pub fn observe_state(&mut self, st: &primordia_core::State, p: &Params, s: &Summary, out: &mut Vec<Note>) {
+        let e = st.epoch;
         let mut note = |icon: &'static str, text: String| out.push(Note { epoch: e, icon, text });
         if !self.first_repl && s.replicators > 0 {
             self.first_repl = true;
@@ -201,8 +209,8 @@ impl Chronicler {
             self.max_body = s.max_body;
             note("🔗", format!("Cells have bonded into a body of {} cells — the largest so far", s.max_body));
         }
-        let g = &sim.p.geom;
-        let now: Vec<(u32, u32)> = sim.st.vents.iter().map(|v| (v.id, v.pos)).collect();
+        let g = &p.geom;
+        let now: Vec<(u32, u32)> = st.vents.iter().map(|v| (v.id, v.pos)).collect();
         for &(id, pos) in &now {
             if !self.vents.iter().any(|v| v.0 == id) && e > 1 {
                 note("🌋", format!("A new vent erupted at {:?}", &g.coords(pos as usize)[..g.dims.max(1) as usize]));
@@ -250,171 +258,129 @@ impl Chronicler {
     }
 }
 
-fn worker(mut sim: Sim, mut rec: Recorder, mut hook: Hook, rx: Receiver<Cmd>, out: Arc<Mutex<Out>>, autorun: bool, feed: Option<Arc<web::Feed>>) {
+// ------------------------------------------------------------------ stepper
+
+/// Drives the simulation as fast as the GPU allows; everything that only
+/// looks at the world happens on the observer thread.
+fn stepper(mut sim: Sim, mut obs: Observer, rx: Receiver<Cmd>, status: Arc<Mutex<Status>>, autorun: bool) {
     let mut running = autorun;
     let mut pending_steps = 0u64;
-    let mut redraw_every = 1u64;
-    let mut view = ViewSettings::default(&sim.p);
     let mut lineage: HashMap<u32, u32> = HashMap::new();
-    let mut last_render = Instant::now() - Duration::from_secs(10);
-    let busy = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let (job_tx, job_rx) = channel::<RenderJob>();
-    {
-        let out = out.clone();
-        let busy = busy.clone();
-        let feed = feed.clone();
-        std::thread::spawn(move || render_thread(job_rx, out, busy, feed));
-    }
     let mut rate_t = Instant::now();
     let mut rate_e = sim.st.epoch;
     let mut eps = 0.0;
     let mut dirty = true;
-    let mut chron = Chronicler::new();
-    let mut last_web = Instant::now() - Duration::from_secs(10);
+    let backend = sim.backend.name();
+    let mut save: Option<bool> = None;
+    let mut wants: BTreeMap<u64, Want> = BTreeMap::new();
     {
-        let mut o = out.lock().unwrap();
-        o.backend = sim.backend.name();
-        o.dims = sim.p.geom.dims;
-        o.size = sim.p.geom.size;
-        o.k_species = if sim.p.chem_on { sim.cfg.chemistry.species.clone() } else { vec![] };
-        o.n_signals = sim.p.s;
-        o.chronicle.push(Note { epoch: sim.st.epoch, icon: "🌱", text: format!("World created: {} cells in {}D, backend {}", sim.p.geom.n, sim.p.geom.dims, sim.backend.name()) });
+        let mut s = status.lock().unwrap();
+        s.backend = backend.clone();
+        s.dims = sim.p.geom.dims;
+        s.size = sim.p.geom.size;
+        s.k_species = if sim.p.chem_on { sim.cfg.chemistry.species.clone() } else { vec![] };
+        s.n_signals = sim.p.s;
     }
-    let msg = |out: &Arc<Mutex<Out>>, icon: &'static str, m: String, e: u64| {
-        let mut o = out.lock().unwrap();
-        o.chronicle.push(Note { epoch: e, icon, text: m });
-        if o.chronicle.len() > 400 {
-            o.chronicle.remove(0);
-        }
-    };
     loop {
         let mut sub = false;
         while let Ok(c) = rx.try_recv() {
             match c {
                 Cmd::Quit => {
-                    let _ = rec.finish();
+                    for st in sim.take_snapshots(true) {
+                        let w = wants.remove(&st.epoch).unwrap_or_default();
+                        obs.deliver(st, w, eps, backend.clone());
+                    }
+                    let b = sim.take_births();
+                    obs.send(Msg::Births(b));
+                    let _ = obs.finish();
                     return;
                 }
                 Cmd::Run(r) => running = r,
                 Cmd::Step(n) => pending_steps += n,
                 Cmd::SubSteps => sub = true,
-                Cmd::RedrawEvery(n) => redraw_every = n.max(1),
                 Cmd::View(v) => {
-                    // keep the worker's own Params (the UI only knows the geometry)
-                    view = ViewSettings { params: view.params.clone(), ..v };
+                    obs.send(Msg::View(v));
                     dirty = true;
                 }
                 Cmd::Event(e) => {
-                    let _ = hook(&mut sim, Some(&e), false);
-                    msg(&out, "✋", format!("Intervention scheduled: {} {}", e.kind, e.params), sim.st.epoch);
+                    obs.send(Msg::Event(e.clone()));
                     sim.push_event(e);
                 }
                 Cmd::Inspect(c) => {
                     sim.sync();
                     let ins = inspect(&sim, c, &lineage);
-                    out.lock().unwrap().inspect = Some(ins);
+                    status.lock().unwrap().inspect = Some(ins);
                 }
-                Cmd::Snapshot | Cmd::Branch => {
-                    let branch = matches!(c, Cmd::Branch);
-                    let e = sim.st.epoch;
-                    match hook(&mut sim, None, true) {
-                        Ok(Some(p)) => {
-                            if branch {
-                                let diff = p.with_extension("diff.toml");
-                                let _ = std::fs::write(&diff, "# config changes for the branch, e.g.\n# [mutation]\n# background = 1e-3\n");
-                                msg(&out, "🌿", format!("Branch point saved. Edit {} then run: primordia branch {} {}", diff.display(), p.display(), diff.display()), e);
-                            } else {
-                                msg(&out, "💾", format!("Snapshot written: {}", p.display()), e);
-                            }
-                        }
-                        Ok(None) => msg(&out, "⚠", "No run directory: snapshot not written".into(), e),
-                        Err(err) => msg(&out, "⚠", format!("Snapshot failed: {err:#}"), e),
-                    }
-                }
+                Cmd::Snapshot => save = Some(false),
+                Cmd::Branch => save = Some(true),
             }
         }
         let do_step = running || pending_steps > 0 || sub;
         if do_step {
             if sub {
                 let mut frames = vec![];
-                let v = view.clone();
-                let pp = v.params.clone();
+                let v = ViewSettings::default(&sim.p);
+                let pp = sim.p.clone();
+                let mut ctx = render::RenderCtx::default();
                 sim.step_substeps(|st, i| {
-                    let mut f = render::render(st, &pp, &v, &[], &mut vec![]);
+                    let mut f = render::render(st, &pp, &v, &[], &mut ctx);
                     f.images.iter_mut().for_each(|im| im.label = format!("{} — sub-step {}", im.label, i));
                     frames.push(f);
                 });
-                out.lock().unwrap().sub_frames = frames;
+                status.lock().unwrap().sub_frames = frames;
             } else {
                 sim.step();
             }
             if pending_steps > 0 {
                 pending_steps -= 1;
             }
-            for b in &sim.births {
-                lineage.insert(b[2], b[1]);
+            dirty = true;
+            let b = sim.take_births();
+            for x in &b {
+                lineage.insert(x[2], x[1]);
             }
             if lineage.len() > 2_000_000 {
                 lineage.clear();
             }
-            if let Err(e) = rec.record(&mut sim) {
-                msg(&out, "⚠", format!("telemetry error: {e:#}"), sim.st.epoch);
+            if !b.is_empty() {
+                obs.send(Msg::Births(b));
             }
-            if let Err(e) = hook(&mut sim, None, false) {
-                msg(&out, "⚠", format!("run-dir error: {e:#}"), sim.st.epoch);
-            }
-            for r in sim.rejected.drain(..) {
-                msg(&out, "⚠", format!("rejected: {r}"), sim.st.epoch);
-            }
-            {
-                let mut notes = vec![];
-                chron.observe(&sim, &rec.summary, &mut notes);
-                if !notes.is_empty() {
-                    let mut o = out.lock().unwrap();
-                    o.chronicle.extend(notes);
-                }
-            }
-            dirty = dirty || sim.st.epoch % redraw_every == 0 || !running;
             if rate_t.elapsed() > Duration::from_millis(500) {
                 eps = (sim.st.epoch - rate_e) as f64 / rate_t.elapsed().as_secs_f64();
                 rate_t = Instant::now();
                 rate_e = sim.st.epoch;
             }
         }
-        // Rendering runs on its own thread from a copy of the state, so the
-        // simulation keeps stepping while a frame is coloured.
-        let web_due = feed.is_some() && last_web.elapsed() > Duration::from_millis(1500);
-        let draw_due = dirty && last_render.elapsed() > Duration::from_millis(80);
-        if (draw_due || web_due) && !busy.load(std::sync::atomic::Ordering::Acquire) {
-            sim.sync();
-            busy.store(true, std::sync::atomic::Ordering::Release);
-            let chronicle = if web_due { out.lock().unwrap().chronicle.iter().rev().take(30).cloned().collect() } else { vec![] };
-            let _ = job_tx.send(RenderJob {
-                st: sim.st.clone(),
-                view: view.clone(),
-                domains: rec.last_domains.clone(),
-                summary: rec.summary.clone(),
-                series: rec.series.clone(),
-                top: rec.last_assay.iter().filter(|a| a.replicator).map(|a| isa::to_hex(&a.minimal)).collect(),
-                sun: sun_level(&sim),
-                births: sim.st.tally.births,
-                deaths: sim.st.tally.deaths,
-                draw: draw_due,
-                web: if web_due { Some((eps, chronicle, sim.backend.name())) } else { None },
-            });
-            if draw_due {
+        // what the observer needs from the state after this epoch
+        let mut w = obs.want(sim.st.epoch, dirty);
+        if !do_step {
+            // paused: telemetry and run-dir cadences were already served
+            w.telemetry = false;
+            w.sink = false;
+        }
+        if let Some(branch) = save.take() {
+            w.save = true;
+            w.branch = branch;
+        }
+        if (w.telemetry || w.sink || w.render || w.web || w.save) && !wants.contains_key(&sim.st.epoch) {
+            sim.request_snapshot();
+            wants.insert(sim.st.epoch, w);
+            if w.render {
                 dirty = false;
-                last_render = Instant::now();
-            }
-            if web_due {
-                last_web = Instant::now();
             }
         }
+        for st in sim.take_snapshots(false) {
+            let w = wants.remove(&st.epoch).unwrap_or_default();
+            obs.deliver(st, w, eps, backend.clone());
+        }
+        for r in sim.rejected.drain(..) {
+            obs.send(Msg::Event(Event { epoch: sim.st.epoch, kind: "warning".into(), params: json!(r) }));
+        }
         {
-            let mut o = out.lock().unwrap();
-            o.eps = eps;
-            o.epoch = sim.st.epoch;
-            o.running = running;
+            let mut s = status.lock().unwrap();
+            s.eps = eps;
+            s.epoch = sim.st.epoch;
+            s.running = running;
         }
         if !do_step {
             std::thread::sleep(Duration::from_millis(15));
@@ -422,50 +388,16 @@ fn worker(mut sim: Sim, mut rec: Recorder, mut hook: Hook, rx: Receiver<Cmd>, ou
     }
 }
 
-struct RenderJob {
-    st: primordia_core::State,
-    view: ViewSettings,
-    domains: Vec<i8>,
-    summary: Summary,
-    series: BTreeMap<String, Vec<[f64; 2]>>,
-    top: Vec<String>,
-    sun: f32,
-    births: u64,
-    deaths: u64,
-    draw: bool,
-    web: Option<(f64, Vec<Note>, String)>,
-}
-
-fn render_thread(rx: Receiver<RenderJob>, out: Arc<Mutex<Out>>, busy: Arc<std::sync::atomic::AtomicBool>, feed: Option<Arc<web::Feed>>) {
-    let mut history_1d: Vec<Vec<u8>> = vec![];
-    while let Ok(j) = rx.recv() {
-        let p = j.view.params.clone();
-        if j.draw {
-            let f = render::render(&j.st, &p, &j.view, &j.domains, &mut history_1d);
-            let mut o = out.lock().unwrap();
-            o.frame = Some(Arc::new(f));
-            o.summary = j.summary.clone();
-            o.series = j.series.clone();
-            o.top_genomes = j.top;
-            o.sun = j.sun;
-            o.births = j.births;
-            o.deaths = j.deaths;
-        }
-        if let (Some(f), Some((eps, chron, backend))) = (&feed, j.web) {
-            let (m, b) = web::payload_parts(&j.st, &p, &backend, &j.summary, &j.series, eps, j.sun, &chron);
-            f.set(m, b);
-        }
-        busy.store(false, std::sync::atomic::Ordering::Release);
-    }
-}
-
 /// Current sunlight as a fraction of the configured peak.
 pub fn sun_level(sim: &Sim) -> f32 {
-    let p = &sim.p;
+    sun_level_at(&sim.p, sim.st.epoch)
+}
+
+pub fn sun_level_at(p: &Params, epoch: u64) -> f32 {
     if !p.sun_on || p.sun_i0_q16 == 0 {
         return 0.0;
     }
-    let rows = phases::row_lights(p, sim.st.epoch);
+    let rows = phases::row_lights(p, epoch);
     let avg = rows.iter().map(|&r| r as f64).sum::<f64>() / rows.len().max(1) as f64;
     (avg / p.sun_i0_q16 as f64) as f32
 }
@@ -560,162 +492,6 @@ fn inspect(sim: &Sim, c: usize, lineage: &HashMap<u32, u32>) -> Inspect {
     Inspect { cell: c, text: t, tape, cat_eta, trace }
 }
 
-/// Plain-language description of a cell for the hover card.
-fn describe(cb: &CellBrief, t_amb: f32) -> (String, String) {
-    let temp = cb.t as f32 / 100.0;
-    let env = format!(
-        "Food here: {}   Temperature: {:.1} K{}   Sunlight: {:.0}",
-        cb.f,
-        temp,
-        if temp > t_amb + 5.0 { " (hot)" } else { "" },
-        cb.light as f32 / 65536.0
-    );
-    if !cb.info.occ {
-        return ("Empty space".into(), env);
-    }
-    let mut s = String::new();
-    s += if cb.info.halted { "Dormant cell" } else { "Living cell" };
-    s += &format!(" · family #{}", cb.info.family % 997);
-    if cb.info.copier {
-        s += " · copier";
-    }
-    if cb.info.bonded {
-        s += " · part of a body";
-    }
-    let health = match cb.e {
-        0 => "out of energy",
-        1..=99 => "hungry",
-        100..=999 => "fed",
-        _ => "well fed",
-    };
-    (s, format!("Energy {} ({health}) · program {} bytes\n{env}", cb.e, cb.len))
-}
-
-// ------------------------------------------------------------------ UI
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Tool {
-    Inspect,
-    Paint,
-    VentAdd,
-    VentRemove,
-    Seed,
-    Clear,
-    Wall,
-    MirrorRegion,
-}
-
-struct App {
-    tx: Sender<Cmd>,
-    out: Arc<Mutex<Out>>,
-    tex: Vec<Option<egui::TextureHandle>>,
-    tex_epoch: u64,
-    view: Option<ViewSettings>,
-    zoom: f32,
-    pan: egui::Vec2,
-    tool: Tool,
-    paint_field: String,
-    paint_amount: u32,
-    paint_species: usize,
-    paint_hand: usize,
-    radius: f32,
-    genome: String,
-    mirror_seed: bool,
-    seed_energy: u32,
-    wall_type: String,
-    mirror_a: Option<[i64; 3]>,
-    edit_key: String,
-    edit_val: String,
-    redraw: u64,
-    overlays: (bool, bool, bool),
-    plots: BTreeMap<String, bool>,
-    show_plots: bool,
-    trace_idx: usize,
-    sub_idx: usize,
-    show_sub: bool,
-    last_frame: Option<Arc<Frame>>,
-    frame_ptr: usize,
-}
-
-impl App {
-    fn new(tx: Sender<Cmd>, out: Arc<Mutex<Out>>) -> App {
-        let mut plots = BTreeMap::new();
-        for k in ["population", "high-order entropy", "EE code", "replicators (top 100)"] {
-            plots.insert(k.to_string(), true);
-        }
-        App {
-            tx,
-            out,
-            tex: vec![],
-            tex_epoch: u64::MAX,
-            view: None,
-            zoom: 1.0,
-            pan: egui::Vec2::ZERO,
-            tool: Tool::Inspect,
-            paint_field: "F".into(),
-            paint_amount: 500,
-            paint_species: 0,
-            paint_hand: 0,
-            radius: 4.0,
-            genome: "36 36 36 36 36 36 36 4d 67 40 2c 12 13 15 c4".into(),
-            mirror_seed: false,
-            seed_energy: 1000,
-            wall_type: "reflect".into(),
-            mirror_a: None,
-            edit_key: "mutation.background".into(),
-            edit_val: "1e-3".into(),
-            redraw: 1,
-            overlays: (true, true, false),
-            plots,
-            show_plots: true,
-            trace_idx: 0,
-            sub_idx: 0,
-            show_sub: false,
-            last_frame: None,
-            frame_ptr: 0,
-        }
-    }
-
-    fn event(&self, epoch: u64, kind: &str, params: serde_json::Value) {
-        let _ = self.tx.send(Cmd::Event(Event { epoch, kind: kind.into(), params }));
-    }
-
-    fn apply_tool(&mut self, epoch: u64, p: [i64; 3], dims: u32) {
-        let center = json!(&p[..dims.max(1) as usize]);
-        match self.tool {
-            Tool::Inspect => {
-                let v = self.view.as_ref().unwrap();
-                let g = &v.params.geom;
-                let mut q = [0u32; 3];
-                for a in 0..3 {
-                    q[a] = p[a].clamp(0, g.size[a] as i64 - 1) as u32;
-                }
-                let _ = self.tx.send(Cmd::Inspect(g.index(q)));
-                self.trace_idx = 0;
-            }
-            Tool::Paint => {
-                let mut prm = json!({"field": self.paint_field, "center": center, "radius": self.radius, "amount": self.paint_amount});
-                prm["species"] = json!(self.paint_species);
-                prm["hand"] = json!(self.paint_hand);
-                self.event(epoch, "paint", prm);
-            }
-            Tool::VentAdd => self.event(epoch, "vent_add", json!({"center": center})),
-            Tool::VentRemove => self.event(epoch, "vent_remove", json!({"center": center, "radius": self.radius})),
-            Tool::Seed => self.event(epoch, "seed", json!({"genome": self.genome, "center": center, "radius": self.radius, "mirror": self.mirror_seed, "energy": self.seed_energy})),
-            Tool::Clear => self.event(epoch, "clear", json!({"center": center, "radius": self.radius})),
-            Tool::Wall => self.event(epoch, "wall", json!({"center": center, "radius": self.radius, "type": self.wall_type})),
-            Tool::MirrorRegion => match self.mirror_a.take() {
-                None => self.mirror_a = Some(p),
-                Some(a) => {
-                    let lo: Vec<i64> = (0..3).map(|i| a[i].min(p[i])).collect();
-                    let hi: Vec<i64> = (0..3).map(|i| a[i].max(p[i])).collect();
-                    self.event(epoch, "mirror_region", json!({"min": lo, "max": hi}));
-                }
-            },
-        }
-    }
-}
-
 fn card(ui: &mut egui::Ui, title: &str, value: String, sub: String, accent: Color32) {
     egui::Frame::new().fill(Color32::from_rgb(24, 29, 40)).corner_radius(8.0).inner_margin(egui::Margin::symmetric(12, 6)).show(ui, |ui| {
         ui.set_min_width(120.0);
@@ -746,50 +522,255 @@ fn hand_meter(ui: &mut egui::Ui, ee: f64) {
     });
 }
 
+
+/// Plain-language description of a cell for the hover card.
+fn describe(cb: &CellBrief, colony: Option<&Colony>) -> (String, String) {
+    let temp = cb.t as f32 / 100.0;
+    let env = format!("Food here: {}   Temperature: {:.1} K   Sunlight: {:.0}", cb.f, temp, cb.light as f32 / 65536.0);
+    if !cb.info.occ {
+        return ("Empty space".into(), env);
+    }
+    let mut s = String::new();
+    match colony {
+        Some(c) => s += &format!("Member of {} ({} cells)", c.name, c.size),
+        None => s += "A loner (not part of a large colony)",
+    }
+    if cb.info.halted {
+        s += " · dormant";
+    }
+    if cb.info.copier {
+        s += " · copier";
+    }
+    if cb.info.bonded {
+        s += " · bonded";
+    }
+    let health = match cb.e {
+        0 => "out of energy",
+        1..=99 => "hungry",
+        100..=999 => "fed",
+        _ => "well fed",
+    };
+    (s, format!("Energy {} ({health}) · program {} bytes\n{env}", cb.e, cb.len))
+}
+
+/// Plain-language summary of a colony.
+fn colony_story(c: &Colony, epoch: u64) -> Vec<String> {
+    let mut v = vec![];
+    v.push(format!("{} cells, about {:.0} cells across, first seen at epoch {} ({} epochs ago).", c.size, 2.0 * c.radius, c.first_seen, epoch.saturating_sub(c.first_seen)));
+    v.push(if c.growth > 20.0 {
+        format!("Growing fast: +{:.0} cells per 100 epochs.", c.growth)
+    } else if c.growth > 1.0 {
+        format!("Growing: +{:.0} cells per 100 epochs.", c.growth)
+    } else if c.growth < -20.0 {
+        format!("Shrinking fast: {:.0} cells per 100 epochs.", c.growth)
+    } else if c.growth < -1.0 {
+        format!("Shrinking: {:.0} cells per 100 epochs.", c.growth)
+    } else {
+        "Stable in size.".into()
+    });
+    v.push(format!("{:.0}% of its cells carry a copy loop; {:.0}% are bonded to neighbours; {:.0}% are dormant.", c.copiers * 100.0, c.bonded * 100.0, c.dormant * 100.0));
+    v.push(if c.hand.abs() < 0.15 {
+        "Its code uses left- and right-handed instructions about equally.".into()
+    } else if c.hand > 0.0 {
+        format!("Its code is left-handed (excess {:+.2}).", c.hand)
+    } else {
+        format!("Its code is right-handed (excess {:+.2}).", c.hand)
+    });
+    v.push(format!("Programs average {:.0} bytes.", c.mean_len));
+    v
+}
+
+// ------------------------------------------------------------------ UI
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Tool {
+    Inspect,
+    Paint,
+    VentAdd,
+    VentRemove,
+    Seed,
+    Clear,
+    Wall,
+    MirrorRegion,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Tab {
+    Colonies,
+    Chronicle,
+    Inspector,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Sort {
+    Size,
+    Growth,
+    Age,
+}
+
+struct App {
+    tx: Sender<Cmd>,
+    status: Arc<Mutex<Status>>,
+    shared: Arc<Mutex<Shared>>,
+    tex: Vec<Option<egui::TextureHandle>>,
+    frame_ptr: usize,
+    last_frame: Option<Arc<Frame>>,
+    view: ViewSettings,
+    zoom: f32,
+    pan: egui::Vec2,
+    /// fly-to target: lattice point and zoom
+    fly: Option<([f32; 2], f32)>,
+    selected: Option<u32>,
+    follow: bool,
+    hover_colony: Option<u32>,
+    tab: Tab,
+    sort: Sort,
+    tool: Tool,
+    paint_field: String,
+    paint_amount: u32,
+    paint_species: usize,
+    paint_hand: usize,
+    radius: f32,
+    genome: String,
+    mirror_seed: bool,
+    seed_energy: u32,
+    wall_type: String,
+    mirror_a: Option<[i64; 3]>,
+    edit_key: String,
+    edit_val: String,
+    labels: bool,
+    show_vents: bool,
+    show_bonds: bool,
+    show_domains: bool,
+    minimap: bool,
+    plots: BTreeMap<String, bool>,
+    show_plots: bool,
+    trace_idx: usize,
+    sub_idx: usize,
+    show_sub: bool,
+}
+
+impl App {
+    fn new(tx: Sender<Cmd>, status: Arc<Mutex<Status>>, shared: Arc<Mutex<Shared>>, view: ViewSettings) -> App {
+        let mut plots = BTreeMap::new();
+        for k in ["population", "high-order entropy", "EE code", "replicators (top 100)"] {
+            plots.insert(k.to_string(), true);
+        }
+        App {
+            tx,
+            status,
+            shared,
+            tex: vec![],
+            frame_ptr: 0,
+            last_frame: None,
+            view,
+            zoom: 1.0,
+            pan: egui::Vec2::ZERO,
+            fly: None,
+            selected: None,
+            follow: false,
+            hover_colony: None,
+            tab: Tab::Colonies,
+            sort: Sort::Size,
+            tool: Tool::Inspect,
+            paint_field: "F".into(),
+            paint_amount: 500,
+            paint_species: 0,
+            paint_hand: 0,
+            radius: 4.0,
+            genome: "36 36 36 36 36 36 36 4d 67 40 2c 12 13 15 c4".into(),
+            mirror_seed: false,
+            seed_energy: 1000,
+            wall_type: "reflect".into(),
+            mirror_a: None,
+            edit_key: "mutation.background".into(),
+            edit_val: "1e-3".into(),
+            labels: true,
+            show_vents: true,
+            show_bonds: true,
+            show_domains: false,
+            minimap: true,
+            plots,
+            show_plots: true,
+            trace_idx: 0,
+            sub_idx: 0,
+            show_sub: false,
+        }
+    }
+
+    fn event(&self, epoch: u64, kind: &str, params: serde_json::Value) {
+        let _ = self.tx.send(Cmd::Event(Event { epoch, kind: kind.into(), params }));
+    }
+
+    fn fly_to(&mut self, c: &Colony) {
+        let z = (60.0 / (c.radius * 2.5 + 8.0)).clamp(1.5, 40.0) * 4.0;
+        self.fly = Some(([c.center[0], c.center[1]], z));
+        self.selected = Some(c.id);
+    }
+
+    fn apply_tool(&mut self, epoch: u64, p: [i64; 3], dims: u32) {
+        let center = json!(&p[..dims.max(1) as usize]);
+        match self.tool {
+            Tool::Inspect => {
+                let g = &self.view.params.geom;
+                let mut q = [0u32; 3];
+                for a in 0..3 {
+                    q[a] = p[a].clamp(0, g.size[a] as i64 - 1) as u32;
+                }
+                let _ = self.tx.send(Cmd::Inspect(g.index(q)));
+                self.trace_idx = 0;
+                self.tab = Tab::Inspector;
+            }
+            Tool::Paint => {
+                let mut prm = json!({"field": self.paint_field, "center": center, "radius": self.radius, "amount": self.paint_amount});
+                prm["species"] = json!(self.paint_species);
+                prm["hand"] = json!(self.paint_hand);
+                self.event(epoch, "paint", prm);
+            }
+            Tool::VentAdd => self.event(epoch, "vent_add", json!({"center": center})),
+            Tool::VentRemove => self.event(epoch, "vent_remove", json!({"center": center, "radius": self.radius})),
+            Tool::Seed => self.event(epoch, "seed", json!({"genome": self.genome, "center": center, "radius": self.radius, "mirror": self.mirror_seed, "energy": self.seed_energy})),
+            Tool::Clear => self.event(epoch, "clear", json!({"center": center, "radius": self.radius})),
+            Tool::Wall => self.event(epoch, "wall", json!({"center": center, "radius": self.radius, "type": self.wall_type})),
+            Tool::MirrorRegion => match self.mirror_a.take() {
+                None => self.mirror_a = Some(p),
+                Some(a) => {
+                    let lo: Vec<i64> = (0..3).map(|i| a[i].min(p[i])).collect();
+                    let hi: Vec<i64> = (0..3).map(|i| a[i].max(p[i])).collect();
+                    self.event(epoch, "mirror_region", json!({"min": lo, "max": hi}));
+                }
+            },
+        }
+    }
+}
+
+fn swatch(ui: &mut egui::Ui, col: [u8; 3], size: f32) -> egui::Response {
+    let (r, p) = ui.allocate_painter(egui::vec2(size, size), egui::Sense::hover());
+    p.rect_filled(r.rect.shrink(1.0), 4.0, Color32::from_rgb(col[0], col[1], col[2]));
+    r
+}
+
+fn c32(c: [u8; 3]) -> Color32 {
+    Color32::from_rgb(c[0], c[1], c[2])
+}
+
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         ctx.request_repaint_after(Duration::from_millis(33));
-        let o = self.out.lock().unwrap();
-        if self.view.is_none() {
-            if o.frame.is_none() {
-                drop(o);
-                egui::CentralPanel::default().show(ui, |ui| {
-                    ui.centered_and_justified(|ui| ui.heading("Growing a world…"));
-                });
-                return;
-            }
-            self.view = Some(ViewSettings::from_out(o.dims, o.size));
-        }
-        let epoch = o.epoch;
-        let dims = o.dims;
-        let summary = o.summary.clone();
-        let running = o.running;
-        let eps = o.eps;
-        let backend = o.backend.clone();
-        let species = o.k_species.clone();
-        let nsig = o.n_signals;
-        let top = o.top_genomes.clone();
-        let series = o.series.clone();
-        let inspect = o.inspect.clone();
-        let chronicle: Vec<Note> = o.chronicle.iter().rev().take(200).cloned().collect();
-        let nsub = o.sub_frames.len();
-        let sun = o.sun;
-        let (births, deaths) = (o.births, o.deaths);
-        let web = o.web.clone();
-        // pick the frame and upload its textures when it changed
-        let frame: Option<Arc<Frame>> = if self.show_sub && nsub > 0 {
-            None
-        } else {
-            o.frame.clone()
+        let (epoch, dims, running, eps, backend, species, nsig, inspect, nsub, web) = {
+            let s = self.status.lock().unwrap();
+            (s.epoch, s.dims, s.running, s.eps, s.backend.clone(), s.k_species.clone(), s.n_signals, s.inspect.clone(), s.sub_frames.len(), s.web.clone())
+        };
+        let (summary, series, chronicle, top, sun, births, deaths, frame) = {
+            let s = self.shared.lock().unwrap();
+            (s.summary.clone(), s.series.clone(), s.chronicle.iter().rev().take(200).cloned().collect::<Vec<_>>(), s.top_genomes.clone(), s.sun, s.births, s.deaths, s.frame.clone())
         };
         if self.show_sub && nsub > 0 {
-            let f = &o.sub_frames[self.sub_idx.min(nsub - 1)];
-            upload(&ctx, &mut self.tex, f);
-            self.tex_epoch = u64::MAX;
-        }
-        drop(o);
-        if let Some(f) = &frame {
+            let s = self.status.lock().unwrap();
+            upload(&ctx, &mut self.tex, &s.sub_frames[self.sub_idx.min(nsub - 1)]);
+            self.frame_ptr = 0;
+        } else if let Some(f) = &frame {
             let ptr = Arc::as_ptr(f) as usize;
             if ptr != self.frame_ptr {
                 upload(&ctx, &mut self.tex, f);
@@ -797,8 +778,32 @@ impl eframe::App for App {
             }
             self.last_frame = Some(f.clone());
         }
-        let fr = self.last_frame.clone();
-        let t_amb = 300.0;
+        let Some(fr) = self.last_frame.clone() else {
+            egui::CentralPanel::default().show(ui, |ui| {
+                ui.centered_and_justified(|ui| ui.heading("Growing a world…"));
+            });
+            return;
+        };
+        let colonies = fr.colonies.clone();
+
+        // keyboard shortcuts
+        let (space, home, next, prev) = ui.input(|i| (i.key_pressed(egui::Key::Space), i.key_pressed(egui::Key::Home), i.key_pressed(egui::Key::CloseBracket), i.key_pressed(egui::Key::OpenBracket)));
+        if !ctx.egui_wants_keyboard_input() {
+            if space {
+                let _ = self.tx.send(Cmd::Run(!running));
+            }
+            if home {
+                self.fly = None;
+                self.zoom = 1.0;
+                self.pan = egui::Vec2::ZERO;
+                self.follow = false;
+            }
+            if (next || prev) && !colonies.is_empty() {
+                let i = self.selected.and_then(|id| colonies.iter().position(|c| c.id == id)).map(|i| if next { (i + 1) % colonies.len() } else { (i + colonies.len() - 1) % colonies.len() }).unwrap_or(0);
+                let c = colonies[i].clone();
+                self.fly_to(&c);
+            }
+        }
 
         // ---------------- header: controls + dashboard
         egui::Panel::top("top").show(ui, |ui| {
@@ -806,7 +811,7 @@ impl eframe::App for App {
             ui.horizontal(|ui| {
                 ui.label(RichText::new("PRIMORDIA").size(22.0).strong().color(Color32::from_rgb(110, 210, 190)));
                 ui.separator();
-                if ui.button(if running { "⏸  Pause" } else { "▶  Run" }).clicked() {
+                if ui.button(if running { "⏸  Pause" } else { "▶  Run" }).on_hover_text("Space").clicked() {
                     let _ = self.tx.send(Cmd::Run(!running));
                 }
                 if ui.button("Step").clicked() {
@@ -826,11 +831,11 @@ impl eframe::App for App {
             ui.add_space(4.0);
             ui.horizontal_wrapped(|ui| {
                 card(ui, "Living cells", format!("{}", summary.occupied), format!("+{births} born, −{deaths} died this epoch"), Color32::from_rgb(120, 220, 140));
-                card(ui, "Families", format!("{}", summary.species), format!("{} seen so far", summary.species_total), Color32::from_rgb(240, 160, 210));
+                card(ui, "Colonies", format!("{}", colonies.len()), "connected groups of relatives".into(), Color32::from_rgb(255, 170, 60));
                 let cx = if summary.hoe > 1.0 { "structured: life-like" } else if summary.hoe > 0.3 { "some structure" } else { "random soup" };
                 card(ui, "Complexity", format!("{:.2}", summary.hoe), cx.into(), Color32::from_rgb(255, 210, 110));
                 card(ui, "Copiers", format!("{} / 100", summary.replicators), "top programs that copy themselves".into(), Color32::from_rgb(110, 200, 255));
-                card(ui, "Largest body", format!("{}", summary.max_body), format!("{} bodies", summary.bodies), Color32::from_rgb(200, 170, 255));
+                card(ui, "Largest body", format!("{}", summary.max_body), format!("{} bonded bodies", summary.bodies), Color32::from_rgb(200, 170, 255));
                 hand_meter(ui, summary.ee_code);
                 let ok = summary.ledger_violations == 0;
                 card(ui, "Conservation", if ok { "exact".into() } else { format!("{} errors", summary.ledger_violations) }, "energy, matter, atoms".into(), if ok { Color32::from_rgb(120, 220, 140) } else { Color32::RED });
@@ -839,12 +844,12 @@ impl eframe::App for App {
         });
 
         // ---------------- left: view, legend, tools
-        egui::Panel::left("left").default_size(300.0).show(ui, |ui| {
+        egui::Panel::left("left").default_size(290.0).show(ui, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
-                let v = self.view.as_mut().unwrap();
+                let v = &mut self.view;
                 let mut changed = false;
                 ui.heading("View");
-                egui::ComboBox::from_id_salt("mode").width(260.0).selected_text(v.mode.name()).show_ui(ui, |ui| {
+                egui::ComboBox::from_id_salt("mode").width(250.0).selected_text(v.mode.name()).show_ui(ui, |ui| {
                     for m in Mode::all() {
                         changed |= ui.selectable_value(&mut v.mode, m, m.name()).changed();
                     }
@@ -863,9 +868,6 @@ impl eframe::App for App {
                 if v.mode == Mode::Signals && nsig > 0 {
                     changed |= ui.add(egui::Slider::new(&mut v.sig_j, 0..=nsig - 1).text("signal")).changed();
                 }
-                ui.checkbox(&mut self.overlays.1, "Show vents");
-                ui.checkbox(&mut self.overlays.0, "Show bonds when zoomed in");
-                ui.checkbox(&mut self.overlays.2, "Outline handedness domains");
                 if dims == 3 {
                     let size = v.params.geom.size;
                     ui.label("3D slices");
@@ -876,19 +878,21 @@ impl eframe::App for App {
                 if changed {
                     let _ = self.tx.send(Cmd::View(v.clone()));
                 }
-                ui.horizontal(|ui| {
-                    if ui.button("Fit to window").clicked() {
-                        self.zoom = 1.0;
-                        self.pan = egui::Vec2::ZERO;
-                    }
-                    ui.label(RichText::new("scroll = zoom, right-drag = pan").small().weak());
+                ui.checkbox(&mut self.labels, "Colony names on the map");
+                ui.checkbox(&mut self.show_vents, "Vents");
+                ui.checkbox(&mut self.minimap, "Minimap when zoomed in");
+                ui.checkbox(&mut self.show_bonds, "Bonds when zoomed in");
+                ui.checkbox(&mut self.show_domains, "Handedness domains");
+                ui.add_space(4.0);
+                egui::Frame::new().fill(Color32::from_rgb(22, 27, 38)).corner_radius(6.0).inner_margin(8).show(ui, |ui| {
+                    ui.label(RichText::new("Navigate").strong());
+                    ui.label(RichText::new("scroll: zoom · right-drag: pan\nclick a colony in the list to fly there\n[ and ]: previous / next colony\nHome: whole world · Space: run / pause").small().weak());
                 });
                 ui.add_space(6.0);
                 ui.heading("Legend");
-                for (col, text) in v.mode.legend() {
+                for (col, text) in self.view.mode.legend() {
                     ui.horizontal(|ui| {
-                        let (r, p) = ui.allocate_painter(egui::vec2(16.0, 16.0), egui::Sense::hover());
-                        p.rect_filled(r.rect.shrink(1.0), 4.0, Color32::from_rgb(col[0], col[1], col[2]));
+                        swatch(ui, col, 16.0);
                         ui.label(RichText::new(text).small());
                     });
                 }
@@ -905,13 +909,6 @@ impl eframe::App for App {
                             ui.add(egui::Slider::new(&mut self.sub_idx, 0..=nsub - 1).text("sub-step"));
                         }
                     }
-                    ui.horizontal(|ui| {
-                        ui.label("redraw every");
-                        if ui.add(egui::DragValue::new(&mut self.redraw).range(1..=100000)).changed() {
-                            let _ = self.tx.send(Cmd::RedrawEvery(self.redraw));
-                        }
-                        ui.label("epochs");
-                    });
                     ui.label(RichText::new(&backend).small().weak());
                 });
                 egui::CollapsingHeader::new("Tools (interventions)").default_open(false).show(ui, |ui| {
@@ -990,80 +987,162 @@ impl eframe::App for App {
             });
         });
 
-        // ---------------- right: chronicle + inspector
-        egui::Panel::right("right").default_size(380.0).show(ui, |ui| {
-            ui.heading("Chronicle");
-            ui.label(RichText::new("Notable things that happened, newest first").small().weak());
-            let h = if inspect.is_some() { ui.available_height() * 0.4 } else { ui.available_height() - 10.0 };
-            egui::ScrollArea::vertical().id_salt("chron").max_height(h).show(ui, |ui| {
-                for n in &chronicle {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(RichText::new(n.icon).size(16.0));
-                        ui.label(RichText::new(format!("epoch {}", n.epoch)).small().monospace().color(Color32::from_rgb(120, 130, 150)));
-                        ui.label(RichText::new(&n.text).small());
-                    });
-                    ui.add_space(2.0);
-                }
+        // ---------------- right: colonies atlas, chronicle, inspector
+        self.hover_colony = None;
+        egui::Panel::right("right").default_size(390.0).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut self.tab, Tab::Colonies, RichText::new(format!("🗺 Colonies ({})", colonies.len())).strong());
+                ui.selectable_value(&mut self.tab, Tab::Chronicle, RichText::new("📜 Chronicle").strong());
+                ui.selectable_value(&mut self.tab, Tab::Inspector, RichText::new("🔍 Inspector").strong());
             });
-            if let Some(ins) = &inspect {
-                ui.separator();
-                ui.heading("Inspector");
-                egui::ScrollArea::vertical().id_salt("insp").show(ui, |ui| {
-                    ui.label(RichText::new(&ins.text).monospace().small());
-                    ui.separator();
-                    ui.label("program (chiral ops: red = L, blue = D; shaded = catalyst active site)");
-                    egui::Grid::new("tape").striped(true).show(ui, |ui| {
-                        for (i, &b) in ins.tape.iter().enumerate() {
-                            let col = if isa::is_chiral(b) {
-                                if b & 1 == 0 { Color32::from_rgb(230, 90, 80) } else { Color32::from_rgb(90, 140, 240) }
-                            } else if b == 0 {
-                                Color32::DARK_GRAY
-                            } else {
-                                Color32::LIGHT_GRAY
-                            };
-                            let in_site = ins.cat_eta.iter().any(|&(ci, _)| i < ci && ci - i <= 8);
-                            let mut txt = RichText::new(format!("{i:3} {b:02x} {}", isa::mnemonic(b))).monospace().small().color(col);
-                            if in_site {
-                                txt = txt.background_color(Color32::from_rgb(60, 60, 20));
+            ui.separator();
+            match self.tab {
+                Tab::Colonies => {
+                    if colonies.is_empty() {
+                        ui.label("No sizeable colonies yet. Colonies appear when related cells (copies of each other) cluster together.");
+                    }
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("sort by").small().weak());
+                        ui.selectable_value(&mut self.sort, Sort::Size, "size");
+                        ui.selectable_value(&mut self.sort, Sort::Growth, "growth");
+                        ui.selectable_value(&mut self.sort, Sort::Age, "age");
+                        ui.checkbox(&mut self.follow, "follow selected");
+                    });
+                    let mut list: Vec<&Colony> = colonies.iter().collect();
+                    match self.sort {
+                        Sort::Size => list.sort_by(|a, b| b.size.cmp(&a.size)),
+                        Sort::Growth => list.sort_by(|a, b| b.growth.partial_cmp(&a.growth).unwrap_or(std::cmp::Ordering::Equal)),
+                        Sort::Age => list.sort_by_key(|c| c.first_seen),
+                    }
+                    let sel = self.selected;
+                    let detail_h = if sel.is_some() { 230.0 } else { 0.0 };
+                    let mut clicked: Option<Colony> = None;
+                    egui::ScrollArea::vertical().id_salt("atlas").max_height(ui.available_height() - detail_h).show(ui, |ui| {
+                        for c in list {
+                            let is_sel = sel == Some(c.id);
+                            let fill = if is_sel { Color32::from_rgb(34, 48, 56) } else { Color32::from_rgb(22, 27, 38) };
+                            let resp = egui::Frame::new().fill(fill).corner_radius(6.0).inner_margin(egui::Margin::symmetric(8, 5)).show(ui, |ui| {
+                                ui.set_min_width(ui.available_width());
+                                ui.horizontal(|ui| {
+                                    swatch(ui, c.color, 22.0);
+                                    ui.vertical(|ui| {
+                                        ui.horizontal(|ui| {
+                                            ui.label(RichText::new(&c.name).strong().color(c32(c.color)));
+                                            let (arrow, col) = if c.growth > 1.0 { ("▲", Color32::from_rgb(120, 220, 140)) } else if c.growth < -1.0 { ("▼", Color32::from_rgb(240, 110, 110)) } else { ("●", Color32::GRAY) };
+                                            ui.label(RichText::new(format!("{arrow} {}", c.size)).color(col));
+                                        });
+                                        ui.label(RichText::new(format!("{:.0}% copiers · {:.0}% bonded · {}", c.copiers * 100.0, c.bonded * 100.0, if c.hand.abs() < 0.15 { "mixed hand".to_string() } else if c.hand > 0.0 { "left-handed".into() } else { "right-handed".into() })).small().weak());
+                                    });
+                                });
+                            });
+                            let r = resp.response.interact(egui::Sense::click());
+                            if r.hovered() {
+                                self.hover_colony = Some(c.id);
                             }
-                            ui.label(txt);
-                            if let Some(&(_, eta)) = ins.cat_eta.iter().find(|&&(ci, _)| ci == i) {
-                                ui.label(RichText::new(format!("η = {eta:.2}")).small().color(Color32::YELLOW));
+                            if r.clicked() {
+                                clicked = Some(c.clone());
                             }
-                            if i % 2 == 1 {
-                                ui.end_row();
-                            }
+                            ui.add_space(3.0);
                         }
                     });
-                    ui.separator();
-                    ui.label(format!("CPU debugger: its next slice ({} steps, read-only)", ins.trace.len()));
-                    if !ins.trace.is_empty() {
-                        ui.add(egui::Slider::new(&mut self.trace_idx, 0..=ins.trace.len() - 1).text("step"));
-                        let s = &ins.trace[self.trace_idx.min(ins.trace.len() - 1)];
-                        ui.label(
-                            RichText::new(format!(
-                                "IP {:3}  op {:02x} {:<10}\nH0 {:4}  H1 {:4}  E {}\nstack {:?}\npartner {:?}  order {}  len self {}  partner {}",
-                                s.ip,
-                                s.op,
-                                isa::mnemonic(s.op),
-                                s.h0,
-                                s.h1,
-                                s.energy,
-                                s.stack,
-                                s.partner,
-                                if s.partner_first { "partner+self" } else { "self+partner" },
-                                s.len_self,
-                                s.len_partner
-                            ))
-                            .monospace(),
-                        );
+                    if let Some(c) = clicked {
+                        self.fly_to(&c);
                     }
-                });
+                    if let Some(c) = sel.and_then(|id| colonies.iter().find(|c| c.id == id)) {
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            swatch(ui, c.color, 18.0);
+                            ui.label(RichText::new(&c.name).size(17.0).strong().color(c32(c.color)));
+                            if ui.small_button("fly there").clicked() {
+                                let c2 = c.clone();
+                                self.fly_to(&c2);
+                            }
+                        });
+                        for line in colony_story(c, epoch) {
+                            ui.label(RichText::new(line).small());
+                        }
+                        ui.label(RichText::new("How its typical program begins:").small().weak());
+                        ui.label(RichText::new(c.prefix.iter().take(12).map(|&b| isa::mnemonic(b)).collect::<Vec<_>>().join(" · ")).small().monospace().color(Color32::from_rgb(200, 210, 225)));
+                    } else if self.selected.is_some() {
+                        ui.label(RichText::new("The selected colony has dissolved or merged.").small().weak());
+                    }
+                }
+                Tab::Chronicle => {
+                    ui.label(RichText::new("Notable things that happened, newest first").small().weak());
+                    egui::ScrollArea::vertical().id_salt("chron").show(ui, |ui| {
+                        for n in &chronicle {
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label(RichText::new(n.icon).size(16.0));
+                                ui.label(RichText::new(format!("epoch {}", n.epoch)).small().monospace().color(Color32::from_rgb(120, 130, 150)));
+                                ui.label(RichText::new(&n.text).small());
+                            });
+                            ui.add_space(2.0);
+                        }
+                    });
+                }
+                Tab::Inspector => match &inspect {
+                    None => {
+                        ui.label("Choose the 🔍 Inspect tool (Tools section) and click a cell to see its program, energy and lineage, and step through its next slice.");
+                    }
+                    Some(ins) => {
+                        egui::ScrollArea::vertical().id_salt("insp").show(ui, |ui| {
+                            ui.label(RichText::new(&ins.text).monospace().small());
+                            ui.separator();
+                            ui.label("program (chiral ops: red = L, blue = D; shaded = catalyst active site)");
+                            egui::Grid::new("tape").striped(true).show(ui, |ui| {
+                                for (i, &b) in ins.tape.iter().enumerate() {
+                                    let col = if isa::is_chiral(b) {
+                                        if b & 1 == 0 { Color32::from_rgb(230, 90, 80) } else { Color32::from_rgb(90, 140, 240) }
+                                    } else if b == 0 {
+                                        Color32::DARK_GRAY
+                                    } else {
+                                        Color32::LIGHT_GRAY
+                                    };
+                                    let in_site = ins.cat_eta.iter().any(|&(ci, _)| i < ci && ci - i <= 8);
+                                    let mut txt = RichText::new(format!("{i:3} {b:02x} {}", isa::mnemonic(b))).monospace().small().color(col);
+                                    if in_site {
+                                        txt = txt.background_color(Color32::from_rgb(60, 60, 20));
+                                    }
+                                    ui.label(txt);
+                                    if let Some(&(_, eta)) = ins.cat_eta.iter().find(|&&(ci, _)| ci == i) {
+                                        ui.label(RichText::new(format!("η = {eta:.2}")).small().color(Color32::YELLOW));
+                                    }
+                                    if i % 2 == 1 {
+                                        ui.end_row();
+                                    }
+                                }
+                            });
+                            ui.separator();
+                            ui.label(format!("CPU debugger: its next slice ({} steps, read-only)", ins.trace.len()));
+                            if !ins.trace.is_empty() {
+                                ui.add(egui::Slider::new(&mut self.trace_idx, 0..=ins.trace.len() - 1).text("step"));
+                                let s = &ins.trace[self.trace_idx.min(ins.trace.len() - 1)];
+                                ui.label(
+                                    RichText::new(format!(
+                                        "IP {:3}  op {:02x} {:<10}\nH0 {:4}  H1 {:4}  E {}\nstack {:?}\npartner {:?}  order {}  len self {}  partner {}",
+                                        s.ip,
+                                        s.op,
+                                        isa::mnemonic(s.op),
+                                        s.h0,
+                                        s.h1,
+                                        s.energy,
+                                        s.stack,
+                                        s.partner,
+                                        if s.partner_first { "partner+self" } else { "self+partner" },
+                                        s.len_self,
+                                        s.len_partner
+                                    ))
+                                    .monospace(),
+                                );
+                            }
+                        });
+                    }
+                },
             }
         });
 
-        // ---------------- bottom: plots
-        egui::Panel::bottom("plots").exact_size(if self.show_plots { 240.0 } else { 34.0 }).show(ui, |ui| {
+        // ---------------- bottom: trends
+        egui::Panel::bottom("plots").exact_size(if self.show_plots { 220.0 } else { 34.0 }).show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.checkbox(&mut self.show_plots, RichText::new("Trends").strong());
                 if self.show_plots {
@@ -1090,7 +1169,7 @@ impl eframe::App for App {
                     ui.vertical(|ui| {
                         ui.label(RichText::new(&k).small());
                         let pts = series.get(&k).cloned().unwrap_or_default();
-                        egui_plot::Plot::new(format!("plot-{k}")).width(w).height(170.0).show_axes([true, true]).allow_scroll(false).show(ui, |pu| {
+                        egui_plot::Plot::new(format!("plot-{k}")).width(w).height(160.0).show_axes([true, true]).allow_scroll(false).allow_drag(false).show(ui, |pu| {
                             pu.line(egui_plot::Line::new(k.clone(), pts).color(Color32::from_rgb(110, 210, 190)));
                         });
                     });
@@ -1100,46 +1179,80 @@ impl eframe::App for App {
 
         // ---------------- centre: map
         egui::CentralPanel::default().show(ui, |ui| {
-            let Some(f) = fr else { return };
+            let f = fr;
             let avail = ui.available_size();
             let n = f.images.len();
             let (cols, rows) = if n >= 3 { (2, 2) } else { (n.max(1), 1) };
             let cell = egui::vec2(avail.x / cols as f32, avail.y / rows as f32);
             let (resp, painter) = ui.allocate_painter(avail, egui::Sense::click_and_drag());
             painter.rect_filled(resp.rect, 0.0, Color32::from_rgb(8, 10, 15));
+            let base_fit = |im: &Image| ((cell.x - 8.0) / im.w as f32).min((cell.y - 26.0) / im.h as f32).max(0.01);
+            // keyboard pan / zoom
+            if resp.hovered() && !ctx.egui_wants_keyboard_input() {
+                let (l, r, u, d, zi, zo) = ui.input(|i| (i.key_down(egui::Key::ArrowLeft), i.key_down(egui::Key::ArrowRight), i.key_down(egui::Key::ArrowUp), i.key_down(egui::Key::ArrowDown), i.key_pressed(egui::Key::Plus) || i.key_pressed(egui::Key::Equals), i.key_pressed(egui::Key::Minus)));
+                let step = 12.0;
+                self.pan += egui::vec2((l as i32 - r as i32) as f32 * step, (u as i32 - d as i32) as f32 * step);
+                if zi {
+                    self.zoom *= 1.25;
+                }
+                if zo {
+                    self.zoom /= 1.25;
+                }
+            }
             if resp.hovered() {
                 let sc = ui.input(|i| i.smooth_scroll_delta.y);
                 if sc != 0.0 {
+                    self.fly = None;
                     let old = self.zoom;
-                    self.zoom = (self.zoom * (1.0 + sc * 0.002)).clamp(0.2, 300.0);
-                    // zoom about the cursor
+                    self.zoom = (self.zoom * (1.0 + sc * 0.002)).clamp(0.3, 300.0);
                     if let Some(pos) = resp.hover_pos() {
-                        let anchor = pos - resp.rect.min - self.pan;
+                        let anchor = pos - resp.rect.min - egui::vec2(4.0, 24.0) - self.pan;
                         self.pan -= anchor * (self.zoom / old - 1.0);
                     }
                 }
             }
             if resp.dragged_by(egui::PointerButton::Secondary) || resp.dragged_by(egui::PointerButton::Middle) {
                 self.pan += resp.drag_delta();
+                self.fly = None;
+                self.follow = false;
+            }
+            // follow the selected colony as it moves
+            if self.follow && dims == 2 {
+                if let Some(c) = self.selected.and_then(|id| f.colonies.iter().find(|c| c.id == id)) {
+                    self.fly = Some(([c.center[0], c.center[1]], self.zoom));
+                }
+            }
+            // smooth fly-to (first image)
+            if let (Some((target, tz)), Some(im)) = (self.fly, f.images.first()) {
+                if dims == 2 || dims == 0 {
+                    let bf = base_fit(im);
+                    self.zoom += (tz - self.zoom) * 0.18;
+                    let fit = bf * self.zoom;
+                    let want = egui::vec2(cell.x / 2.0 - 4.0 - (target[0] + 0.5) * fit, cell.y / 2.0 - 24.0 - (im.h as f32 - target[1] - 0.5) * fit);
+                    let d = want - self.pan;
+                    self.pan += d * 0.18;
+                    if d.length() < 1.0 && (tz - self.zoom).abs() < 0.01 * tz && !self.follow {
+                        self.fly = None;
+                    }
+                }
             }
             let time = ui.input(|i| i.time) as f32;
             let origin = resp.rect.min;
-            let mut hovered: Option<([i64; 3], Option<CellBrief>, egui::Pos2)> = None;
+            let mut hovered: Option<([i64; 3], Option<CellBrief>, Option<usize>, egui::Pos2)> = None;
             for (i, im) in f.images.iter().enumerate() {
                 let slot = egui::Rect::from_min_size(origin + egui::vec2((i % cols) as f32 * cell.x, (i / cols) as f32 * cell.y), cell);
-                let fit = ((slot.width() - 8.0) / im.w as f32).min((slot.height() - 26.0) / im.h as f32).max(0.01) * self.zoom;
+                let fit = base_fit(im) * self.zoom;
                 let img = egui::Rect::from_min_size(slot.min + egui::vec2(4.0, 24.0) + self.pan, egui::vec2(im.w as f32 * fit, im.h as f32 * fit));
                 painter.text(slot.min + egui::vec2(6.0, 4.0), egui::Align2::LEFT_TOP, &im.label, egui::FontId::proportional(14.0), Color32::from_rgb(200, 210, 225));
                 let clip = painter.with_clip_rect(slot.shrink(1.0).intersect(egui::Rect::from_min_max(slot.min + egui::vec2(0.0, 22.0), slot.max)));
                 let to_screen = |x: f32, y: f32| egui::pos2(img.min.x + x * fit, img.max.y - y * fit);
                 let disc = dims == 2 && fit >= 7.0 && !f.cells.is_empty();
                 if let Some(Some(t)) = self.tex.get(i) {
-                    // flip y so that +y points up
-                    let tint = if disc { Color32::from_gray(90) } else { Color32::WHITE };
+                    let tint = if disc { Color32::from_gray(80) } else { Color32::WHITE };
                     clip.image(t.id(), img, egui::Rect::from_min_max(egui::pos2(0.0, 1.0), egui::pos2(1.0, 0.0)), tint);
                 }
                 clip.rect_stroke(img, 0.0, egui::Stroke::new(1.0, Color32::from_rgb(50, 58, 75)), egui::StrokeKind::Outside);
-                // zoomed in: draw organisms as cells with bonds
+                // zoomed in: cells as discs joined by bonds
                 if disc {
                     let vis = clip.clip_rect();
                     let x0 = (((vis.min.x - img.min.x) / fit).floor().max(0.0)) as usize;
@@ -1157,7 +1270,7 @@ impl eframe::App for App {
                                 let k = (y * im.w + x) * 4;
                                 let col = Color32::from_rgb(im.rgba[k], im.rgba[k + 1], im.rgba[k + 2]);
                                 let center = to_screen(x as f32 + 0.5, y as f32 + 0.5);
-                                if self.overlays.0 && !f.bonds.is_empty() {
+                                if self.show_bonds && !f.bonds.is_empty() {
                                     let b = f.bonds[c];
                                     if b & 1 != 0 {
                                         clip.line_segment([center, to_screen(x as f32 + 1.5, y as f32 + 0.5)], egui::Stroke::new(fit * 0.18, Color32::from_rgb(220, 225, 235)));
@@ -1174,8 +1287,8 @@ impl eframe::App for App {
                         }
                     }
                 }
-                // vents: pulsing beacons, visible at every zoom
-                if self.overlays.1 && dims >= 1 {
+                // vents
+                if self.show_vents && dims >= 1 {
                     let (ax, ay) = im.axes;
                     for v in &f.vents {
                         let on = dims <= 2 || (0..3).all(|a| a == ax || a == ay || v[a].abs_diff(im.fixed[a]) <= 2);
@@ -1185,18 +1298,16 @@ impl eframe::App for App {
                         let yv = if dims >= 2 { v[ay] as f32 } else { 0.0 };
                         let pc = to_screen(v[ax] as f32 + 0.5, yv + 0.5);
                         let pulse = 0.5 + 0.5 * (time * 2.5 + v[ax] as f32).sin();
-                        let base = (fit * 2.5).max(10.0);
-                        for k in 0..4 {
+                        let base = (fit * 2.5).max(9.0);
+                        for k in 0..3 {
                             let r = base * (1.0 + 0.6 * k as f32 + 0.4 * pulse);
-                            let a = (70.0 - 15.0 * k as f32) * (0.6 + 0.4 * pulse);
+                            let a = (60.0 - 15.0 * k as f32) * (0.6 + 0.4 * pulse);
                             clip.circle_filled(pc, r, Color32::from_rgba_unmultiplied(255, 140, 30, a as u8));
                         }
-                        clip.circle_filled(pc, base * 0.55, Color32::from_rgb(255, 220, 120));
-                        clip.circle_stroke(pc, base * (1.6 + pulse), egui::Stroke::new(2.0, Color32::from_rgba_unmultiplied(255, 180, 60, 160)));
-                        clip.text(pc + egui::vec2(base * 1.8, -base * 1.2), egui::Align2::LEFT_BOTTOM, "vent", egui::FontId::proportional(12.0), Color32::from_rgb(255, 200, 120));
+                        clip.circle_filled(pc, base * 0.5, Color32::from_rgb(255, 220, 120));
                     }
                 }
-                if self.overlays.2 && !f.domains.is_empty() && dims == 2 {
+                if self.show_domains && !f.domains.is_empty() && dims == 2 {
                     let (bx, by) = (f.dnb[0], f.dnb[1]);
                     for j in 0..by {
                         for i2 in 0..bx {
@@ -1213,12 +1324,44 @@ impl eframe::App for App {
                         }
                     }
                 }
+                // colony highlight + labels (2D)
+                if dims == 2 && i == 0 {
+                    for c in f.colonies.iter() {
+                        let hl = self.hover_colony == Some(c.id) || self.selected == Some(c.id);
+                        let pc = to_screen(c.center[0] + 0.5, c.center[1] + 0.5);
+                        if hl {
+                            let r = (c.radius * 1.6 * fit).max(14.0);
+                            clip.circle_stroke(pc, r, egui::Stroke::new(3.0, Color32::WHITE));
+                            clip.circle_stroke(pc, r + 4.0, egui::Stroke::new(2.0, c32(c.color)));
+                        }
+                    }
+                    if self.labels {
+                        let mut placed: Vec<egui::Rect> = vec![];
+                        for c in f.colonies.iter().take(16) {
+                            let pc = to_screen(c.center[0] + 0.5, c.center[1] + 0.5);
+                            if !clip.clip_rect().contains(pc) {
+                                continue;
+                            }
+                            let text = format!("{}  {}", c.name, c.size);
+                            let galley = painter.layout_no_wrap(text, egui::FontId::proportional(13.0), Color32::WHITE);
+                            let r = egui::Rect::from_center_size(pc, galley.size() + egui::vec2(16.0, 6.0));
+                            if placed.iter().any(|p| p.intersects(r)) {
+                                continue;
+                            }
+                            placed.push(r);
+                            clip.rect_filled(r, 10.0, Color32::from_rgba_unmultiplied(10, 12, 18, 200));
+                            clip.circle_filled(r.left_center() + egui::vec2(7.0, 0.0), 4.0, c32(c.color));
+                            clip.galley(r.min + egui::vec2(12.0, 3.0), galley, Color32::WHITE);
+                        }
+                    }
+                }
                 if let Some(pos) = resp.hover_pos() {
-                    if img.contains(pos) {
+                    if img.contains(pos) && clip.clip_rect().contains(pos) {
                         let x = ((pos.x - img.min.x) / fit) as i64;
                         let y = ((img.max.y - pos.y) / fit) as i64;
                         let mut q = [im.fixed[0] as i64, im.fixed[1] as i64, im.fixed[2] as i64];
                         let mut brief = None;
+                        let mut col = None;
                         match dims {
                             0 => q = [x + y * im.w as i64, 0, 0],
                             1 => q = [x, 0, 0],
@@ -1228,19 +1371,50 @@ impl eframe::App for App {
                                 if dims == 2 {
                                     let c = x as usize + y as usize * im.w;
                                     brief = f.cells.get(c).copied();
-                                    // highlight
+                                    col = f.colony_of.get(c).and_then(|&k| if k > 0 { Some(k as usize - 1) } else { None });
                                     clip.rect_stroke(egui::Rect::from_min_size(to_screen(x as f32, y as f32 + 1.0), egui::vec2(fit, fit)).expand(1.0), 2.0, egui::Stroke::new(1.5, Color32::WHITE), egui::StrokeKind::Outside);
                                 }
                             }
                         }
-                        hovered = Some((q, brief, pos));
+                        hovered = Some((q, brief, col, pos));
+                    }
+                }
+                // minimap (2D, zoomed in)
+                if self.minimap && dims == 2 && i == 0 && self.zoom > 1.6 {
+                    if let Some(Some(t)) = self.tex.get(0) {
+                        let mw = 180.0;
+                        let mh = mw * im.h as f32 / im.w as f32;
+                        let mr = egui::Rect::from_min_size(egui::pos2(slot.max.x - mw - 12.0, slot.min.y + 30.0), egui::vec2(mw, mh));
+                        painter.rect_filled(mr.expand(3.0), 4.0, Color32::from_rgba_unmultiplied(0, 0, 0, 200));
+                        painter.image(t.id(), mr, egui::Rect::from_min_max(egui::pos2(0.0, 1.0), egui::pos2(1.0, 0.0)), Color32::WHITE);
+                        // viewport rectangle
+                        let vis = slot.intersect(img);
+                        let lx0 = (vis.min.x - img.min.x) / fit / im.w as f32;
+                        let lx1 = (vis.max.x - img.min.x) / fit / im.w as f32;
+                        let ly0 = (vis.min.y - img.min.y) / fit / im.h as f32;
+                        let ly1 = (vis.max.y - img.min.y) / fit / im.h as f32;
+                        let vr = egui::Rect::from_min_max(mr.min + egui::vec2(lx0 * mw, ly0 * mh), mr.min + egui::vec2(lx1 * mw, ly1 * mh));
+                        painter.rect_stroke(vr, 0.0, egui::Stroke::new(1.5, Color32::WHITE), egui::StrokeKind::Outside);
+                        // click the minimap to jump
+                        if let Some(p) = resp.interact_pointer_pos() {
+                            if resp.clicked() && mr.contains(p) {
+                                let lx = (p.x - mr.min.x) / mw * im.w as f32;
+                                let ly = im.h as f32 - (p.y - mr.min.y) / mh * im.h as f32;
+                                self.fly = Some(([lx, ly], self.zoom));
+                                hovered = None;
+                            }
+                        }
                     }
                 }
             }
-            if let Some((q, brief, pos)) = hovered {
+            if let Some((q, brief, col, pos)) = hovered {
+                let colony = col.and_then(|k| f.colonies.get(k));
+                if let Some(c) = colony {
+                    self.hover_colony = Some(c.id);
+                }
                 let head = format!("{:?}", &q[..dims.max(1) as usize]);
                 let (title, body) = match brief {
-                    Some(cb) => describe(&cb, t_amb),
+                    Some(cb) => describe(&cb, colony),
                     None => ("".into(), "click to inspect".into()),
                 };
                 let text = format!("{head}  {title}\n{body}");
@@ -1254,10 +1428,20 @@ impl eframe::App for App {
                 }
                 let r = egui::Rect::from_min_size(at, galley.size()).expand(8.0);
                 painter.rect_filled(r, 6.0, Color32::from_rgba_unmultiplied(16, 20, 30, 235));
-                painter.rect_stroke(r, 6.0, egui::Stroke::new(1.0, Color32::from_rgb(70, 90, 110)), egui::StrokeKind::Outside);
+                painter.rect_stroke(r, 6.0, egui::Stroke::new(1.0, colony.map(|c| c32(c.color)).unwrap_or(Color32::from_rgb(70, 90, 110))), egui::StrokeKind::Outside);
                 painter.galley(at, galley, Color32::WHITE);
                 if resp.clicked_by(egui::PointerButton::Primary) {
-                    self.apply_tool(epoch, q, dims);
+                    if self.tool == Tool::Inspect {
+                        if let Some(c) = colony {
+                            self.selected = Some(c.id);
+                            self.tab = Tab::Colonies;
+                        }
+                        if resp.double_clicked() || colony.is_none() {
+                            self.apply_tool(epoch, q, dims);
+                        }
+                    } else {
+                        self.apply_tool(epoch, q, dims);
+                    }
                 }
             }
         });
@@ -1299,10 +1483,10 @@ mod tests {
                 sim.step();
             }
             let mut v = ViewSettings::default(&sim.p);
-            let mut hist = vec![];
+            let mut ctx = render::RenderCtx::default();
             for m in Mode::all() {
                 v.mode = m;
-                let f = render::render(&sim.st, &sim.p, &v, &[], &mut hist);
+                let f = render::render(&sim.st, &sim.p, &v, &[], &mut ctx);
                 assert!(!f.images.is_empty());
                 for im in &f.images {
                     assert_eq!(im.rgba.len(), im.w * im.h * 4);

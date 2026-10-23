@@ -2,12 +2,14 @@
 //! be readable at a glance; the other modes show one quantity each.
 
 use crate::{CellInfo, Frame, Image};
+use primordia_core::params::NONE;
 use primordia_core::isa;
 use primordia_core::params::*;
 use primordia_core::state::State;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Mode {
+    Colonies,
     Life,
     Group,
     Hand,
@@ -24,13 +26,14 @@ pub enum Mode {
 }
 
 impl Mode {
-    pub fn all() -> [Mode; 13] {
+    pub fn all() -> [Mode; 14] {
         use Mode::*;
-        [Life, Group, Hand, Species, Lineage, Energy, Free, Temp, Chem, ChemEe, Pools, Signals, Exposure]
+        [Colonies, Life, Group, Hand, Species, Lineage, Energy, Free, Temp, Chem, ChemEe, Pools, Signals, Exposure]
     }
     pub fn name(&self) -> &'static str {
         match self {
-            Mode::Life => "Life (illustrated)",
+            Mode::Colonies => "Colonies (recommended)",
+            Mode::Life => "Families (every program family)",
             Mode::Group => "What programs do (opcode group)",
             Mode::Hand => "Handedness of code (L red / D blue)",
             Mode::Species => "Families (genome similarity)",
@@ -48,6 +51,14 @@ impl Mode {
     /// (swatch colour, meaning) pairs for the legend.
     pub fn legend(&self) -> Vec<([u8; 3], &'static str)> {
         match self {
+            Mode::Colonies => vec![
+                (COLONY_COLORS[0], "each bright colour is one colony: a connected group of related cells (see the Colonies list)"),
+                ([56, 62, 76], "slate = loners: cells not part of a sizeable colony"),
+                ([150, 150, 150], "faded = dormant (out of energy)"),
+                ([16, 44, 40], "dark green ground = food (free energy)"),
+                ([255, 170, 40], "orange beacon = hydrothermal vent"),
+                ([110, 90, 70], "brown = wall"),
+            ],
             Mode::Life => vec![
                 (PALETTE[0], "a living cell; the colour is its family (similar programs share a colour)"),
                 (PALETTE[5], "bright = well fed, dim = low on energy"),
@@ -91,7 +102,7 @@ pub struct ViewSettings {
 impl ViewSettings {
     pub fn default(p: &Params) -> ViewSettings {
         let s = p.geom.size;
-        ViewSettings { mode: Mode::Life, chem_k: 0, chem_h: 0, sig_j: 0, slice: [s[0] / 2, s[1] / 2, s[2] / 2], params: std::sync::Arc::new(p.clone()) }
+        ViewSettings { mode: Mode::Colonies, chem_k: 0, chem_h: 0, sig_j: 0, slice: [s[0] / 2, s[1] / 2, s[2] / 2], params: std::sync::Arc::new(p.clone()) }
     }
     /// UI-side copy: only geometry is needed for coordinate mapping.
     pub fn from_out(dims: u32, size: [u32; 3]) -> ViewSettings {
@@ -99,7 +110,7 @@ impl ViewSettings {
         c.world.dims = dims;
         c.world.size = if dims == 0 { vec![size[0]] } else { size[..dims as usize].to_vec() };
         let p = Params::new(&c);
-        ViewSettings { mode: Mode::Life, chem_k: 0, chem_h: 0, sig_j: 0, slice: [size[0] / 2, size[1] / 2, size[2] / 2], params: std::sync::Arc::new(p) }
+        ViewSettings { mode: Mode::Colonies, chem_k: 0, chem_h: 0, sig_j: 0, slice: [size[0] / 2, size[1] / 2, size[2] / 2], params: std::sync::Arc::new(p) }
     }
 }
 
@@ -177,7 +188,7 @@ fn mix(a: [u8; 3], b: [u8; 3], t: f32) -> [u8; 3] {
 fn scalar(st: &State, p: &Params, v: &ViewSettings, c: usize, expo: &[u32]) -> f32 {
     match v.mode {
         Mode::Energy => (st.h(c, H_E) as f32 + 1.0).ln(),
-        Mode::Free | Mode::Life => (st.f(c, F_F) as f32 + 1.0).ln(),
+        Mode::Free | Mode::Life | Mode::Colonies => (st.f(c, F_F) as f32 + 1.0).ln(),
         Mode::Temp => st.f(c, F_T) as f32 / 100.0,
         Mode::Chem if v.chem_k < p.k => st.f(c, p.f_chem(v.chem_k, v.chem_h)) as f32,
         Mode::Exposure => expo.get(c).map(|&e| e as f32 / 65536.0).unwrap_or(1.0),
@@ -305,10 +316,17 @@ pub fn cell_infos(st: &State) -> Vec<CellInfo> {
         .collect()
 }
 
-pub fn render(st: &State, p: &Params, v: &ViewSettings, domains: &[i8], hist1d: &mut Vec<Vec<u8>>) -> Frame {
+pub fn render(st: &State, p: &Params, v: &ViewSettings, domains: &[i8], ctx: &mut RenderCtx) -> Frame {
+    let infos = cell_infos(st);
+    let (cols, of) = colonies(st, p, &infos, &mut ctx.tracker);
+    render_with(st, p, v, domains, &mut ctx.hist1d, &infos, cols, of)
+}
+
+/// Render with precomputed cell summaries and colonies.
+#[allow(clippy::too_many_arguments)]
+pub fn render_with(st: &State, p: &Params, v: &ViewSettings, domains: &[i8], hist1d: &mut Vec<Vec<u8>>, infos: &[CellInfo], colonies: Vec<Colony>, colony_of: Vec<u32>) -> Frame {
     let g = &p.geom;
     let expo = if v.mode == Mode::Exposure { primordia_core::phases::exposure(st, p) } else { vec![] };
-    let infos = cell_infos(st);
     let mut nm = Norm { lo: f32::MAX, hi: f32::MIN, mx: [0.0; 3], e_hi: 1.0, t_amb: p.t_amb as f32 / 100.0 };
     for c in 0..st.n {
         let x = scalar(st, p, v, c, &expo);
@@ -330,7 +348,14 @@ pub fn render(st: &State, p: &Params, v: &ViewSettings, domains: &[i8], hist1d: 
             }
         }
     }
-    let px = |c: usize| color(st, p, v, c, &nm, &expo, &infos[c]);
+    let fl = |c: usize| if nm.hi > nm.lo { ((scalar_free(st, c) - nm.lo) / (nm.hi - nm.lo)).clamp(0.0, 1.0) } else { 0.0 };
+    let px = |c: usize| {
+        if v.mode == Mode::Colonies {
+            colony_color(st, p, c, &infos[c], &colony_of, &colonies, nm.e_hi, if v.mode == Mode::Colonies { fl(c) } else { 0.0 })
+        } else {
+            color(st, p, v, c, &nm, &expo, &infos[c])
+        }
+    };
     let mut images = vec![];
     let mk = |label: String, w: usize, h: usize, axes: (usize, usize), fixed: [u32; 3], f: &dyn Fn(usize, usize) -> [u8; 3]| -> Image {
         let mut rgba = vec![0u8; w * h * 4];
@@ -395,12 +420,13 @@ pub fn render(st: &State, p: &Params, v: &ViewSettings, domains: &[i8], hist1d: 
     } else {
         vec![]
     };
-    Frame { epoch: st.epoch, images, bonds, vents, domains: domains.to_vec(), dnb, size: g.size, dims: g.dims, cells }
+    let colony_of = if g.dims == 2 { colony_of } else { vec![] };
+    Frame { epoch: st.epoch, images, bonds, vents, domains: domains.to_vec(), dnb, size: g.size, dims: g.dims, cells, colonies, colony_of }
 }
 
-/// Illustrated colours for every cell (used by the browser viewer), plus a
+/// Colony colours for every cell (used by the browser viewer), plus a
 /// height byte per cell: empty = food level (0..100), occupied = 128 + energy level.
-pub fn life_cells(st: &State, p: &Params, infos: &[CellInfo]) -> (Vec<[u8; 3]>, Vec<u8>) {
+pub fn life_cells(st: &State, p: &Params, infos: &[CellInfo], of: &[u32], cols_list: &[Colony]) -> (Vec<[u8; 3]>, Vec<u8>) {
     use rayon::prelude::*;
     let mut nm = Norm { lo: f32::MAX, hi: f32::MIN, mx: [0.0; 3], e_hi: 1.0, t_amb: p.t_amb as f32 / 100.0 };
     for c in 0..st.n {
@@ -411,7 +437,13 @@ pub fn life_cells(st: &State, p: &Params, infos: &[CellInfo]) -> (Vec<[u8; 3]>, 
             nm.e_hi = nm.e_hi.max((st.h(c, H_E) as f32 + 1.0).ln());
         }
     }
-    let cols: Vec<[u8; 3]> = (0..st.n).into_par_iter().map(|c| life_color(st, c, &nm, &infos[c])).collect();
+    let cols: Vec<[u8; 3]> = (0..st.n)
+        .into_par_iter()
+        .map(|c| {
+            let food = if nm.hi > nm.lo { ((scalar_free(st, c) - nm.lo) / (nm.hi - nm.lo)).clamp(0.0, 1.0) } else { 0.0 };
+            colony_color(st, p, c, &infos[c], of, cols_list, nm.e_hi, food)
+        })
+        .collect();
     let h: Vec<u8> = (0..st.n)
         .into_par_iter()
         .map(|c| {
@@ -425,4 +457,312 @@ pub fn life_cells(st: &State, p: &Params, infos: &[CellInfo]) -> (Vec<[u8; 3]>, 
         })
         .collect();
     (cols, h)
+}
+
+// ------------------------------------------------------------------ colonies
+
+/// A spatially connected group of related cells (neighbours whose program
+/// openings match in at least 12 of their first 16 bytes).
+#[derive(Clone, Debug, Default)]
+pub struct Colony {
+    pub id: u32,
+    pub name: String,
+    pub color: [u8; 3],
+    pub size: usize,
+    /// centroid in lattice coordinates (torus-aware)
+    pub center: [f32; 3],
+    pub radius: f32,
+    pub energy: f32,
+    pub copiers: f32,
+    pub bonded: f32,
+    pub dormant: f32,
+    /// code handedness (EE) of the colony
+    pub hand: f32,
+    pub prefix: Vec<u8>,
+    pub mean_len: f32,
+    pub first_seen: u64,
+    /// size change per 100 epochs since the last frame
+    pub growth: f32,
+}
+
+pub const COLONY_COLORS: [[u8; 3]; 24] = [
+    [255, 99, 99],
+    [255, 170, 60],
+    [250, 220, 80],
+    [140, 230, 90],
+    [60, 210, 150],
+    [70, 200, 240],
+    [90, 140, 255],
+    [170, 110, 255],
+    [240, 100, 210],
+    [255, 140, 170],
+    [200, 160, 90],
+    [130, 255, 220],
+    [255, 205, 150],
+    [180, 230, 255],
+    [215, 255, 120],
+    [255, 120, 60],
+    [120, 170, 140],
+    [230, 180, 255],
+    [100, 230, 100],
+    [255, 240, 180],
+    [80, 120, 200],
+    [200, 80, 120],
+    [160, 200, 60],
+    [60, 160, 200],
+];
+
+const ADJ: [&str; 32] = [
+    "Amber", "Cobalt", "Crimson", "Jade", "Ivory", "Saffron", "Indigo", "Coral", "Moss", "Copper", "Silver", "Violet", "Ochre", "Teal", "Scarlet", "Golden",
+    "Misty", "Restless", "Quiet", "Wandering", "Patient", "Hungry", "Swift", "Ancient", "Bright", "Hidden", "Tidal", "Ember", "Frost", "Sunlit", "Deep", "Velvet",
+];
+const NOUN: [&str; 32] = [
+    "Weavers", "Drifters", "Copiers", "Builders", "Swarm", "Bloom", "Tide", "Hive", "Reef", "Grove", "Spiral", "Lattice", "Thicket", "Choir", "Mosaic", "Ring",
+    "Cluster", "Shoal", "Garden", "Archive", "Engine", "Lantern", "Mantle", "Wake", "Ember", "Hollow", "Crown", "Delta", "Atoll", "Canopy", "Vault", "Nest",
+];
+
+pub fn colony_name(id: u32) -> String {
+    let h = id.wrapping_mul(0x9E37_79B1);
+    format!("{} {}", ADJ[(h >> 7) as usize % 32], NOUN[(h >> 17) as usize % 32])
+}
+
+#[derive(Default)]
+pub struct Tracker {
+    prev: Vec<Colony>,
+    next_id: u32,
+    last_epoch: u64,
+}
+
+pub struct RenderCtx {
+    pub hist1d: Vec<Vec<u8>>,
+    pub tracker: Tracker,
+}
+
+impl Default for RenderCtx {
+    fn default() -> Self {
+        RenderCtx { hist1d: vec![], tracker: Tracker { prev: vec![], next_id: 1, last_epoch: 0 } }
+    }
+}
+
+fn related(a: &[u8], b: &[u8]) -> bool {
+    let n = a.len().min(b.len()).min(16);
+    if n < 4 {
+        return false;
+    }
+    let same = (0..n).filter(|&i| a[i] == b[i] && a[i] != 0).count();
+    same * 4 >= n * 3
+}
+
+fn find(par: &mut [u32], mut x: u32) -> u32 {
+    while par[x as usize] != x {
+        let nx = par[par[x as usize] as usize];
+        par[x as usize] = nx;
+        x = nx;
+    }
+    x
+}
+
+/// Detect colonies, match them to the previous frame and return
+/// (colonies sorted by size, colony index + 1 per cell or 0).
+pub fn colonies(st: &State, p: &Params, infos: &[CellInfo], tr: &mut Tracker) -> (Vec<Colony>, Vec<u32>) {
+    let g = &p.geom;
+    let n = st.n;
+    let mut par: Vec<u32> = (0..n as u32).collect();
+    if g.dims == 0 {
+        // no space: group identical openings
+        let mut first: std::collections::HashMap<&[u8], u32> = std::collections::HashMap::new();
+        for c in 0..n {
+            if infos[c].occ {
+                let t = st.tape(c);
+                let k = &t[..t.len().min(12)];
+                let r = *first.entry(k).or_insert(c as u32);
+                par[c] = r;
+            }
+        }
+    } else {
+        for c in 0..n {
+            if !infos[c].occ {
+                continue;
+            }
+            for a in 0..g.dims as usize {
+                let t = p.nbr[c * 6 + 2 * a];
+                if t == NONE || !infos[t as usize].occ {
+                    continue;
+                }
+                if related(st.tape(c), st.tape(t as usize)) {
+                    let (x, y) = (find(&mut par, c as u32), find(&mut par, t));
+                    if x != y {
+                        par[x.max(y) as usize] = x.min(y);
+                    }
+                }
+            }
+        }
+    }
+    // gather components
+    let min_size = (n / 4000).clamp(8, 200);
+    let mut comp: std::collections::HashMap<u32, Vec<u32>> = std::collections::HashMap::new();
+    for c in 0..n {
+        if infos[c].occ {
+            let r = find(&mut par, c as u32);
+            comp.entry(r).or_default().push(c as u32);
+        }
+    }
+    let mut groups: Vec<Vec<u32>> = comp.into_values().filter(|v| v.len() >= min_size).collect();
+    groups.sort_by(|a, b| b.len().cmp(&a.len()).then(a[0].cmp(&b[0])));
+    groups.truncate(48);
+    let mut out = vec![];
+    for cells in &groups {
+        let mut col = Colony { size: cells.len(), ..Default::default() };
+        // torus-aware centroid: circular mean per axis
+        for a in 0..3usize {
+            let s = g.size[a].max(1) as f32;
+            if (a as u32) >= g.dims.max(1) || s <= 1.0 {
+                continue;
+            }
+            let (mut sx, mut sy) = (0f32, 0f32);
+            for &c in cells.iter().step_by((cells.len() / 2000).max(1)) {
+                let q = g.coords(c as usize)[a] as f32;
+                let ang = q / s * std::f32::consts::TAU;
+                sx += ang.cos();
+                sy += ang.sin();
+            }
+            let ang = sy.atan2(sx);
+            col.center[a] = ((ang / std::f32::consts::TAU) * s + s) % s;
+        }
+        if g.dims == 0 {
+            let w = (n as f64).sqrt().ceil() as usize;
+            let c = cells[0] as usize;
+            col.center = [(c % w) as f32, (c / w) as f32, 0.0];
+        }
+        let mut rad = 0f32;
+        let (mut e, mut cp, mut bd, mut dm, mut l, mut d, mut len) = (0f64, 0f64, 0f64, 0f64, 0i64, 0i64, 0f64);
+        let step = (cells.len() / 4000).max(1);
+        let mut k = 0f64;
+        let mut votes = vec![[0u32; 256]; 16];
+        for &c in cells.iter().step_by(step) {
+            let c = c as usize;
+            k += 1.0;
+            let q = g.coords(c);
+            let mut r2 = 0f32;
+            for a in 0..g.dims.max(1) as usize {
+                let s = g.size[a] as f32;
+                let mut dd = (q[a] as f32 - col.center[a]).abs();
+                if g.dims > 0 && g.boundary[a] == primordia_core::geom::Boundary::Torus {
+                    dd = dd.min(s - dd);
+                }
+                r2 += dd * dd;
+            }
+            rad += r2;
+            e += (st.h(c, H_E) as f64 + 1.0).ln();
+            cp += infos[c].copier as u32 as f64;
+            bd += infos[c].bonded as u32 as f64;
+            dm += infos[c].halted as u32 as f64;
+            let t = st.tape(c);
+            len += t.len() as f64;
+            for &b in t {
+                if isa::is_chiral(b) {
+                    if b & 1 == 0 { l += 1 } else { d += 1 }
+                }
+            }
+            for (i, &b) in t.iter().take(16).enumerate() {
+                votes[i][b as usize] += 1;
+            }
+        }
+        col.radius = (rad / k as f32).sqrt().max(1.0);
+        col.energy = (e / k) as f32;
+        col.copiers = (cp / k) as f32;
+        col.bonded = (bd / k) as f32;
+        col.dormant = (dm / k) as f32;
+        col.mean_len = (len / k) as f32;
+        col.hand = if l + d > 0 { (l - d) as f32 / (l + d) as f32 } else { 0.0 };
+        col.prefix = votes.iter().map(|v| (0..256).max_by_key(|&b| v[b]).unwrap() as u8).collect();
+        out.push(col);
+    }
+    // match to the previous frame: similar opening and nearby centre
+    let maxd = (g.size[0].max(g.size[1]) as f32 * 0.15).max(8.0);
+    let mut used = vec![false; tr.prev.len()];
+    let dt = st.epoch.saturating_sub(tr.last_epoch).max(1) as f32;
+    for col in out.iter_mut() {
+        let mut best: Option<(usize, f32)> = None;
+        for (i, pc) in tr.prev.iter().enumerate() {
+            if used[i] {
+                continue;
+            }
+            let same = col.prefix.iter().zip(&pc.prefix).filter(|(a, b)| a == b).count();
+            if same < 10 {
+                continue;
+            }
+            let mut d2 = 0f32;
+            for a in 0..g.dims.max(1) as usize {
+                let s = g.size[a] as f32;
+                let mut dd = (col.center[a] - pc.center[a]).abs();
+                dd = dd.min(s - dd);
+                d2 += dd * dd;
+            }
+            let dist = d2.sqrt();
+            if dist > maxd + pc.radius {
+                continue;
+            }
+            let score = dist - same as f32 * 2.0;
+            if best.map(|b| score < b.1).unwrap_or(true) {
+                best = Some((i, score));
+            }
+        }
+        match best {
+            Some((i, _)) => {
+                used[i] = true;
+                let pc = &tr.prev[i];
+                col.id = pc.id;
+                col.first_seen = pc.first_seen;
+                col.growth = (col.size as f32 - pc.size as f32) / dt * 100.0;
+            }
+            None => {
+                col.id = tr.next_id;
+                tr.next_id += 1;
+                col.first_seen = st.epoch;
+            }
+        }
+        col.name = colony_name(col.id);
+        col.color = COLONY_COLORS[(col.id as usize * 7) % COLONY_COLORS.len()];
+    }
+    tr.prev = out.clone();
+    tr.last_epoch = st.epoch;
+    let mut of = vec![0u32; n];
+    for (i, cells) in groups.iter().enumerate() {
+        for &c in cells {
+            of[c as usize] = i as u32 + 1;
+        }
+    }
+    (out, of)
+}
+
+/// Colour of a cell in the colony view.
+pub fn colony_color(st: &State, p: &Params, c: usize, info: &CellInfo, of: &[u32], cols: &[Colony], e_hi: f32, food: f32) -> [u8; 3] {
+    if st.site[c * SITE + S_WALL] != 0 {
+        return [110, 90, 70];
+    }
+    if !info.occ {
+        return mix([8, 10, 16], [16, 44, 40], food * 0.8);
+    }
+    let k = of[c];
+    if k == 0 {
+        // a loner: not part of any sizeable colony
+        return if info.halted { [34, 36, 42] } else { [56, 62, 76] };
+    }
+    let col = &cols[(k - 1) as usize];
+    let e = ((st.h(c, H_E) as f32 + 1.0).ln() / e_hi.max(1.0)).clamp(0.0, 1.0);
+    let mut rgb = mix([20, 20, 26], col.color, 0.55 + 0.45 * e);
+    if info.halted {
+        rgb = mix(rgb, [70, 72, 80], 0.6);
+    }
+    // darken colony borders so neighbouring colonies read as separate shapes
+    if p.geom.dims >= 1 {
+        for d in 0..p.geom.faces() {
+            let t = p.nbr[c * 6 + d as usize];
+            if t != NONE && of[t as usize] != k {
+                return mix(rgb, [0, 0, 0], 0.45);
+            }
+        }
+    }
+    rgb
 }

@@ -29,7 +29,7 @@ const COPIES: usize = 3;
 const MAX_VENTS: usize = 4096;
 const NONE: u32 = 0xFFFF_FFFF;
 /// Union-find rounds per epoch (each gated off on the GPU once converged).
-const LAB_ROUNDS: usize = 48;
+const LAB_ROUNDS: usize = 24;
 
 #[allow(dead_code)]
 struct Bufs {
@@ -105,6 +105,8 @@ pub struct GpuExec {
     next_copy: usize,
     done: VecDeque<EpochResult>,
     copies_done: VecDeque<StateCopy>,
+    /// PRIMORDIA_PROFILE=1: flush and time each phase group (slow; for profiling only)
+    profile: Option<std::collections::BTreeMap<&'static str, f64>>,
     pub adapter: String,
     /// Accumulated time (s): upload, kernels, download.
     pub timing: [f64; 3],
@@ -138,6 +140,7 @@ const PHYS_KERNELS: &[&str] = &[
     "k_lab_init",
     "k_lab_hook",
     "k_lab_jump",
+    "k_lab_round",
     "k_lab_gate",
     "k_body_gate",
     "k_lab_verify",
@@ -233,6 +236,7 @@ impl GpuExec {
             next_copy: 0,
             done: VecDeque::new(),
             copies_done: VecDeque::new(),
+            profile: std::env::var("PRIMORDIA_PROFILE").ok().map(|_| Default::default()),
             adapter: format!("{} ({:?}, {})", info.name, info.backend, info.driver),
             timing: [0.0; 3],
         };
@@ -459,6 +463,22 @@ impl GpuExec {
         enc.copy_buffer_to_buffer(&b.iargs_w, 0, &b.iargs, 0, 64);
     }
 
+    /// Profiling: submit what is encoded so far, wait, and charge the time to `name`.
+    fn lap(&mut self, enc: &mut wgpu::CommandEncoder, name: &'static str, t: &mut Instant) {
+        if self.profile.is_none() {
+            return;
+        }
+        let done = std::mem::replace(enc, self.device.create_command_encoder(&Default::default()));
+        self.queue.submit([done.finish()]);
+        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+        *self.profile.as_mut().unwrap().entry(name).or_default() += t.elapsed().as_secs_f64();
+        *t = Instant::now();
+    }
+
+    pub fn profile_report(&self) -> Option<Vec<(&'static str, f64)>> {
+        self.profile.as_ref().map(|m| m.iter().map(|(k, v)| (*k, *v)).collect())
+    }
+
     fn phys_indirect(&self, enc: &mut wgpu::CommandEncoder, k: &str, at: u64) {
         let b = self.bufs.as_ref().unwrap();
         let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
@@ -483,6 +503,10 @@ impl GpuExec {
         };
         slot.buf.unmap();
         slot.ready.store(false, Ordering::Release);
+        if let Some(p) = self.profile.as_mut() {
+            *p.entry("(labelling rounds used)").or_default() += tally[ts::ROUNDS] as f64;
+            *p.entry("(epochs)").or_default() += 1.0;
+        }
         self.done.push_back(EpochResult { epoch: slot.epoch, tally, births });
     }
 
@@ -630,6 +654,12 @@ impl ExecBackend for GpuExec {
         self.write_static(p);
     }
     fn timing(&self) -> Option<[f64; 3]> {
+        if let Some(r) = self.profile_report() {
+            let tot: f64 = r.iter().map(|x| x.1).sum();
+            for (k, v) in r {
+                eprintln!("   profile {k:<36} {:5.1}%  {:.1} s", 100.0 * v / tot, v);
+            }
+        }
         Some(self.timing)
     }
     fn resident(&self) -> bool {
@@ -697,6 +727,11 @@ impl ExecBackend for GpuExec {
             q.write_buffer(&b.tally, 0, bytemuck::cast_slice(&vec![0u32; ts::N * 2]));
         }
         let mut enc = self.device.create_command_encoder(&Default::default());
+        let mut lap = Instant::now();
+        if self.profile.is_some() {
+            let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+            lap = Instant::now();
+        }
         // phases 2-5
         if dims == 3 && p.sun_on {
             self.phys(&mut enc, "k_light3d", p.geom.size[0] * p.geom.size[1]);
@@ -734,8 +769,10 @@ impl ExecBackend for GpuExec {
             }
             self.phys(&mut enc, "k_wake", n);
         }
+        self.lap(&mut enc, "2-5 sources/transport/chem/absorb", &mut lap);
         // phase 6
         self.encode_exec(&mut enc, epoch, mirrored, p);
+        self.lap(&mut enc, "6 interpreter", &mut lap);
         // site counters, births
         self.phys(&mut enc, "k_site", n);
         // phase 7: bodies, gated on the GPU by the vote count
@@ -745,9 +782,7 @@ impl ExecBackend for GpuExec {
             enc.clear_buffer(&b.bw, (n as u64) * 4, None);
             self.phys_indirect(&mut enc, "k_lab_init", 0);
             for _ in 0..LAB_ROUNDS {
-                self.phys_indirect(&mut enc, "k_lab_hook", 0);
-                self.phys_indirect(&mut enc, "k_lab_jump", 0);
-                self.phys_indirect(&mut enc, "k_lab_jump", 0);
+                self.phys_indirect(&mut enc, "k_lab_round", 0);
                 self.gate(&mut enc, "k_lab_gate");
             }
             self.phys_indirect(&mut enc, "k_lab_verify", 12);
@@ -756,6 +791,7 @@ impl ExecBackend for GpuExec {
                 self.phys_indirect(&mut enc, k, 12);
             }
         }
+        self.lap(&mut enc, "7 bodies (+site)", &mut lap);
         // phases 8-9
         self.phys(&mut enc, "k_clear_votes", n);
         self.phys(&mut enc, "k_expo", n);
@@ -766,6 +802,7 @@ impl ExecBackend for GpuExec {
         self.phys(&mut enc, "k_dead", n);
         self.phys(&mut enc, "k_dead_bonds", n);
         self.phys(&mut enc, "k_ledger", n);
+        self.lap(&mut enc, "8-9 mutation/decay/ledger", &mut lap);
         // results to the slot's staging buffer
         let b = self.bufs.as_ref().unwrap();
         let tsz = (ts::N * 2 * 4) as u64;
