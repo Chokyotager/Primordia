@@ -49,7 +49,8 @@ GPU utilisation during a full run with viewer, telemetry and web feed: 95–98%.
 * **Transport.** The flux is computed once per face from both endpoints with a 16-bit Philox dither; the
   mirror twin complements the dither on x faces, which makes the flux exactly antisymmetric under
   reflection. Outflows are limited proportionally so that no cell goes negative (still exactly
-  conservative). Up to 8 fields share one Philox call per face; L/D pairs are never split across batches,
+  conservative); the limiting ratio rounds down, so the limited flows never overdraw. Bonded energy
+  equalisation is the same explicit step, so validation requires `share_beta` × faces ≤ 1 (0.25 in 2D). Up to 8 fields share one Philox call per face; L/D pairs are never split across batches,
   so hand-swapped dither slots line up in the twin.
 * **Mutation sampling** uses a Poisson inverse CDF (series for small λ, a 64k-entry `exp(-λ)` table
   otherwise) instead of a binomial table.

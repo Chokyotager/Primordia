@@ -584,7 +584,7 @@ pub fn chemistry(st: &mut State, p: &Params) {
                         let need = sat32((ev[0] as u64 + ev[1] as u64) * e as u64);
                         let have = if p.energy_on { f[F_F] } else { 0 };
                         if need > have {
-                            let r = ratio16(have, need);
+                            let r = ratio16_floor(have, need);
                             for h in 0..2 {
                                 ev[h] = mulshr16(ev[h], r);
                             }

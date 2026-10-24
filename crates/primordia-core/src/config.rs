@@ -844,6 +844,10 @@ impl Config {
             ensure!(k >= 0.0, "{name} negative");
             ensure!(k * faces <= 0.5, "{name} x faces must be <= 2^15/2^16 for stability (got {})", k * faces);
         }
+        // bonded energy equalisation is an explicit diffusion step too; past
+        // beta x faces = 1 it overshoots and the oscillation grows
+        ensure!(self.energy.share_beta >= 0.0, "share_beta negative");
+        ensure!(self.energy.share_beta * faces <= 1.0, "share_beta x faces must be <= 1 for stability (got {})", self.energy.share_beta * faces);
         if self.chemistry.enabled {
             let ch = &self.chemistry;
             ensure!(ch.mass.len() == ch.species.len(), "chemistry.mass length");

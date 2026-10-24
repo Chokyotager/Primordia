@@ -145,6 +145,30 @@ pub fn poisson_exp_table() -> Vec<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Limited outflows never sum to more than the cell holds (ratio16 could
+    /// round up past 2^16: 131070 / 131071 became exactly 1).
+    #[test]
+    fn flux_lim_never_overdraws() {
+        assert!(ratio16(131_070, 131_071) == 65536, "the old helper rounds up");
+        assert!(flux_lim(131_071, 131_070, 131_071) <= 131_070);
+        let mut x = 0x9E37_79B9u32;
+        let mut rnd = || {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            x
+        };
+        for _ in 0..200_000 {
+            let n = 1 + rnd() % 6;
+            let js: Vec<u32> = (0..n).map(|_| rnd() >> (3 + rnd() % 24)).collect(); // sum < 2^32
+            let o = js.iter().fold(0u32, |a, &j| a.saturating_add(j));
+            let q = if o == 0 { 0 } else { rnd() % o };
+            let out: u64 = js.iter().map(|&j| flux_lim(j, q, o) as u64).sum();
+            assert!(out <= q as u64, "flows {js:?} from {q}: {out}");
+            let r = ratio16_floor(q, o);
+            assert!((r as u64) * (o as u64) <= (q as u64) << 16);
+        }
+    }
     #[test]
     fn exp_sin_close_to_std() {
         for i in -200..200 {
@@ -175,6 +199,21 @@ pub fn ratio16(mut a: u32, mut b: u32) -> u32 {
     while b >= 65536 {
         a >>= 1;
         b >>= 1;
+    }
+    (a << 16) / b
+}
+
+/// A ratio a * 2^16 / b for a <= b that never exceeds the true value (b is
+/// halved rounding up, a rounding down), so scaling flows by it can never
+/// overdraw. `ratio16` can round up once b >= 2^16. Shared with WGSL.
+#[inline]
+pub fn ratio16_floor(mut a: u32, mut b: u32) -> u32 {
+    if b == 0 {
+        return 0;
+    }
+    while b >= 65536 {
+        a >>= 1;
+        b = (b >> 1) + (b & 1);
     }
     (a << 16) / b
 }
@@ -227,7 +266,7 @@ pub fn flux_j(k: u32, qa: u32, qb: u32, r: u32) -> i32 {
 /// Limit a positive outflow j when the cell's total outflow o exceeds its content q.
 #[inline]
 pub fn flux_lim(j: u32, q: u32, o: u32) -> u32 {
-    if o > q { mulshr16(j, ratio16(q, o)) } else { j }
+    if o > q { mulshr16(j, ratio16_floor(q, o)) } else { j }
 }
 #[inline]
 pub fn sat_add(a: u32, b: u32) -> u32 {

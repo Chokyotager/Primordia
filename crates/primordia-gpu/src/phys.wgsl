@@ -103,6 +103,17 @@ fn ratio16(a_in: u32, b_in: u32) -> u32 {
     }
     return (a << 16u) / b;
 }
+// a * 2^16 / b for a <= b, never above the true value (see fixed.rs)
+fn ratio16_floor(a_in: u32, b_in: u32) -> u32 {
+    var a = a_in;
+    var b = b_in;
+    if (b == 0u) { return 0u; }
+    while (b >= 65536u) {
+        a = a >> 1u;
+        b = (b >> 1u) + (b & 1u);
+    }
+    return (a << 16u) / b;
+}
 // floor((k*(qa-qb) + r) / 2^16) mod 2^32
 fn flux_j(k: u32, qa: u32, qb: u32, r: u32) -> i32 {
     if (qa >= qb) {
@@ -115,7 +126,7 @@ fn flux_j(k: u32, qa: u32, qb: u32, r: u32) -> i32 {
     return -bitcast<i32>((y.x << 16u) | (y.y >> 16u));
 }
 fn flux_lim(j: u32, q: u32, o: u32) -> u32 {
-    if (o > q) { return mulshr16(j, ratio16(q, o)); }
+    if (o > q) { return mulshr16(j, ratio16_floor(q, o)); }
     return j;
 }
 fn relax_t(t: u32, t_amb: u32, relax: u32, d: u32) -> u32 {
@@ -523,7 +534,7 @@ fn chem_cell(c: u32) {
                 var have = 0u;
                 if (has(G_ENERGY)) { have = F(c, 0u); }
                 if (need > have) {
-                    let r = ratio16(have, need);
+                    let r = ratio16_floor(have, need);
                     ev.x = mulshr16(ev.x, r);
                     ev.y = mulshr16(ev.y, r);
                 }

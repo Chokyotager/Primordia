@@ -150,7 +150,7 @@ fn t4_dormancy_and_light_cover() {
         c.individual.dormant_rot = 20.0;
         c.individual.sleep_scale = 16;
         c.shielding.light_cover = 0.0;
-        c.energy.share_beta = 0.3;
+        c.energy.share_beta = if dims == 2 { 0.25 } else { 0.16 }; // at the stability limit: the limiter engages
         c.energy.sun.moon = 0.05;
         c.decay.light_factor = 3.0;
         c.validate().unwrap();
@@ -224,6 +224,7 @@ fn t4_resident_fuzz() {
         c.individual.dormant_absorb = [1.0, 0.0, 0.25][(rnd() % 3) as usize];
         c.individual.dormant_rot = [1.0, 20.0, 5.0][(rnd() % 3) as usize];
         c.shielding.light_cover = [1.0, 0.0, 0.5][(rnd() % 3) as usize];
+        c.energy.share_beta = [0.1, 0.16][(rnd() % 2) as usize];
         c.energy.upkeep.base = 4.0;
         if c.validate().is_err() {
             continue;
