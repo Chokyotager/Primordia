@@ -86,7 +86,8 @@ by golden and parity tests. They came out of the long live runs, in this order:
 | `shielding.light_cover` | how much face cover (bonds, occupied neighbours) reduces light absorption; radiation, decay and write shielding keep the full cover | in 2D the sun is overhead, yet every bond cost a cell a quarter of its light, which taxed bodies |
 
 `runs/live-m4.toml` uses the first six (starve 800, moon 0.02, lifespan 6,000, sleep ×16, shield on, sleepers
-absorb nothing). `runs/live-m5.toml` is M4 with `shielding.s_bond` 0.4 and `energy.share_beta` 0.125.
+absorb nothing). `runs/live-m5.toml` is M4 with `shielding.s_bond` 0.4 and `energy.share_beta` 0.125; `runs/live-m6.toml` adds
+`individual.sleep_upkeep` 0.5 (the running M6 world was resumed from M5's day-11 snapshot).
 `runs/live-m1.toml` to `live-m3.toml` are the earlier steps.
 
 **Dormancy sweep (M5).** On a 201² world (2 seeds, 10 days; means over days 6–10), against M4:
