@@ -85,7 +85,22 @@ by golden and parity tests. They came out of the long live runs, in this order:
 | `shielding.light_cover` | how much face cover (bonds, occupied neighbours) reduces light absorption; radiation, decay and write shielding keep the full cover | in 2D the sun is overhead, yet every bond cost a cell a quarter of its light, which taxed bodies |
 
 `runs/live-m4.toml` uses the first six (starve 800, moon 0.02, lifespan 6,000, sleep ×16, shield on, sleepers
-absorb nothing). `runs/live-m1.toml` to `live-m3.toml` are the earlier steps.
+absorb nothing). `runs/live-m5.toml` is M4 with `shielding.s_bond` 0.4 and `energy.share_beta` 0.125.
+`runs/live-m1.toml` to `live-m3.toml` are the earlier steps.
+
+**Dormancy sweep (M5).** On a 201² world (2 seeds, 10 days; means over days 6–10), against M4:
+
+* `light_cover` 0 collapsed the world (≈550 cells instead of ≈30,000). Shaded, energy-starved crowded cells
+  sit dormant (57% of M4's cells), and dormant cells do not write over their neighbours. With full light
+  nearly every cell ran its whole step budget, copy loops eroded, and the founding cohort died at
+  `max_age` with nothing to replace it.
+* Dormancy penalties from epoch 0 (soft to severe) went extinct: the seeded copiers exhaust themselves
+  every slice and died on the first night. Switched on at day 4 without the sleep shield, they gave large,
+  more differentiated daytime bodies (mean size 33, 39% with 2+ cell types) but 86% of cells died each
+  night and no body lived to dawn. With the shield kept, sleeping alone took over (up to 42% asleep at
+  dawn) and bodies shrank.
+* Each body change alone was survivable; `s_bond` 0.4 gave the largest and longest-lived bodies, and with
+  `share_beta` 0.125 it raised night survival from 60% to 68% and doubled the night-surviving bodies.
 
 The Poisson sampler behind mutation and decay is accurate only below about 20 expected events per cell and
 epoch, so `dormant_rot` should keep decay rate × rot × tape length well under that (×50 on a 128-byte tape at

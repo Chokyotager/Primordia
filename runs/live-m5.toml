@@ -1,0 +1,49 @@
+# Live world M5: as M4 (seeded L and D replicators under sunlight with
+# starvation, weak moonlight, a 3-day lifespan, 16x sleeps, shielded sleepers
+# that absorb nothing), plus stronger bond shielding (s_bond 0.25 -> 0.4) and
+# faster bonded energy sharing (share_beta 0.1 -> 0.125, the non-oscillating
+# limit in 2D). Chosen from runs/sweep-dormancy (201^2, 2 seeds, 10 days): the
+# only change that improved night survival (60 -> 68%) and body persistence
+# (twice as many night-surviving bodies) without costing population. Dormancy
+# penalties (individual.dormant_*) and light_cover < 1 are off: on their own
+# they collapsed the world or replaced bodies with lone sleepers; they can be
+# ramped in later with set events on a --resume.
+# Start fresh with: --events runs/seed-501.jsonl
+preset = "primordia-2d-sun"
+epochs = 1000000000
+
+[world]
+size = [501, 501]
+
+[individual]
+starve_after = 800
+max_age = 6000
+sleep_scale = 16
+sleep_shield = true
+sleep_absorb = 0.0
+
+[energy]
+share_beta = 0.125
+
+[energy.sun]
+i0 = 150
+moon = 0.02
+
+[energy.upkeep]
+base = 3.5
+per_byte = 0.12
+
+[energy.vents]
+enabled = true
+count = 6
+floor_only = false
+drift = 0.01
+
+[shielding]
+s_bond = 0.4
+
+[decay]
+rate = 3e-4
+
+[telemetry]
+snapshot_every = 11000  # alternates midday / dawn
