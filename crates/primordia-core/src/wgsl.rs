@@ -337,7 +337,8 @@ pub mod qi {
     pub const DORM_ABSORB: usize = SLEEP_ABSORB + 4;
     pub const DORM_ROT: usize = SLEEP_ABSORB + 5;
     pub const LIGHT_COVER: usize = SLEEP_ABSORB + 6;
-    pub const LEN: usize = SLEEP_ABSORB + 7;
+    pub const SLEEP_UPKEEP: usize = SLEEP_ABSORB + 7;
+    pub const LEN: usize = SLEEP_ABSORB + 8;
 }
 
 pub mod qf {
@@ -449,6 +450,7 @@ pub fn phys_words(p: &Params) -> Vec<u32> {
     w[qi::DORM_ABSORB] = p.dormant_absorb_q16;
     w[qi::DORM_ROT] = p.dormant_rot_q16;
     w[qi::LIGHT_COVER] = p.light_cover_q16;
+    w[qi::SLEEP_UPKEEP] = p.sleep_upkeep_q16;
     w[qi::VOTE_Q16] = p.vote_q16 as u32;
     w[qi::MAX_BODY] = p.max_body;
     w[qi::VENT_RATE] = p.vent_cfg.rate;
@@ -542,6 +544,7 @@ pub fn phys_constants() -> String {
         ("Q_DORM_ABSORB", qi::DORM_ABSORB),
         ("Q_DORM_ROT", qi::DORM_ROT),
         ("Q_LIGHT_COVER", qi::LIGHT_COVER),
+        ("Q_SLEEP_UPKEEP", qi::SLEEP_UPKEEP),
         ("Q_VOTE_Q16", qi::VOTE_Q16),
         ("Q_MAX_BODY", qi::MAX_BODY),
         ("Q_VENT_RATE", qi::VENT_RATE),

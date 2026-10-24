@@ -75,6 +75,8 @@ pub struct IndividualCfg {
     /// Fraction of normal light absorption a sleeping cell keeps (1 = as in
     /// the spec, 0 = a sleeper is a closed spore with no income).
     pub sleep_absorb: f64,
+    /// Fraction of normal upkeep a sleeping cell pays (0.125 = the spec's 1/8).
+    pub sleep_upkeep: f64,
     /// Dormancy (the counter behind `starve_after` and the penalties below)
     /// counts only epochs in which a halted cell did not execute; false = as
     /// before, a cell halted at the end of the epoch counts even if it ran
@@ -426,6 +428,7 @@ impl Default for IndividualCfg {
             sleep_scale: 1,
             sleep_shield: false,
             sleep_absorb: 1.0,
+            sleep_upkeep: 0.125,
             dormant_idle: false,
             dormant_grace: 0,
             dormant_absorb: 1.0,
@@ -828,6 +831,7 @@ impl Config {
         ensure!(ind.l_init <= ind.l_max, "l_init > l_max");
         ensure!((1..=256).contains(&ind.sleep_scale), "individual.sleep_scale must be 1..=256");
         ensure!((0.0..=1.0).contains(&ind.sleep_absorb), "individual.sleep_absorb must be in 0..=1");
+        ensure!((0.0..=1.0).contains(&ind.sleep_upkeep), "individual.sleep_upkeep must be in 0..=1");
         ensure!((0.0..=1.0).contains(&ind.dormant_absorb), "individual.dormant_absorb must be in 0..=1");
         ensure!((0.0..=1000.0).contains(&ind.dormant_rot), "individual.dormant_rot must be in 0..=1000");
         ensure!((0.0..=1.0).contains(&self.shielding.light_cover), "shielding.light_cover must be in 0..=1");

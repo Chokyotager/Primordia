@@ -118,6 +118,7 @@ fn t4_ageing_and_moonlight() {
     c.individual.sleep_scale = 16; // the seeded programs include SLEEP
     c.individual.sleep_shield = true;
     c.individual.sleep_absorb = 0.0;
+    c.individual.sleep_upkeep = 0.5;
     c.validate().unwrap();
     let p = Params::new(&c);
     let night = primordia_core::phases::row_lights(&p, 30); // day_period 40: epoch 30 is mid-night
@@ -219,6 +220,7 @@ fn t4_resident_fuzz() {
         c.individual.sleep_scale = if rnd() % 2 == 0 { 16 } else { 1 };
         c.individual.sleep_shield = rnd() % 2 == 0;
         c.individual.sleep_absorb = [1.0, 0.0, 0.3][(rnd() % 3) as usize];
+        c.individual.sleep_upkeep = [0.125, 0.5, 1.0][(rnd() % 3) as usize];
         c.individual.dormant_idle = rnd() % 2 == 0;
         c.individual.dormant_grace = [0u32, 5, 20][(rnd() % 3) as usize];
         c.individual.dormant_absorb = [1.0, 0.0, 0.25][(rnd() % 3) as usize];

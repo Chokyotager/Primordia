@@ -72,6 +72,8 @@ pub struct Params {
     pub sleep_shield: bool,
     /// Q16 fraction of absorption kept while asleep (65536 = all).
     pub sleep_absorb_q16: u32,
+    /// Q16 fraction of upkeep paid while asleep (8192 = 1/8).
+    pub sleep_upkeep_q16: u32,
     /// Dormancy counts only halted epochs without execution.
     pub dormant_idle: bool,
     pub dormant_grace: u32,
@@ -265,6 +267,7 @@ impl Params {
             sleep_scale: c.individual.sleep_scale,
             sleep_shield: c.individual.sleep_shield && !pair_concat,
             sleep_absorb_q16: to_q16(c.individual.sleep_absorb) as u32,
+            sleep_upkeep_q16: to_q16(c.individual.sleep_upkeep),
             dormant_idle: c.individual.dormant_idle,
             dormant_grace: c.individual.dormant_grace,
             dormant_absorb_q16: if energy_on { to_q16(c.individual.dormant_absorb) } else { 1 << 16 },

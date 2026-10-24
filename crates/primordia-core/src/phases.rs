@@ -717,7 +717,7 @@ pub fn absorb_upkeep(st: &mut State, p: &Params) {
             let d = rng.u32(p.geom.canon(c, mirrored), 0, 0) & 0xFFFF;
             let mut up = (p.upkeep_base_q16 as u32).wrapping_add((p.upkeep_byte_q16 as u32).wrapping_mul(h[H_LEN]));
             if h[H_SLEEP] > 0 {
-                up /= 8;
+                up = mulshr16(up, p.sleep_upkeep_q16); // 8192: exactly up / 8
                 h[H_SLEEP] -= 1;
             }
             let up = (up.wrapping_add(d)) >> 16;

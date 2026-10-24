@@ -663,7 +663,7 @@ fn absorb_cell(c: u32) {
     let d = rng(PH_ABSORB, canon(c), 0u, 0u) & 0xFFFFu;
     var up = Q[Q_UPK_BASE] + Q[Q_UPK_BYTE] * H(c, H_LEN);
     if (H(c, H_SLEEP) > 0u) {
-        up = up / 8u;
+        up = mulshr16(up, Q[Q_SLEEP_UPKEEP]);
         setH(c, H_SLEEP, H(c, H_SLEEP) - 1u);
     }
     let upk = (up + d) >> 16u;

@@ -278,6 +278,35 @@ fn t1_sleep_absorb() {
     assert!(half > 0 && half < full, "half {half} of {full}");
 }
 
+/// individual.sleep_upkeep: a sleeper pays this fraction of its upkeep; the
+/// default 0.125 is exactly the spec's integer 1/8.
+#[test]
+fn t1_sleep_upkeep() {
+    let paid = |frac: f64| {
+        let mut cfg = deterministic_cfg(2);
+        cfg.individual.sleep_upkeep = frac;
+        cfg.energy.upkeep.base = 7.3;
+        let (p, mut st) = blank(&cfg);
+        let c = p.geom.index([5, 5, 0]);
+        put(&mut st, &p, c, &[0x41; 40], 0, 100_000);
+        st.hdr[c * HDR + H_SLEEP] = 10;
+        primordia_core::phases::absorb_upkeep(&mut st, &p);
+        let up = (p.upkeep_base_q16 as u32) + (p.upkeep_byte_q16 as u32) * 40;
+        (100_000u32.wrapping_sub(st.h(c, H_E)), up)
+    };
+    let mut cfg = deterministic_cfg(2);
+    cfg.individual.sleep_upkeep = 0.125;
+    let p = Params::new(&cfg);
+    assert_eq!(primordia_core::fixed::mulshr16(123_457, p.sleep_upkeep_q16), 123_457 / 8, "default is exactly /8");
+    // absorption adds energy too, so compare deltas between settings
+    let (eighth, _) = paid(0.125);
+    let (half, up) = paid(0.5);
+    let (full, _) = paid(1.0);
+    assert!(half > eighth && full > half, "eighth {eighth}, half {half}, full {full}");
+    let d = (half - eighth) as i64 - ((up / 2 - up / 8) >> 16) as i64;
+    assert!(d.abs() <= 1, "half - eighth differs from the upkeep difference by {d}");
+}
+
 /// individual.dormant_idle: with starvation on, a halted cell's dormancy
 /// counter grows; with dormant_idle it grows only if the cell did not execute
 /// this epoch (a cell that ran and exhausted itself is not dormant).
