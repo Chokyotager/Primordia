@@ -628,11 +628,23 @@ fn k_expo(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (cov >= 65536u) { expo[c] = 0u; } else { expo[c] = 65536u - cov; }
 }
 
+// dormant past the grace period: halted, dormancy counter >= grace
+fn dormant_past_grace(c: u32) -> bool {
+    return (H(c, H_FLAGS) & FL_HALT) != 0u && H(c, H_ZERO) >= Q[Q_DORM_GRACE];
+}
+
 fn absorb_cell(c: u32) {
     if (!occ(c)) { return; }
-    var a = mulshr16(Q[Q_ABSORB], expo[c]);
+    var e = expo[c];
+    if (Q[Q_LIGHT_COVER] != 65536u) {
+        e = 65536u - mulshr16(65536u - e, Q[Q_LIGHT_COVER]);
+    }
+    var a = mulshr16(Q[Q_ABSORB], e);
     if (H(c, H_SLEEP) > 0u && Q[Q_SLEEP_ABSORB] != 65536u) {
         a = mulshr16(a, Q[Q_SLEEP_ABSORB]);
+    }
+    if (Q[Q_DORM_ABSORB] != 65536u && dormant_past_grace(c)) {
+        a = mulshr16(a, Q[Q_DORM_ABSORB]);
     }
     let de = mulshr16(a, F(c, 0u));
     setF(c, 0u, F(c, 0u) - de);
@@ -1067,7 +1079,8 @@ fn mutate_cell(c: u32) {
     let uv = mulshr16_sat(mulshr16(Q[Q_MU_UV], e), irel);
     let fl = mulshr16_sat(Q[Q_MU_FLIP], a_rac);
     let lf = sat_add(65536u, mulshr16_sat(mulshr16(Q[Q_DECAY_LIGHT], e), irel));
-    let dc = mulshr16_sat(mulshr16_sat(Q[Q_DECAY], a_dec), lf);
+    var dc = mulshr16_sat(mulshr16_sat(Q[Q_DECAY], a_dec), lf);
+    if (Q[Q_DORM_ROT] != 65536u && dormant_past_grace(c)) { dc = mulshr16_sat(dc, Q[Q_DORM_ROT]); }
     var lam = vec4<u32>(mulshr8_sat(bg, n_ne), mulshr8_sat(uv, n_ne), mulshr8_sat(fl, n_ch), mulshr8_sat(dc, n_ne));
     let matter = has(G_MATTER);
     let pb = 2u + 2u * Q[Q_K];
@@ -1122,7 +1135,8 @@ fn mutate_cell(c: u32) {
             break;
         }
     }
-    let starving = Q[Q_STARVE] > 0u && (H(c, H_FLAGS) & FL_HALT) != 0u;
+    let hf = H(c, H_FLAGS);
+    let starving = Q[Q_DORM_COUNT] != 0u && (hf & FL_HALT) != 0u && !(Q[Q_DORM_IDLE] != 0u && (hf & FL_EXEC) != 0u);
     if (starving || allzero) { setH(c, H_ZERO, H(c, H_ZERO) + 1u); } else { setH(c, H_ZERO, 0u); }
 }
 @compute @workgroup_size(64)

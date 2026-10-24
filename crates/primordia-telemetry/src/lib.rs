@@ -51,6 +51,14 @@ pub struct Summary {
     /// Longest run of nights survived by any tracked body / kin cluster.
     pub body_nights: u32,
     pub kin_nights: u32,
+    /// Differentiation of bodies of 10+ cells (see `body_types`): mean and
+    /// max cell types (program prefixes) and roles (behaviour profiles) per
+    /// body, and the share of bodies with two or more types.
+    pub body_types_mean: f64,
+    pub body_types_max: usize,
+    pub body_roles_mean: f64,
+    pub body_roles_max: usize,
+    pub multi_type_bodies: f64,
     pub energy_residual: i64,
     pub matter_residual: [i64; 3],
     pub atom_residual: i64,
@@ -172,6 +180,12 @@ impl Recorder {
                     ("hoe", F),
                     ("vents", I),
                     ("species", I),
+                    ("body_types_mean", F),
+                    ("body_types_max", I),
+                    ("body_roles_mean", F),
+                    ("body_roles_max", I),
+                    ("multi_type_bodies", F),
+                    ("multi_role_bodies", F),
                 ]),
             )?,
             chir: Table::new(dir, "chirality", &chem_cols)?,
@@ -386,6 +400,7 @@ impl Recorder {
             let n = st.n as f64;
             // bodies (every opcode_every to bound cost)
             let (mut nb, mut mean_b, mut max_b, mut mexp, mut orgs) = (s.bodies as i64, 0.0, s.max_body as i64, 0.0, s.organisms as i64);
+            let mut bt = BodyTypes::default();
             if due(self.cfg.opcode_every.max(1)) {
                 let bodies = phases::components(st, p);
                 nb = bodies.count as i64;
@@ -395,6 +410,12 @@ impl Recorder {
                 let ex = phases::exposure(st, p);
                 mexp = if occ > 0 { (0..st.n).filter(|&c| st.occupied(c)).map(|c| ex[c] as f64 / 65536.0).sum::<f64>() / occ as f64 } else { 0.0 };
                 orgs = organisms(st, &bodies) as i64;
+                bt = body_types(st, &bodies);
+                s.body_types_mean = bt.types_mean;
+                s.body_types_max = bt.types_max;
+                s.body_roles_mean = bt.roles_mean;
+                s.body_roles_max = bt.roles_max;
+                s.multi_type_bodies = bt.multi_type;
                 s.bodies = nb as usize;
                 s.max_body = max_b as usize;
                 s.organisms = orgs as usize;
@@ -421,6 +442,13 @@ impl Recorder {
                 self.series("largest body", e, max_b as f64);
                 self.series("mean body size", e, mean_b);
                 self.series("organisms", e, orgs as f64);
+                self.series("bodies of 10+ cells", e, bt.bodies as f64);
+                self.series("cell types per body", e, bt.types_mean);
+                self.series("most cell types in a body", e, bt.types_max as f64);
+                self.series("roles per body", e, bt.roles_mean);
+                self.series("most roles in a body", e, bt.roles_max as f64);
+                self.series("bodies with 2+ cell types %", e, 100.0 * bt.multi_type);
+                self.series("bodies with 2+ roles %", e, 100.0 * bt.multi_role);
             }
             let (mut h0, mut bpb, mut hoe) = (f64::NAN, f64::NAN, f64::NAN);
             if due(self.cfg.entropy_every.max(1)) {
@@ -457,6 +485,12 @@ impl Recorder {
                 V::F(hoe),
                 V::I(st.vents.len() as i64),
                 V::I(s.species as i64),
+                V::F(bt.types_mean),
+                V::I(bt.types_max as i64),
+                V::F(bt.roles_mean),
+                V::I(bt.roles_max as i64),
+                V::F(bt.multi_type),
+                V::F(bt.multi_role),
             ])?;
             self.series("population", e, occ as f64);
             self.series("mean tape length", e, s.mean_len);
@@ -688,6 +722,65 @@ pub fn needs_state(c: &primordia_core::config::TelemetryCfg, epoch: u64) -> bool
         .any(|&k| k > 0 && epoch % k == 0)
 }
 
+/// Differentiation within bonded bodies of at least `BODY_TYPES_MIN` cells.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct BodyTypes {
+    /// Bodies large enough to be counted.
+    pub bodies: usize,
+    /// Cell types: groups of members sharing their first 16 tape bytes.
+    pub types_mean: f64,
+    pub types_max: usize,
+    /// Roles: groups of members with the same set of behaviour instructions
+    /// (`TRACKED_OPS`) present on their tape.
+    pub roles_mean: f64,
+    pub roles_max: usize,
+    /// Share of counted bodies with at least two types / roles.
+    pub multi_type: f64,
+    pub multi_role: f64,
+}
+
+pub const BODY_TYPES_MIN: usize = 10;
+
+/// Count cell types and roles per body. A group counts only if it holds at
+/// least 2 cells and 5% of the body, so lone mutants are not a type.
+pub fn body_types(st: &primordia_core::State, bodies: &phases::Bodies) -> BodyTypes {
+    let mut members: HashMap<u32, Vec<usize>> = HashMap::new();
+    for c in 0..st.n {
+        if bodies.label[c] != NONE {
+            members.entry(bodies.label[c]).or_default().push(c);
+        }
+    }
+    let mut bit = [0u32; 256];
+    for (i, &b) in TRACKED_OPS.iter().enumerate() {
+        bit[b as usize] = 1 << i;
+    }
+    let counted = |groups: &mut dyn Iterator<Item = &usize>, size: usize| groups.filter(|&&k| k >= 2 && 20 * k >= size).count();
+    let mut r = BodyTypes::default();
+    let (mut tsum, mut rsum, mut tmulti, mut rmulti) = (0usize, 0usize, 0usize, 0usize);
+    for m in members.values().filter(|m| m.len() >= BODY_TYPES_MIN) {
+        let mut prefixes: HashMap<&[u8], usize> = HashMap::new();
+        let mut roles: HashMap<u32, usize> = HashMap::new();
+        for &c in m {
+            let t = st.tape(c);
+            *prefixes.entry(&t[..t.len().min(16)]).or_default() += 1;
+            *roles.entry(t.iter().fold(0, |a, &b| a | bit[b as usize])).or_default() += 1;
+        }
+        let (nt, nr) = (counted(&mut prefixes.values(), m.len()), counted(&mut roles.values(), m.len()));
+        r.bodies += 1;
+        tsum += nt;
+        rsum += nr;
+        tmulti += (nt >= 2) as usize;
+        rmulti += (nr >= 2) as usize;
+        r.types_max = r.types_max.max(nt);
+        r.roles_max = r.roles_max.max(nr);
+    }
+    if r.bodies > 0 {
+        let n = r.bodies as f64;
+        (r.types_mean, r.roles_mean, r.multi_type, r.multi_role) = (tsum as f64 / n, rsum as f64 / n, tmulti as f64 / n, rmulti as f64 / n);
+    }
+    r
+}
+
 /// Operational organism candidates (§13.2, simplified): bonded bodies of
 /// size >= 2 whose members all descend from one parent lineage or from each
 /// other.
@@ -707,4 +800,48 @@ pub fn organisms(st: &primordia_core::State, bodies: &phases::Bodies) -> usize {
             parents.len() <= 1 && m.iter().any(|&c| st.h(c, H_PARENT) != 0)
         })
         .count()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use primordia_core::params::{BOND_SHIFT, FL_OCC, HDR, H_FLAGS, H_LEN};
+    use primordia_core::{Config, Params, State};
+
+    /// A bonded row of 20 cells: 10 copiers, 9 sleepers and one lone mutant
+    /// is two cell types and two roles (the mutant is too rare to count).
+    #[test]
+    fn body_types_count_groups() {
+        let mut cfg = Config::preset("primordia-2d-sun").unwrap();
+        cfg.world.size = vec![30, 30];
+        cfg.validate().unwrap();
+        let p = Params::new(&cfg);
+        let mut st = State::init(&cfg, &p);
+        for c in 0..st.n {
+            st.hdr[c * HDR + H_FLAGS] = 0;
+        }
+        let copier = [0x12u8, 0x13, 0x15, 0xC2];
+        let sleeper = [0x5Fu8, 0x6E, 0x41, 0xC2];
+        let mutant = [0x12u8, 0x61, 0x15, 0xC2];
+        for x in 0..20usize {
+            let c = x + 30 * 5;
+            let tape: &[u8] = if x < 10 { &copier } else if x < 19 { &sleeper } else { &mutant };
+            let mut fl = FL_OCC;
+            if x > 0 {
+                fl |= 1 << (BOND_SHIFT + 1); // -x face
+            }
+            if x < 19 {
+                fl |= 1 << BOND_SHIFT; // +x face
+            }
+            st.hdr[c * HDR + H_FLAGS] = fl;
+            st.hdr[c * HDR + H_LEN] = 4;
+            st.tapes[c * st.lmax..c * st.lmax + 4].copy_from_slice(tape);
+        }
+        let bodies = phases::components(&st, &p);
+        assert_eq!(bodies.count, 1);
+        let bt = body_types(&st, &bodies);
+        assert_eq!(bt.bodies, 1);
+        assert_eq!((bt.types_max, bt.roles_max), (2, 2));
+        assert_eq!(bt.multi_type, 1.0);
+    }
 }

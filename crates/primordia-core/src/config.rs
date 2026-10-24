@@ -75,6 +75,18 @@ pub struct IndividualCfg {
     /// Fraction of normal light absorption a sleeping cell keeps (1 = as in
     /// the spec, 0 = a sleeper is a closed spore with no income).
     pub sleep_absorb: f64,
+    /// Dormancy (the counter behind `starve_after` and the penalties below)
+    /// counts only epochs in which a halted cell did not execute; false = as
+    /// before, a cell halted at the end of the epoch counts even if it ran
+    /// and exhausted itself.
+    pub dormant_idle: bool,
+    /// Epochs of dormancy before `dormant_absorb` and `dormant_rot` apply.
+    pub dormant_grace: u32,
+    /// Fraction of light absorption a cell keeps once dormant past the grace
+    /// period (1 = no penalty, 0 = only bonded neighbours can revive it).
+    pub dormant_absorb: f64,
+    /// Tape decay multiplier once dormant past the grace period (1 = none).
+    pub dormant_rot: f64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -289,6 +301,10 @@ pub struct ShieldCfg {
     pub s_occupied: f64,
     pub w_occupied: f64,
     pub granularity: Granularity,
+    /// How much face cover (bonded and occupied faces, as in the exposure)
+    /// reduces light absorption: 1 = as in the spec, 0 = neighbours do not
+    /// shade. Radiation, decay and write shielding keep the full cover.
+    pub light_cover: f64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -410,6 +426,10 @@ impl Default for IndividualCfg {
             sleep_scale: 1,
             sleep_shield: false,
             sleep_absorb: 1.0,
+            dormant_idle: false,
+            dormant_grace: 0,
+            dormant_absorb: 1.0,
+            dormant_rot: 1.0,
         }
     }
 }
@@ -531,7 +551,7 @@ impl Default for ChiralCfg {
 }
 impl Default for ShieldCfg {
     fn default() -> Self {
-        ShieldCfg { enabled: true, s_bond: 0.25, s_occupied: 0.10, w_occupied: 0.5, granularity: Granularity::Slice }
+        ShieldCfg { enabled: true, s_bond: 0.25, s_occupied: 0.10, w_occupied: 0.5, granularity: Granularity::Slice, light_cover: 1.0 }
     }
 }
 impl Default for BondCfg {
@@ -808,6 +828,9 @@ impl Config {
         ensure!(ind.l_init <= ind.l_max, "l_init > l_max");
         ensure!((1..=256).contains(&ind.sleep_scale), "individual.sleep_scale must be 1..=256");
         ensure!((0.0..=1.0).contains(&ind.sleep_absorb), "individual.sleep_absorb must be in 0..=1");
+        ensure!((0.0..=1.0).contains(&ind.dormant_absorb), "individual.dormant_absorb must be in 0..=1");
+        ensure!((0.0..=1000.0).contains(&ind.dormant_rot), "individual.dormant_rot must be in 0..=1000");
+        ensure!((0.0..=1.0).contains(&self.shielding.light_cover), "shielding.light_cover must be in 0..=1");
         ensure!((0.0..=1.0).contains(&self.energy.sun.moon), "energy.sun.moon must be in 0..=1");
         ensure!(ind.step_budget <= 65535, "step_budget too large");
         let faces = self.faces().max(1) as f64;

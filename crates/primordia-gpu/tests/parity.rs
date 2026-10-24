@@ -137,6 +137,32 @@ fn t4_ageing_and_moonlight() {
     }
 }
 
+/// Dormancy penalties (idle-only counting, grace period, no absorption and
+/// fast rot once dormant) and light_cover: identical on both backends.
+#[test]
+fn t4_dormancy_and_light_cover() {
+    for dims in [2, 3] {
+        let mut c = cfg(dims);
+        c.individual.starve_after = 30;
+        c.individual.dormant_idle = true;
+        c.individual.dormant_grace = 5;
+        c.individual.dormant_absorb = 0.0;
+        c.individual.dormant_rot = 20.0;
+        c.individual.sleep_scale = 16;
+        c.shielding.light_cover = 0.0;
+        c.energy.share_beta = 0.3;
+        c.energy.sun.moon = 0.05;
+        c.decay.light_factor = 3.0;
+        c.validate().unwrap();
+        for resident in [false, true] {
+            let a = check(c.clone(), 80, true, resident);
+            let st = &a.st;
+            let dormant = (0..st.n).filter(|&i| st.occupied(i) && st.h(i, primordia_core::params::H_ZERO) > 0).count();
+            eprintln!("dormancy dims {dims} resident {resident}: {dormant} cells dormant at the end");
+        }
+    }
+}
+
 #[test]
 fn t4_gpu_cpu_parity_2d() {
     parity(2, 150, false);
@@ -193,6 +219,11 @@ fn t4_resident_fuzz() {
         c.individual.sleep_scale = if rnd() % 2 == 0 { 16 } else { 1 };
         c.individual.sleep_shield = rnd() % 2 == 0;
         c.individual.sleep_absorb = [1.0, 0.0, 0.3][(rnd() % 3) as usize];
+        c.individual.dormant_idle = rnd() % 2 == 0;
+        c.individual.dormant_grace = [0u32, 5, 20][(rnd() % 3) as usize];
+        c.individual.dormant_absorb = [1.0, 0.0, 0.25][(rnd() % 3) as usize];
+        c.individual.dormant_rot = [1.0, 20.0, 5.0][(rnd() % 3) as usize];
+        c.shielding.light_cover = [1.0, 0.0, 0.5][(rnd() % 3) as usize];
         c.energy.upkeep.base = 4.0;
         if c.validate().is_err() {
             continue;

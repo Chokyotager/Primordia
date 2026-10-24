@@ -278,6 +278,116 @@ fn t1_sleep_absorb() {
     assert!(half > 0 && half < full, "half {half} of {full}");
 }
 
+/// individual.dormant_idle: with starvation on, a halted cell's dormancy
+/// counter grows; with dormant_idle it grows only if the cell did not execute
+/// this epoch (a cell that ran and exhausted itself is not dormant).
+#[test]
+fn t1_dormant_idle() {
+    for idle in [false, true] {
+        for executed in [false, true] {
+            let mut cfg = deterministic_cfg(2);
+            cfg.individual.starve_after = 100;
+            cfg.individual.dormant_idle = idle;
+            cfg.mutation.enabled = false;
+            cfg.decay.enabled = false;
+            let (p, mut st) = blank(&cfg);
+            let c = p.geom.index([5, 5, 0]);
+            put(&mut st, &p, c, &[0x41, 0x41], 0, 0);
+            st.hdr[c * HDR + H_FLAGS] |= FL_HALT | if executed { FL_EXEC } else { 0 };
+            st.hdr[c * HDR + H_ZERO] = 5;
+            primordia_core::phases::mutate_decay(&mut st, &p, None);
+            let want = if idle && executed { 0 } else { 6 };
+            assert_eq!(st.h(c, H_ZERO), want, "idle {idle} executed {executed}");
+        }
+    }
+}
+
+/// individual.dormant_absorb: once dormant for dormant_grace epochs a halted
+/// cell keeps only that fraction of its light absorption; before the grace
+/// period ends, and for awake cells, absorption is unchanged.
+#[test]
+fn t1_dormant_absorb() {
+    let take = |absorb: f64, halted: bool, zero: u32| {
+        let mut cfg = deterministic_cfg(2);
+        cfg.individual.dormant_grace = 20;
+        cfg.individual.dormant_absorb = absorb;
+        let (p, mut st) = blank(&cfg);
+        let c = p.geom.index([5, 5, 0]);
+        put(&mut st, &p, c, &[0x41, 0x41], 0, 0);
+        if halted {
+            st.hdr[c * HDR + H_FLAGS] |= FL_HALT;
+        }
+        st.hdr[c * HDR + H_ZERO] = zero;
+        *st.fm(c, F_F) = 20_000;
+        primordia_core::phases::absorb_upkeep(&mut st, &p);
+        20_000 - st.f(c, F_F)
+    };
+    let full = take(1.0, true, 20);
+    assert!(full > 0);
+    assert_eq!(take(0.0, true, 20), 0, "dormant past grace absorbs nothing");
+    assert_eq!(take(0.0, true, 19), full, "within the grace period");
+    assert_eq!(take(0.0, false, 50), full, "awake cells are unaffected");
+    let q = take(0.25, true, 50);
+    assert!(q > 0 && q < full / 2, "quarter {q} of {full}");
+}
+
+/// individual.dormant_rot: decay is multiplied for a cell dormant past the
+/// grace period, and only for that cell.
+#[test]
+fn t1_dormant_rot() {
+    let left = |rot: f64, halted: bool| {
+        let mut cfg = deterministic_cfg(2);
+        cfg.individual.dormant_grace = 10;
+        cfg.individual.dormant_rot = rot;
+        cfg.mutation.enabled = false;
+        cfg.decay.rate = 1e-3;
+        cfg.decay.activation = 0.0;
+        let (p, mut st) = blank(&cfg);
+        let c = p.geom.index([5, 5, 0]);
+        put(&mut st, &p, c, &[0x41; 64], 0, 0);
+        if halted {
+            st.hdr[c * HDR + H_FLAGS] |= FL_HALT;
+        }
+        st.hdr[c * HDR + H_ZERO] = 10;
+        for _ in 0..5 {
+            primordia_core::phases::mutate_decay(&mut st, &p, None);
+            st.epoch += 1;
+        }
+        st.tape(c).iter().filter(|&&b| b != 0).count()
+    };
+    // about 6 expected decays per epoch at x100 (the Poisson sampler is
+    // accurate only below about 20 events per cell and epoch)
+    let (base, rot, awake) = (left(1.0, true), left(100.0, true), left(100.0, false));
+    assert!(base >= 60, "base decay is slow ({base} left)");
+    assert!(rot <= 50, "a dormant tape rots ({rot} left)");
+    assert!(awake >= 60, "awake cells are unaffected ({awake} left)");
+}
+
+/// shielding.light_cover: face cover reduces light absorption by this weight
+/// (1 = the spec's exposure, 0 = bonded neighbours do not shade).
+#[test]
+fn t1_light_cover() {
+    let take = |cover: f64| {
+        let mut cfg = deterministic_cfg(2);
+        cfg.shielding.light_cover = cover;
+        let (p, mut st) = blank(&cfg);
+        let c = p.geom.index([5, 5, 0]);
+        put(&mut st, &p, c, &[0x41, 0x41], 0, 1000);
+        for d in 0..4u32 {
+            let t = p.nbr[c * 6 + d as usize] as usize;
+            put(&mut st, &p, t, &[0x41, 0x41], 0, 1000);
+            st.hdr[c * HDR + H_FLAGS] |= 1 << (BOND_SHIFT + d);
+            st.hdr[t * HDR + H_FLAGS] |= 1 << (BOND_SHIFT + (d ^ 1));
+        }
+        *st.fm(c, F_F) = 20_000;
+        primordia_core::phases::absorb_upkeep(&mut st, &p);
+        20_000 - st.f(c, F_F)
+    };
+    let (shaded, half, open) = (take(1.0), take(0.5), take(0.0));
+    assert_eq!(shaded, 0, "fully bonded cell is fully shaded");
+    assert!(open > 0 && half > 0 && half < open, "half {half}, open {open}");
+}
+
 // ------------------------------------------------------------------ T2
 
 #[test]

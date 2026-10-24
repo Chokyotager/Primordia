@@ -699,9 +699,16 @@ pub fn absorb_upkeep(st: &mut State, p: &Params) {
                 return 0;
             }
             // absorption
-            let mut a = mulshr16(p.absorb_q16 as u32, expo[c]);
+            let mut e = expo[c];
+            if p.light_cover_q16 != 1 << 16 {
+                e = 65536 - mulshr16(65536 - e, p.light_cover_q16);
+            }
+            let mut a = mulshr16(p.absorb_q16 as u32, e);
             if h[H_SLEEP] > 0 && p.sleep_absorb_q16 != 1 << 16 {
                 a = mulshr16(a, p.sleep_absorb_q16);
+            }
+            if p.dormant_absorb_q16 != 1 << 16 && p.dormant_past_grace(h[H_FLAGS], h[H_ZERO]) {
+                a = mulshr16(a, p.dormant_absorb_q16);
             }
             let de = mulshr16(a, f[F_F]);
             f[F_F] -= de;
@@ -960,7 +967,8 @@ pub fn mutation_map(st: &State, p: &Params, image: Option<&Vec<u32>>) -> Option<
 /// Expected events (Q24) for the four per-byte channels of one cell:
 /// background flips, radiation flips, hand flips, decay. Shared with WGSL.
 #[allow(clippy::too_many_arguments)]
-pub fn mutation_lambdas(p: &Params, n_ne: u32, n_ch: u32, temp: u32, e: u32, light: u32, mx: u32, i0i: u32) -> [u32; 4] {
+/// `rot` (Q16) multiplies decay (dormant cells, `individual.dormant_rot`).
+pub fn mutation_lambdas(p: &Params, n_ne: u32, n_ch: u32, temp: u32, e: u32, light: u32, mx: u32, i0i: u32, rot: u32) -> [u32; 4] {
     let irel = light / i0i;
     let a_mut = arr_lookup(&p.arr[p.arr_mut], temp);
     let a_rac = arr_lookup(&p.arr[p.arr_rac], temp);
@@ -969,7 +977,10 @@ pub fn mutation_lambdas(p: &Params, n_ne: u32, n_ch: u32, temp: u32, e: u32, lig
     let uv = mulshr16_sat(mulshr16(p.mu_uv_q32, e), irel);
     let fl = mulshr16_sat(p.mu_flip_q32, a_rac);
     let lf = 65536u32.saturating_add(mulshr16_sat(mulshr16(p.decay_light_q16 as u32, e), irel));
-    let dc = mulshr16_sat(mulshr16_sat(p.decay_q32, a_dec), lf);
+    let mut dc = mulshr16_sat(mulshr16_sat(p.decay_q32, a_dec), lf);
+    if rot != 1 << 16 {
+        dc = mulshr16_sat(dc, rot);
+    }
     [mulshr8_sat(bg, n_ne), mulshr8_sat(uv, n_ne), mulshr8_sat(fl, n_ch), mulshr8_sat(dc, n_ne)]
 }
 
@@ -998,7 +1009,8 @@ pub fn mutate_decay(st: &mut State, p: &Params, map: Option<&Vec<u32>>) {
             let n_ch = t.iter().filter(|&&b| isa::is_chiral(b)).count() as u32;
             let temp = f[F_T];
             let id = p.geom.canon(c, mirrored);
-            let lam = mutation_lambdas(p, n_ne, n_ch, temp, expo[c], light[c], map.map(|m| m[c]).unwrap_or(1 << 16), i0i);
+            let rot = if p.dormant_rot_q16 != 1 << 16 && p.dormant_past_grace(h[H_FLAGS], h[H_ZERO]) { p.dormant_rot_q16 } else { 1 << 16 };
+            let lam = mutation_lambdas(p, n_ne, n_ch, temp, expo[c], light[c], map.map(|m| m[c]).unwrap_or(1 << 16), i0i, rot);
             let mut draw = 0u32;
             let mut rnd = || {
                 let r = rng.u32(id, 0, draw);
@@ -1045,8 +1057,10 @@ pub fn mutate_decay(st: &mut State, p: &Params, map: Option<&Vec<u32>>) {
                 }
             }
             // dead-cell bookkeeping
-            // dying counter: all-empty tape, or (with starvation on) dormant
-            let starving = p.starve_after > 0 && h[H_FLAGS] & FL_HALT != 0;
+            // dying counter: all-empty tape, or (with starvation or dormancy
+            // penalties on) dormant: halted, and with dormant_idle also not
+            // having executed this epoch
+            let starving = p.dormancy_counted() && h[H_FLAGS] & FL_HALT != 0 && !(p.dormant_idle && h[H_FLAGS] & FL_EXEC != 0);
             if starving || t.iter().all(|&b| b == 0) {
                 h[H_ZERO] += 1;
             } else {

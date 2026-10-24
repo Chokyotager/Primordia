@@ -817,6 +817,10 @@ const SECTIONS = [
     { t: 'Mean body size', s: ['mean body size'], u: ' cells' },
     { t: 'Bonded cells', s: ['bonded cells %'], u: '%' },
     { t: 'Organism candidates', s: ['organisms'] },
+    { t: 'Cell types per body', s: ['cell types per body', 'roles per body'], n: ['program prefixes', 'behaviour roles'], sub: 'bodies of 10+ cells; a type holds 2+ cells and 5% of the body' },
+    { t: 'Most cell types in one body', s: ['most cell types in a body', 'most roles in a body'], n: ['program prefixes', 'behaviour roles'] },
+    { t: 'Differentiated bodies', s: ['bodies with 2+ cell types %', 'bodies with 2+ roles %'], n: ['2+ prefixes', '2+ roles'], u: '%' },
+    { t: 'Bodies of 10+ cells', s: ['bodies of 10+ cells'] },
   ] },
   { title: 'Behaviour', note: 'instruction frequency in living programs; 1× = a random byte', ops: true },
   { title: 'Code & evolution', charts: [

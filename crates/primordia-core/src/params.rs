@@ -72,6 +72,15 @@ pub struct Params {
     pub sleep_shield: bool,
     /// Q16 fraction of absorption kept while asleep (65536 = all).
     pub sleep_absorb_q16: u32,
+    /// Dormancy counts only halted epochs without execution.
+    pub dormant_idle: bool,
+    pub dormant_grace: u32,
+    /// Q16 absorption kept and decay multiplier once dormant past the grace
+    /// period (65536 = no penalty).
+    pub dormant_absorb_q16: u32,
+    pub dormant_rot_q16: u32,
+    /// Q16 weight of face cover in the exposure used for light absorption.
+    pub light_cover_q16: u32,
 
     pub energy_on: bool,
     pub chem_on: bool,
@@ -256,6 +265,11 @@ impl Params {
             sleep_scale: c.individual.sleep_scale,
             sleep_shield: c.individual.sleep_shield && !pair_concat,
             sleep_absorb_q16: to_q16(c.individual.sleep_absorb) as u32,
+            dormant_idle: c.individual.dormant_idle,
+            dormant_grace: c.individual.dormant_grace,
+            dormant_absorb_q16: if energy_on { to_q16(c.individual.dormant_absorb) } else { 1 << 16 },
+            dormant_rot_q16: if energy_on { to_q16(c.individual.dormant_rot) } else { 1 << 16 },
+            light_cover_q16: to_q16(c.shielding.light_cover),
             energy_on,
             chem_on: c.chemistry.enabled,
             matter_on: c.matter.enabled && !pair_concat,
@@ -365,6 +379,20 @@ impl Params {
     #[inline]
     pub fn f_sig(&self, j: usize, h: usize) -> usize {
         2 + 2 * self.k + 3 + 2 * j + h
+    }
+    /// Dormancy penalties beyond starvation (absorption, rot) are on.
+    pub fn dormant_penalty(&self) -> bool {
+        self.dormant_absorb_q16 != 1 << 16 || self.dormant_rot_q16 != 1 << 16
+    }
+    /// The dormancy counter (H_ZERO of a non-empty tape) is kept.
+    pub fn dormancy_counted(&self) -> bool {
+        self.starve_after > 0 || self.dormant_penalty()
+    }
+    /// A cell with these flags and dormancy counter is dormant past the grace
+    /// period, so the dormancy penalties apply.
+    #[inline]
+    pub fn dormant_past_grace(&self, flags: u32, zero: u32) -> bool {
+        flags & FL_HALT != 0 && zero >= self.dormant_grace
     }
 }
 

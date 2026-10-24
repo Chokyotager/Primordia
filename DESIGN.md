@@ -79,9 +79,16 @@ by golden and parity tests. They came out of the long live runs, in this order:
 | `individual.sleep_scale` | `SLEEP n` lasts min(n, 255) × scale epochs | at most 31 epochs per call, so covering a 1,000-epoch night took dozens of calls |
 | `individual.sleep_shield` | neighbours cannot write to or digest a sleeping cell's tape (reads are allowed) | sleepers survived the night but waking neighbours copied over their programs, so sleeping could not be inherited |
 | `individual.sleep_absorb` | a sleeping cell keeps this fraction of its light absorption | with protection alone, constant short daytime naps took over (97% of cells asleep) and replaced bonded bodies; a sleeper with no income pays for sleeping by day but hardly at night |
+| `individual.dormant_idle` | the dormancy counter behind `starve_after` counts only epochs in which a halted cell did not execute | a copier that runs until it is out of energy ends every slice halted, so busy, well-fed cells counted as starving |
+| `individual.dormant_grace`, `dormant_absorb`, `dormant_rot` | once dormant for the grace period, a cell keeps only this fraction of its light absorption and its tape decays this many times faster | a dormant cell paid nothing, kept absorbing and woke every ~85 epochs even by moonlight, so dormancy was a free way to sit out the night; now only a bonded neighbour's shared energy can rescue it |
+| `shielding.light_cover` | how much face cover (bonds, occupied neighbours) reduces light absorption; radiation, decay and write shielding keep the full cover | in 2D the sun is overhead, yet every bond cost a cell a quarter of its light, which taxed bodies |
 
-`runs/live-m4.toml` uses all six (starve 800, moon 0.02, lifespan 6,000, sleep ×16, shield on, sleepers
+`runs/live-m4.toml` uses the first six (starve 800, moon 0.02, lifespan 6,000, sleep ×16, shield on, sleepers
 absorb nothing). `runs/live-m1.toml` to `live-m3.toml` are the earlier steps.
+
+The Poisson sampler behind mutation and decay is accurate only below about 20 expected events per cell and
+epoch, so `dormant_rot` should keep decay rate × rot × tape length well under that (×50 on a 128-byte tape at
+the live decay rate gives about 2).
 
 ## Telemetry
 
@@ -100,5 +107,9 @@ absorb nothing). `runs/live-m1.toml` to `live-m3.toml` are the earlier steps.
   `--resume`.
 * **Cell states** (`life.parquet`, every 10 epochs): sunlight, asleep, dormant, SLEEP carriers, bonded,
   mean age, and shares older than one and two days.
+* **Body differentiation** (`metrics.parquet`, every 10 epochs). For each bonded body of 10+ cells, cell
+  *types* (members sharing their first 16 tape bytes) and *roles* (members with the same set of behaviour
+  instructions on their tape) are counted; a group counts only with at least 2 cells and 5% of the body.
+  Logged as mean and max per body and the share of bodies with two or more.
 * **Behaviour.** The frequency of 23 behaviour instructions in living programs, relative to a random
   byte (1×), is a live series; the full 256-opcode histogram goes to `opcodes.parquet`.

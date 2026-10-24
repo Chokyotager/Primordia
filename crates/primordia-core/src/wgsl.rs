@@ -331,7 +331,13 @@ pub mod qi {
     pub const RX_STRIDE: usize = 10;
     pub const MAX_RX: usize = 16;
     pub const SLEEP_ABSORB: usize = RX + RX_STRIDE * MAX_RX;
-    pub const LEN: usize = SLEEP_ABSORB + 1;
+    pub const DORM_COUNT: usize = SLEEP_ABSORB + 1;
+    pub const DORM_IDLE: usize = SLEEP_ABSORB + 2;
+    pub const DORM_GRACE: usize = SLEEP_ABSORB + 3;
+    pub const DORM_ABSORB: usize = SLEEP_ABSORB + 4;
+    pub const DORM_ROT: usize = SLEEP_ABSORB + 5;
+    pub const LIGHT_COVER: usize = SLEEP_ABSORB + 6;
+    pub const LEN: usize = SLEEP_ABSORB + 7;
 }
 
 pub mod qf {
@@ -437,6 +443,12 @@ pub fn phys_words(p: &Params) -> Vec<u32> {
     w[qi::STARVE] = p.starve_after;
     w[qi::MAX_AGE] = p.max_age;
     w[qi::SLEEP_ABSORB] = p.sleep_absorb_q16;
+    w[qi::DORM_COUNT] = p.dormancy_counted() as u32;
+    w[qi::DORM_IDLE] = p.dormant_idle as u32;
+    w[qi::DORM_GRACE] = p.dormant_grace;
+    w[qi::DORM_ABSORB] = p.dormant_absorb_q16;
+    w[qi::DORM_ROT] = p.dormant_rot_q16;
+    w[qi::LIGHT_COVER] = p.light_cover_q16;
     w[qi::VOTE_Q16] = p.vote_q16 as u32;
     w[qi::MAX_BODY] = p.max_body;
     w[qi::VENT_RATE] = p.vent_cfg.rate;
@@ -524,6 +536,12 @@ pub fn phys_constants() -> String {
         ("Q_STARVE", qi::STARVE),
         ("Q_MAX_AGE", qi::MAX_AGE),
         ("Q_SLEEP_ABSORB", qi::SLEEP_ABSORB),
+        ("Q_DORM_COUNT", qi::DORM_COUNT),
+        ("Q_DORM_IDLE", qi::DORM_IDLE),
+        ("Q_DORM_GRACE", qi::DORM_GRACE),
+        ("Q_DORM_ABSORB", qi::DORM_ABSORB),
+        ("Q_DORM_ROT", qi::DORM_ROT),
+        ("Q_LIGHT_COVER", qi::LIGHT_COVER),
         ("Q_VOTE_Q16", qi::VOTE_Q16),
         ("Q_MAX_BODY", qi::MAX_BODY),
         ("Q_VENT_RATE", qi::VENT_RATE),
