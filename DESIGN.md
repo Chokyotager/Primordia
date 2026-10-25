@@ -104,9 +104,15 @@ vent, but none lasted more than one night. `runs/live-m10.toml` makes vents rele
 (500× the default, heat unchanged; enough for about 33,000 cells at night, with ~8 vents about 14% of the
 solar energy) and last 100 days, spawning 4× less often so that about 8 exist at a time.
 
-Vents and stored energy: a cell sitting on a vent its whole life can store about 800 × the vent rate, so the
-u32 energy counters stay safe up to roughly 2 million per vent; beyond that, saturating adds would lose
-energy and the ledger check would report it.
+M10 settled by day 20. Each vent became an oasis about 25 cells across (at dawn 77% of its sites occupied
+against 47% elsewhere, programs of 36–79 bytes against ~20, ~2 million stored energy per cell near the vent,
+only +45 K at the vent itself), but no body lasted more than 3–4 nights and differentiation stayed flat (~19%
+of bodies with 2+ cell types, ~21-byte programs). The initial vents also last 100 days, so the count rose to
+14 before settling. `runs/live-m11.toml` lengthens the lifespan from 3 to 10 days (`max_age` 20,000).
+
+Vents and stored energy: a cell sitting on a vent stores at most about lifespan × absorption × the free energy
+at the vent (~900,000 at 200,000 per epoch); with a 10-day lifespan that is ~9 × 10⁸, about 5× below the u32
+limit. Saturating adds past it would lose energy and the ledger check would report it.
 
 `runs/live-m1.toml` to `live-m3.toml` are the earlier steps.
 

@@ -1,0 +1,52 @@
+# Live world M11: as M10 (M4 + s_bond 0.4, share_beta 0.125, sleep at half
+# upkeep, sleepers unshielded, moonlight 0.04, vents at 200000 per epoch
+# lasting 100 days) with a 10-day lifespan instead of 3 (max_age 20000). M10
+# settled by day 20: vents became oases about 25 cells across where cells
+# survived the night (77% of sites occupied at dawn vs 47%), carried longer
+# programs (36-79 bytes vs ~20) and hoarded ~2 million energy each, but no body
+# lasted more than 3-4 nights and differentiation stayed flat (~19% of bodies
+# with 2+ cell types). With a 3-day lifespan a body can only persist by
+# constantly replacing its cells.
+# Start fresh with: --events runs/seed-501.jsonl
+preset = "primordia-2d-sun"
+epochs = 1000000000
+
+[world]
+size = [501, 501]
+
+[individual]
+starve_after = 800
+max_age = 20000  # 10 days
+sleep_scale = 16
+sleep_shield = false
+sleep_absorb = 0.0
+sleep_upkeep = 0.5
+
+[energy]
+share_beta = 0.125
+
+[energy.sun]
+i0 = 150
+moon = 0.04
+
+[energy.upkeep]
+base = 3.5
+per_byte = 0.12
+
+[energy.vents]
+enabled = true
+count = 6
+rate = 200000  # 500x the default; heat stays 400
+lifetime = 200000  # 100 days
+spawn_rate = 4e-5  # with the longer lifetime, keeps ~8 vents
+floor_only = false
+drift = 0.01
+
+[shielding]
+s_bond = 0.4
+
+[decay]
+rate = 3e-4
+
+[telemetry]
+snapshot_every = 11000  # alternates midday / dawn
