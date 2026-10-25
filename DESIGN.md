@@ -81,6 +81,7 @@ by golden and parity tests. They came out of the long live runs, in this order:
 | `individual.sleep_shield` | neighbours cannot write to or digest a sleeping cell's tape (reads are allowed) | sleepers survived the night but waking neighbours copied over their programs, so sleeping could not be inherited |
 | `individual.sleep_absorb` | a sleeping cell keeps this fraction of its light absorption | with protection alone, constant short daytime naps took over (97% of cells asleep) and replaced bonded bodies; a sleeper with no income pays for sleeping by day but hardly at night |
 | `individual.sleep_upkeep` | a sleeping cell pays this fraction of its upkeep (default 1/8, the spec's value) | in the M5 live run a copier that sleeps after every copied byte (`CPY SLEEP` in its loop) took over on day 14: 85% of cells asleep, bodies broken up |
+| `energy.vents.stagger` | the founding vents start at random ages below their lifetime | in M11 all six were created at epoch 0 with a 100-day lifetime and switched off together on day 100, killing every long-lived body |
 | `individual.dormant_idle` | the dormancy counter behind `starve_after` counts only epochs in which a halted cell did not execute | a copier that runs until it is out of energy ends every slice halted, so busy, well-fed cells counted as starving |
 | `individual.dormant_grace`, `dormant_absorb`, `dormant_rot` | once dormant for the grace period, a cell keeps only this fraction of its light absorption and its tape decays this many times faster | a dormant cell paid nothing, kept absorbing and woke every ~85 epochs even by moonlight, so dormancy was a free way to sit out the night; now only a bonded neighbour's shared energy can rescue it |
 | `shielding.light_cover` | how much face cover (bonds, occupied neighbours) reduces light absorption; radiation, decay and write shielding keep the full cover | in 2D the sun is overhead, yet every bond cost a cell a quarter of its light, which taxed bodies |
@@ -113,6 +114,13 @@ of bodies with 2+ cell types, ~21-byte programs). The initial vents also last 10
 Vents and stored energy: a cell sitting on a vent stores at most about lifespan × absorption × the free energy
 at the vent (~900,000 at 200,000 per epoch); with a 10-day lifespan that is ~9 × 10⁸, about 5× below the u32
 limit. Saturating adds past it would lose energy and the ledger check would report it.
+
+In M11 the bodies at vents became long-lived: several a day survived 3+ nights and the record reached 32
+nights (M10: 3–4), while bonding elsewhere was selected against (BOND 0.1–0.2× a random byte, a third of
+cells bonded). All six founding vents expired together on day 100 and the long-lived bodies died with them;
+from day 93 a strongly bonding lineage spread (BOND 5–14×, giant mats again) with more differentiation
+(23–25% of bodies with 2+ cell types against 12–16%, 30–39-byte programs). `runs/live-m12.toml` staggers
+the founding vents (`energy.vents.stagger`).
 
 `runs/live-m1.toml` to `live-m3.toml` are the earlier steps.
 

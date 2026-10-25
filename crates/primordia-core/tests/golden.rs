@@ -278,6 +278,32 @@ fn t1_sleep_absorb() {
     assert!(half > 0 && half < full, "half {half} of {full}");
 }
 
+/// energy.vents.stagger: the initial vents start at distinct random ages
+/// below their lifetime (identically in the mirror twin); off, all start at 0.
+#[test]
+fn t1_vent_stagger() {
+    let mut cfg = small(2, "primordia-2d-sun");
+    cfg.energy.vents.enabled = true;
+    cfg.energy.vents.count = 8;
+    cfg.energy.vents.lifetime = 1000;
+    let ages = |stagger: bool| {
+        let mut c = cfg.clone();
+        c.energy.vents.stagger = stagger;
+        let p = Params::new(&c);
+        let st = State::init(&c, &p);
+        let m = st.mirror(&p);
+        assert_eq!(st.vents.iter().map(|v| v.age).collect::<Vec<_>>(), m.vents.iter().map(|v| v.age).collect::<Vec<_>>());
+        st.vents.iter().map(|v| v.age).collect::<Vec<u64>>()
+    };
+    assert!(ages(false).iter().all(|&a| a == 0));
+    let a = ages(true);
+    assert!(a.iter().all(|&x| x < 1000), "{a:?}");
+    let mut d = a.clone();
+    d.sort();
+    d.dedup();
+    assert!(d.len() >= 6, "ages should be spread: {a:?}");
+}
+
 /// individual.sleep_upkeep: a sleeper pays this fraction of its upkeep; the
 /// default 0.125 is exactly the spec's integer 1/8.
 #[test]

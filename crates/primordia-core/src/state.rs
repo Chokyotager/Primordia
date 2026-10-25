@@ -242,7 +242,15 @@ impl State {
         if p.vents_on {
             for i in 0..cfg.energy.vents.count {
                 let pos = crate::phases::random_vent_pos(p, &st, &rng, 100 + i);
-                st.vents.push(Vent { id: st.next_vent, pos: pos as u32, age: 0, lifetime: cfg.energy.vents.lifetime });
+                let lifetime = cfg.energy.vents.lifetime;
+                // staggered: start part-way through life so the founding vents do not all expire together
+                let age = if cfg.energy.vents.stagger && lifetime > 0 {
+                    let r = rng.x4(100 + i, 8, 0);
+                    ((r[0] as u64) | ((r[1] as u64) << 32)) % lifetime
+                } else {
+                    0
+                };
+                st.vents.push(Vent { id: st.next_vent, pos: pos as u32, age, lifetime });
                 st.next_vent += 1;
             }
         }

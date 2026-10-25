@@ -142,6 +142,9 @@ pub struct VentCfg {
     pub drift: f64,
     /// Only vents on the floor (z = 0) in 3D.
     pub floor_only: bool,
+    /// The initial vents start at random ages in [0, lifetime), so they do
+    /// not all expire in the same epoch.
+    pub stagger: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -468,6 +471,7 @@ impl Default for VentCfg {
             spawn_rate: 1.6e-4,
             drift: 0.001,
             floor_only: true,
+            stagger: false,
         }
     }
 }
