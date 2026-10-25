@@ -1,0 +1,46 @@
+# Live world M7: as M6 (M4 + s_bond 0.4, share_beta 0.125, sleep at half
+# upkeep), but sleeping cells are no longer shielded. In M5 and M6 copiers that
+# sleep between copied bytes took over (about 90% of cells asleep, bonded cells
+# from ~50% to ~15%, bodies broken up): a cell asleep most of the time could
+# not be overwritten or digested. Without the shield a sleeper is protected
+# only by ordinary shielding, i.e. by its bonded and occupied neighbours.
+# Start fresh with: --events runs/seed-501.jsonl
+preset = "primordia-2d-sun"
+epochs = 1000000000
+
+[world]
+size = [501, 501]
+
+[individual]
+starve_after = 800
+max_age = 6000
+sleep_scale = 16
+sleep_shield = false
+sleep_absorb = 0.0
+sleep_upkeep = 0.5
+
+[energy]
+share_beta = 0.125
+
+[energy.sun]
+i0 = 150
+moon = 0.02
+
+[energy.upkeep]
+base = 3.5
+per_byte = 0.12
+
+[energy.vents]
+enabled = true
+count = 6
+floor_only = false
+drift = 0.01
+
+[shielding]
+s_bond = 0.4
+
+[decay]
+rate = 3e-4
+
+[telemetry]
+snapshot_every = 11000  # alternates midday / dawn

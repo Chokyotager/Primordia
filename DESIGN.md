@@ -87,7 +87,11 @@ by golden and parity tests. They came out of the long live runs, in this order:
 
 `runs/live-m4.toml` uses the first six (starve 800, moon 0.02, lifespan 6,000, sleep ×16, shield on, sleepers
 absorb nothing). `runs/live-m5.toml` is M4 with `shielding.s_bond` 0.4 and `energy.share_beta` 0.125; `runs/live-m6.toml` adds
-`individual.sleep_upkeep` 0.5 (the running M6 world was resumed from M5's day-11 snapshot).
+`individual.sleep_upkeep` 0.5 (the running M6 world was resumed from M5's day-11 snapshot). The sleeping
+copier still took over M6, between days 18 and 56, and held about 90% of cells asleep for the next 360
+days: a cell asleep most of the time was nearly immune to being overwritten, so it could afford to copy
+slowly. `runs/live-m7.toml` turns `sleep_shield` off again, so a sleeper is protected only by ordinary
+shielding from its neighbours, which bonding strengthens.
 `runs/live-m1.toml` to `live-m3.toml` are the earlier steps.
 
 **Dormancy sweep (M5).** On a 201² world (2 seeds, 10 days; means over days 6–10), against M4:
