@@ -1,0 +1,48 @@
+# Live world M10: as M9 (M4 + s_bond 0.4, share_beta 0.125, sleep at half
+# upkeep, sleepers unshielded, moonlight 0.04) with vents releasing 5x more
+# free energy again (40000 per epoch, 100x the default; heat unchanged). In
+# M9 about half the cells survived each night and a few small bodies (58-700
+# cells) sat within 11 cells of a vent, but none lasted more than one night.
+# At 40000 a vent can carry ~6,700 cells through the night, the size of the
+# larger night-surviving bodies; nine vents are still only ~3% of the energy.
+# Start fresh with: --events runs/seed-501.jsonl
+preset = "primordia-2d-sun"
+epochs = 1000000000
+
+[world]
+size = [501, 501]
+
+[individual]
+starve_after = 800
+max_age = 6000
+sleep_scale = 16
+sleep_shield = false
+sleep_absorb = 0.0
+sleep_upkeep = 0.5
+
+[energy]
+share_beta = 0.125
+
+[energy.sun]
+i0 = 150
+moon = 0.04
+
+[energy.upkeep]
+base = 3.5
+per_byte = 0.12
+
+[energy.vents]
+enabled = true
+count = 6
+rate = 40000  # 100x the default; heat stays 400
+floor_only = false
+drift = 0.01
+
+[shielding]
+s_bond = 0.4
+
+[decay]
+rate = 3e-4
+
+[telemetry]
+snapshot_every = 11000  # alternates midday / dawn

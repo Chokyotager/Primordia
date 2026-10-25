@@ -98,7 +98,10 @@ cover upkeep (~7–11). `runs/live-m8.toml` raises the moonlight to 0.06: in its
 cells survived each night (M7: ~25%) and bodies of 30k–70k cells lived to dawn (M7: 2k–8k).
 `runs/live-m9.toml` sets the moonlight to 0.04, just below an idle cell's upkeep, and makes vents release
 20× more free energy (8,000 per epoch, heat unchanged). Vents were about 0.02% of the world's energy and
-no tracked body sat near one; now each can carry about 900 cells through the night.
+no tracked body sat near one; now each can carry about 900 cells through the night. In its first 18 days
+about half the cells survived each night and a few small bodies (58–700 cells) sat within 11 cells of a
+vent, but none lasted more than one night. `runs/live-m10.toml` raises the vent rate 5× again, to 40,000
+(enough for about 6,700 cells, the size of the larger night-surviving bodies).
 `runs/live-m1.toml` to `live-m3.toml` are the earlier steps.
 
 **Dormancy sweep (M5).** On a 201² world (2 seeds, 10 days; means over days 6–10), against M4:
