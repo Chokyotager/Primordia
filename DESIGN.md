@@ -94,7 +94,11 @@ slowly. `runs/live-m7.toml` turns `sleep_shield` off again, so a sleeper is prot
 shielding from its neighbours, which bonding strengthens. In M7 sleeping vanished and bonding was strongly
 selected (BOND 10–17× a random byte, 60–70% of cells bonded), but each day the world filled with one
 giant mat (~150k cells) and about 75% of cells died each night, since moonlight (~3 per epoch) could not
-cover upkeep (~7–11). `runs/live-m8.toml` raises the moonlight to 0.06.
+cover upkeep (~7–11). `runs/live-m8.toml` raises the moonlight to 0.06: in its first 8 days about 75% of
+cells survived each night (M7: ~25%) and bodies of 30k–70k cells lived to dawn (M7: 2k–8k).
+`runs/live-m9.toml` sets the moonlight to 0.04, just below an idle cell's upkeep, and makes vents release
+20× more free energy (8,000 per epoch, heat unchanged). Vents were about 0.02% of the world's energy and
+no tracked body sat near one; now each can carry about 900 cells through the night.
 `runs/live-m1.toml` to `live-m3.toml` are the earlier steps.
 
 **Dormancy sweep (M5).** On a 201² world (2 seeds, 10 days; means over days 6–10), against M4:

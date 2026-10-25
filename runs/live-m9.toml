@@ -1,0 +1,49 @@
+# Live world M9: as M8 (M4 + s_bond 0.4, share_beta 0.125, sleep at half
+# upkeep, sleepers unshielded) with moonlight 0.04 instead of 0.06 and vents
+# releasing 20x more free energy (8000 per epoch, heat unchanged). M8's
+# brighter nights raised night survival from ~25% (M7) to ~75% and kept bodies
+# of 30-70k cells alive to dawn. At 0.04 (~6/epoch) moonlight alone no longer
+# quite covers an idle cell's upkeep (~7), while each vent, constant day and
+# night, can carry ~900 cells: drifting, short-lived night-time oases that
+# bodies can stay on or follow (body movement is foraging).
+# Start fresh with: --events runs/seed-501.jsonl
+preset = "primordia-2d-sun"
+epochs = 1000000000
+
+[world]
+size = [501, 501]
+
+[individual]
+starve_after = 800
+max_age = 6000
+sleep_scale = 16
+sleep_shield = false
+sleep_absorb = 0.0
+sleep_upkeep = 0.5
+
+[energy]
+share_beta = 0.125
+
+[energy.sun]
+i0 = 150
+moon = 0.04
+
+[energy.upkeep]
+base = 3.5
+per_byte = 0.12
+
+[energy.vents]
+enabled = true
+count = 6
+rate = 8000  # 20x the default; heat stays 400
+floor_only = false
+drift = 0.01
+
+[shielding]
+s_bond = 0.4
+
+[decay]
+rate = 3e-4
+
+[telemetry]
+snapshot_every = 11000  # alternates midday / dawn
