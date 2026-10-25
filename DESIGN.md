@@ -106,10 +106,8 @@ solar energy) and last 100 days, spawning 4× less often so that about 8 exist a
 
 Vents and stored energy: a cell sitting on a vent its whole life can store about 800 × the vent rate, so the
 u32 energy counters stay safe up to roughly 2 million per vent; beyond that, saturating adds would lose
-energy and the ledger check would report it. In its first 18 days
-about half the cells survived each night and a few small bodies (58–700 cells) sat within 11 cells of a
-vent, but none lasted more than one night. `runs/live-m10.toml` raises the vent rate 5× again, to 40,000
-(enough for about 6,700 cells, the size of the larger night-surviving bodies).
+energy and the ledger check would report it.
+
 `runs/live-m1.toml` to `live-m3.toml` are the earlier steps.
 
 **Dormancy sweep (M5).** On a 201² world (2 seeds, 10 days; means over days 6–10), against M4:

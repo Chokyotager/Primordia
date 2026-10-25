@@ -45,8 +45,8 @@ and its mirror image:
 ```
 
 It adds moonlight, a 3-day lifespan, longer sleeps, sleepers that absorb no light and pay half
-the normal upkeep, stronger bond shielding and energy sharing, and strong vents that act as
-night-time oases to the spec's rules
+the normal upkeep, stronger bond shielding and energy sharing, and strong, long-lived vents
+that act as night-time oases to the spec's rules
 (see [DESIGN.md](DESIGN.md#rules-added-beyond-the-spec)), to find out whether cells and bodies learn to
 survive the night.
 
