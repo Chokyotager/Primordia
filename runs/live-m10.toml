@@ -1,10 +1,12 @@
 # Live world M10: as M9 (M4 + s_bond 0.4, share_beta 0.125, sleep at half
-# upkeep, sleepers unshielded, moonlight 0.04) with vents releasing 5x more
-# free energy again (40000 per epoch, 100x the default; heat unchanged). In
-# M9 about half the cells survived each night and a few small bodies (58-700
-# cells) sat within 11 cells of a vent, but none lasted more than one night.
-# At 40000 a vent can carry ~6,700 cells through the night, the size of the
-# larger night-surviving bodies; nine vents are still only ~3% of the energy.
+# upkeep, sleepers unshielded, moonlight 0.04) with much stronger, longer-lived
+# vents: 200000 free energy per epoch (500x the default; heat unchanged),
+# lasting 100 days instead of 25, spawning 4x less often so about 8 exist at a
+# time. In M9 (8000 per vent) about half the cells survived each night and a
+# few small bodies (58-700 cells) sat within 11 cells of a vent, but none
+# lasted more than one night. Now each vent can carry ~33,000 cells through the
+# night (8 vents ~14% of the solar energy), and an oasis outlasts many
+# lifespans of the cells around it.
 # Start fresh with: --events runs/seed-501.jsonl
 preset = "primordia-2d-sun"
 epochs = 1000000000
@@ -34,7 +36,9 @@ per_byte = 0.12
 [energy.vents]
 enabled = true
 count = 6
-rate = 40000  # 100x the default; heat stays 400
+rate = 200000  # 500x the default; heat stays 400
+lifetime = 200000  # 100 days
+spawn_rate = 4e-5  # with the longer lifetime, keeps ~8 vents
 floor_only = false
 drift = 0.01
 

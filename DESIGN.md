@@ -100,6 +100,14 @@ cells survived each night (M7: ~25%) and bodies of 30k–70k cells lived to dawn
 20× more free energy (8,000 per epoch, heat unchanged). Vents were about 0.02% of the world's energy and
 no tracked body sat near one; now each can carry about 900 cells through the night. In its first 18 days
 about half the cells survived each night and a few small bodies (58–700 cells) sat within 11 cells of a
+vent, but none lasted more than one night. `runs/live-m10.toml` makes vents release 200,000 per epoch
+(500× the default, heat unchanged; enough for about 33,000 cells at night, with ~8 vents about 14% of the
+solar energy) and last 100 days, spawning 4× less often so that about 8 exist at a time.
+
+Vents and stored energy: a cell sitting on a vent its whole life can store about 800 × the vent rate, so the
+u32 energy counters stay safe up to roughly 2 million per vent; beyond that, saturating adds would lose
+energy and the ledger check would report it. In its first 18 days
+about half the cells survived each night and a few small bodies (58–700 cells) sat within 11 cells of a
 vent, but none lasted more than one night. `runs/live-m10.toml` raises the vent rate 5× again, to 40,000
 (enough for about 6,700 cells, the size of the larger night-surviving bodies).
 `runs/live-m1.toml` to `live-m3.toml` are the earlier steps.
