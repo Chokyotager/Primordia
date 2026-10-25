@@ -91,7 +91,10 @@ absorb nothing). `runs/live-m5.toml` is M4 with `shielding.s_bond` 0.4 and `ener
 copier still took over M6, between days 18 and 56, and held about 90% of cells asleep for the next 360
 days: a cell asleep most of the time was nearly immune to being overwritten, so it could afford to copy
 slowly. `runs/live-m7.toml` turns `sleep_shield` off again, so a sleeper is protected only by ordinary
-shielding from its neighbours, which bonding strengthens.
+shielding from its neighbours, which bonding strengthens. In M7 sleeping vanished and bonding was strongly
+selected (BOND 10–17× a random byte, 60–70% of cells bonded), but each day the world filled with one
+giant mat (~150k cells) and about 75% of cells died each night, since moonlight (~3 per epoch) could not
+cover upkeep (~7–11). `runs/live-m8.toml` raises the moonlight to 0.06.
 `runs/live-m1.toml` to `live-m3.toml` are the earlier steps.
 
 **Dormancy sweep (M5).** On a 201² world (2 seeds, 10 days; means over days 6–10), against M4:
