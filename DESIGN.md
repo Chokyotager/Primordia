@@ -139,6 +139,14 @@ sixfold a sleeper's program survived the night intact (80–90% of cells asleep,
 kin bodies down from ~200 to ~20, no body past 5 nights). The best program family did hold 60–120 conserved
 bytes, against M12's best of ~49. `runs/live-m14.toml` shortens sleeps (`sleep_scale` 16 → 4).
 
+M14 removed the sleeping strategy (about 0% of cells asleep for 70 days, night survival a steady 71–74%) but
+settled into a world of 17-byte programs led by one copier family (`CPY ENRG ALLOC H0+ H1+ JMP -5`), small
+short-lived bodies, and bonded neighbours no more related than unbonded ones (27% each with the
+padding-free kin rule). Its sites held about 2,300 energy of unused X1+X2: CAT was 0.006% of program bytes,
+since an unfolded CAT nets only ~3 energy and light recharged the store by ~0.6 per site and epoch.
+`runs/live-m15.toml` raises `chemistry.n_cat` to 16 and the photolysis rate to 2e-2, so the chemical store
+becomes a daylight reserve that only programs running CAT can spend, worth ~10× more to a folded catalyst.
+
 `runs/live-m1.toml` to `live-m3.toml` are the earlier steps.
 
 **Dormancy sweep (M5).** On a 201² world (2 seeds, 10 days; means over days 6–10), against M4:
@@ -202,8 +210,9 @@ the live decay rate gives about 2).
 * **Kinship** (`analysis::kin`, used for kin clusters, kin bodies and kinship across bonds): two programs are
   kin when at least 75% of the filled (non-empty) bytes among the fuller one's first 16 slots match the
   other in place, and it has at least 4. Empty padding never counts, so short programs can be kin and empty
-  newborn tapes never are. (Before M14's day 68 padding counted as matching, so in worlds of short programs
-  most cells looked related.) Empty tapes are also left out of cell types.
+  newborn tapes never are. (Before M14's day 72 padding counted as matching, so in worlds of short programs
+  most cells looked related.) Empty tapes are left out of cell types, and pairs with an empty tape are left
+  out of kinship across bonds and of a body's kin share.
 * **Kinship across bonds** (`kin_bonded`, `kin_unbonded`): the share of bonded and of unbonded occupied
   neighbour pairs that are kin. Bonded pairs no more related than unbonded ones mean bodies are aggregates
   of strangers, and their "cell types" are strains rather than division of labour.

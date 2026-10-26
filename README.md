@@ -41,7 +41,7 @@ The current long-running experiment is a 501² world with day and night, seeded 
 and its mirror image:
 
 ```
-./target/release/primordia run runs/live-m14.toml --events runs/seed-501.jsonl --autorun --web 0.0.0.0:8765
+./target/release/primordia run runs/live-m15.toml --events runs/seed-501.jsonl --autorun --web 0.0.0.0:8765
 ```
 
 It adds moonlight, a 10-day lifespan, longer sleeps, sleepers that absorb no light and pay half

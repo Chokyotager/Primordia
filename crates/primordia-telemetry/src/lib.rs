@@ -829,8 +829,11 @@ pub fn body_types(st: &primordia_core::State, p: &primordia_core::Params, bodies
             for d in (0..6).step_by(2) {
                 if st.bonds(c) & (1 << d) != 0 {
                     let t = p.nbr[c * 6 + d] as usize;
-                    bonds += 1;
-                    kin_bonds += kin(head(c), head(t)) as usize;
+                    // bonds to an empty newborn say nothing about kinship
+                    if head(c).iter().any(|&x| x != 0) && head(t).iter().any(|&x| x != 0) {
+                        bonds += 1;
+                        kin_bonds += kin(head(c), head(t)) as usize;
+                    }
                 }
             }
         }
@@ -867,11 +870,13 @@ pub fn body_types(st: &primordia_core::State, p: &primordia_core::Params, bodies
 }
 
 /// Kinship across faces: the share of bonded / unbonded occupied neighbour
-/// pairs whose programs are kin (`analysis::kin`, also the kin-cluster rule). Bonded pairs no more related than unbonded ones mean bodies
+/// pairs whose programs are kin (`analysis::kin`, also the kin-cluster rule).
+/// Pairs with an empty tape (a newborn not yet written) are left out. Bonded pairs no more related than unbonded ones mean bodies
 /// are aggregates of strangers rather than clones.
 pub fn bond_kinship(st: &primordia_core::State, p: &primordia_core::Params) -> (f64, f64) {
     let (l, w) = (st.lmax, 16.min(st.lmax));
     let head = |c: usize| &st.tapes[c * l..c * l + w];
+    let filled = |t: &[u8]| t.iter().any(|&x| x != 0);
     let (mut bk, mut bn, mut uk, mut un) = (0u64, 0u64, 0u64, 0u64);
     for c in 0..st.n {
         if !st.occupied(c) {
@@ -880,7 +885,7 @@ pub fn bond_kinship(st: &primordia_core::State, p: &primordia_core::Params) -> (
         for a in 0..p.geom.dims as usize {
             let d = 2 * a;
             let t = p.nbr[c * 6 + d];
-            if t == NONE || !st.occupied(t as usize) {
+            if t == NONE || !st.occupied(t as usize) || !filled(head(c)) || !filled(head(t as usize)) {
                 continue;
             }
             let k = kin(head(c), head(t as usize)) as u64;
