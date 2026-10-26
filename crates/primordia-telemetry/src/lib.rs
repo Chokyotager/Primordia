@@ -62,6 +62,15 @@ pub struct Summary {
     /// Share of bonded / unbonded neighbour pairs that are kin (`bond_kinship`).
     pub kin_bonded: f64,
     pub kin_unbonded: f64,
+    /// Kin bodies and those with 2+ cell types (`BodyTypes`).
+    pub kin_bodies: usize,
+    pub diff_kin_bodies: usize,
+    /// Conserved information per program and its family maximum (bytes), and
+    /// the executed repertoire (`conserved_information`, `executed_repertoire`).
+    pub conserved_info: f64,
+    pub conserved_info_max: f64,
+    pub executed_kinds: f64,
+    pub executed_behaviours: f64,
     pub energy_residual: i64,
     pub matter_residual: [i64; 3],
     pub atom_residual: i64,
@@ -191,6 +200,12 @@ impl Recorder {
                     ("multi_role_bodies", F),
                     ("kin_bonded", F),
                     ("kin_unbonded", F),
+                    ("kin_bodies", I),
+                    ("diff_kin_bodies", I),
+                    ("conserved_info", F),
+                    ("conserved_info_max", F),
+                    ("executed_kinds", F),
+                    ("executed_behaviours", F),
                 ]),
             )?,
             chir: Table::new(dir, "chirality", &chem_cols)?,
@@ -416,7 +431,7 @@ impl Recorder {
                 let ex = phases::exposure(st, p);
                 mexp = if occ > 0 { (0..st.n).filter(|&c| st.occupied(c)).map(|c| ex[c] as f64 / 65536.0).sum::<f64>() / occ as f64 } else { 0.0 };
                 orgs = organisms(st, &bodies) as i64;
-                bt = body_types(st, &bodies);
+                bt = body_types(st, p, &bodies);
                 (kin_b, kin_u) = bond_kinship(st, p);
                 s.kin_bonded = kin_b;
                 s.kin_unbonded = kin_u;
@@ -425,6 +440,8 @@ impl Recorder {
                 s.body_roles_mean = bt.roles_mean;
                 s.body_roles_max = bt.roles_max;
                 s.multi_type_bodies = bt.multi_type;
+                s.kin_bodies = bt.kin_bodies;
+                s.diff_kin_bodies = bt.diff_kin_bodies;
                 s.bodies = nb as usize;
                 s.max_body = max_b as usize;
                 s.organisms = orgs as usize;
@@ -452,11 +469,13 @@ impl Recorder {
                 self.series("mean body size", e, mean_b);
                 self.series("organisms", e, orgs as f64);
                 self.series("bodies of 10+ cells", e, bt.bodies as f64);
-                self.series("cell types per body", e, bt.types_mean);
-                self.series("most cell types in a body", e, bt.types_max as f64);
+                self.series("cell types per body (merged)", e, bt.types_mean);
+                self.series("most cell types in a body (merged)", e, bt.types_max as f64);
+                self.series("kin bodies (>=50% kin bonds)", e, bt.kin_bodies as f64);
+                self.series("kin bodies with 2+ cell types", e, bt.diff_kin_bodies as f64);
                 self.series("roles per body", e, bt.roles_mean);
                 self.series("most roles in a body", e, bt.roles_max as f64);
-                self.series("bodies with 2+ cell types %", e, 100.0 * bt.multi_type);
+                self.series("bodies with 2+ cell types (merged) %", e, 100.0 * bt.multi_type);
                 self.series("bodies with 2+ roles %", e, 100.0 * bt.multi_role);
                 self.series("kin across bonds %", e, 100.0 * kin_b);
                 self.series("kin across unbonded faces %", e, 100.0 * kin_u);
@@ -466,6 +485,13 @@ impl Recorder {
                 (h0, bpb, hoe) = high_order_entropy(st, self.cfg.entropy_samples as usize);
                 s.hoe = hoe;
                 self.series("high-order entropy", e, hoe);
+                let (ci, ci_max, _) = conserved_information(st);
+                let (kinds, behav) = executed_repertoire(cfg, st, 400, &TRACKED_OPS);
+                (s.conserved_info, s.conserved_info_max, s.executed_kinds, s.executed_behaviours) = (ci, ci_max, kinds, behav);
+                self.series("conserved information per program (bytes)", e, ci);
+                self.series("most conserved information in a family (bytes)", e, ci_max);
+                self.series("instruction kinds executed per slice", e, kinds);
+                self.series("behaviour instructions executed per slice", e, behav);
             }
             self.metrics.push(vec![
                 V::I(e as i64),
@@ -504,6 +530,12 @@ impl Recorder {
                 V::F(bt.multi_role),
                 V::F(kin_b),
                 V::F(kin_u),
+                V::I(bt.kin_bodies as i64),
+                V::I(bt.diff_kin_bodies as i64),
+                V::F(if due(self.cfg.entropy_every.max(1)) { s.conserved_info } else { f64::NAN }),
+                V::F(if due(self.cfg.entropy_every.max(1)) { s.conserved_info_max } else { f64::NAN }),
+                V::F(if due(self.cfg.entropy_every.max(1)) { s.executed_kinds } else { f64::NAN }),
+                V::F(if due(self.cfg.entropy_every.max(1)) { s.executed_behaviours } else { f64::NAN }),
             ])?;
             self.series("population", e, occ as f64);
             self.series("mean tape length", e, s.mean_len);
@@ -740,7 +772,8 @@ pub fn needs_state(c: &primordia_core::config::TelemetryCfg, epoch: u64) -> bool
 pub struct BodyTypes {
     /// Bodies large enough to be counted.
     pub bodies: usize,
-    /// Cell types: groups of members sharing their first 16 tape bytes.
+    /// Cell types: clusters of members whose first 16 tape slots differ from
+    /// the cluster's founding group in at most 4 places.
     pub types_mean: f64,
     pub types_max: usize,
     /// Roles: groups of members with the same set of behaviour instructions
@@ -750,15 +783,24 @@ pub struct BodyTypes {
     /// Share of counted bodies with at least two types / roles.
     pub multi_type: f64,
     pub multi_role: f64,
+    /// Kin bodies: at least half of their bonds join kin (12+ of the first 16
+    /// tape slots equal), i.e. organism-like rather than aggregates of
+    /// strangers; and how many of them hold 2+ cell types.
+    pub kin_bodies: usize,
+    pub diff_kin_bodies: usize,
 }
 
 pub const BODY_TYPES_MIN: usize = 10;
 pub const BODY_TYPE_CELLS: usize = 5;
+/// Program starts within this many of 16 slots are one cell type.
+pub const BODY_TYPE_MERGE: usize = 4;
 
-/// Count cell types and roles per body. A group counts only if it holds at
-/// least `BODY_TYPE_CELLS` cells, so lone mutants are not a type (an absolute
-/// size, so that large bodies are not held to a higher bar).
-pub fn body_types(st: &primordia_core::State, bodies: &phases::Bodies) -> BodyTypes {
+/// Count cell types and roles per body. Groups of identical program starts
+/// are merged into a type when within `BODY_TYPE_MERGE` slots of the type's
+/// founding group (largest first), so the many small patches of one strain
+/// in a big body are one type; a type or role counts with `BODY_TYPE_CELLS`
+/// or more cells. Also marks kin bodies (see `BodyTypes`).
+pub fn body_types(st: &primordia_core::State, p: &primordia_core::Params, bodies: &phases::Bodies) -> BodyTypes {
     let mut members: HashMap<u32, Vec<usize>> = HashMap::new();
     for c in 0..st.n {
         if bodies.label[c] != NONE {
@@ -769,18 +811,43 @@ pub fn body_types(st: &primordia_core::State, bodies: &phases::Bodies) -> BodyTy
     for (i, &b) in TRACKED_OPS.iter().enumerate() {
         bit[b as usize] = 1 << i;
     }
-    let counted = |groups: &mut dyn Iterator<Item = &usize>, _size: usize| groups.filter(|&&k| k >= BODY_TYPE_CELLS).count();
+    let (l, w) = (st.lmax, 16.min(st.lmax));
+    let head = |c: usize| &st.tapes[c * l..c * l + w];
+    let differ = |a: &[u8], b: &[u8]| a.iter().zip(b).filter(|(x, y)| x != y).count();
     let mut r = BodyTypes::default();
     let (mut tsum, mut rsum, mut tmulti, mut rmulti) = (0usize, 0usize, 0usize, 0usize);
     for m in members.values().filter(|m| m.len() >= BODY_TYPES_MIN) {
         let mut prefixes: HashMap<&[u8], usize> = HashMap::new();
         let mut roles: HashMap<u32, usize> = HashMap::new();
+        let (mut kin_bonds, mut bonds) = (0usize, 0usize);
         for &c in m {
-            let t = st.tape(c);
-            *prefixes.entry(&t[..t.len().min(16)]).or_default() += 1;
-            *roles.entry(t.iter().fold(0, |a, &b| a | bit[b as usize])).or_default() += 1;
+            *prefixes.entry(head(c)).or_default() += 1;
+            *roles.entry(st.tape(c).iter().fold(0, |a, &b| a | bit[b as usize])).or_default() += 1;
+            for d in (0..6).step_by(2) {
+                if st.bonds(c) & (1 << d) != 0 {
+                    let t = p.nbr[c * 6 + d] as usize;
+                    bonds += 1;
+                    kin_bonds += (differ(head(c), head(t)) <= 4) as usize;
+                }
+            }
         }
-        let (nt, nr) = (counted(&mut prefixes.values(), m.len()), counted(&mut roles.values(), m.len()));
+        // merge groups into types, largest first; singletons only join
+        let mut groups: Vec<(&[u8], usize)> = prefixes.into_iter().collect();
+        groups.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+        let mut types: Vec<(&[u8], usize)> = vec![];
+        for (g, k) in groups {
+            match types.iter_mut().find(|t| differ(t.0, g) <= BODY_TYPE_MERGE) {
+                Some(t) => t.1 += k,
+                None if k >= 2 => types.push((g, k)),
+                None => {}
+            }
+        }
+        let nt = types.iter().filter(|t| t.1 >= BODY_TYPE_CELLS).count();
+        let nr = roles.values().filter(|&&k| k >= BODY_TYPE_CELLS).count();
+        if bonds > 0 && 2 * kin_bonds >= bonds {
+            r.kin_bodies += 1;
+            r.diff_kin_bodies += (nt >= 2) as usize;
+        }
         r.bodies += 1;
         tsum += nt;
         rsum += nr;
@@ -855,11 +922,13 @@ pub fn organisms(st: &primordia_core::State, bodies: &phases::Bodies) -> usize {
 mod tests {
     use super::*;
     use primordia_core::params::{BOND_SHIFT, FL_OCC, HDR, H_FLAGS, H_LEN};
+    use primordia_core::isa;
     use primordia_core::{Config, Params, State};
 
     /// A bonded row of 20 cells: 10 copiers, 9 sleepers and one lone mutant
-    /// is two cell types and two roles (the mutant is too rare to count), and
-    /// 17 of the 19 bonds join kin.
+    /// is two cell types (the mutant, one slot off the copiers, merges into
+    /// theirs) and two roles (the mutant's role is too rare to count); 17 of
+    /// the 19 bonds join kin, so it is a differentiated kin body.
     #[test]
     fn body_types_count_groups() {
         let mut cfg = Config::preset("primordia-2d-sun").unwrap();
@@ -891,12 +960,68 @@ mod tests {
         }
         let bodies = phases::components(&st, &p);
         assert_eq!(bodies.count, 1);
-        let bt = body_types(&st, &bodies);
+        let bt = body_types(&st, &p, &bodies);
         assert_eq!(bt.bodies, 1);
         assert_eq!((bt.types_max, bt.roles_max), (2, 2));
         assert_eq!(bt.multi_type, 1.0);
+        assert_eq!((bt.kin_bodies, bt.diff_kin_bodies), (1, 1));
         let (kb, _) = bond_kinship(&st, &p);
         // kin bonds: 9 among copiers, 8 among sleepers; not copier/sleeper or sleeper/mutant
         assert!((kb - 17.0 / 19.0).abs() < 1e-9, "kin across bonds {kb}");
+    }
+
+    /// Conserved information: 30 copies of one 20-byte program carry all 20
+    /// bytes; scrambling the second half in every copy leaves about 10.
+    #[test]
+    fn conserved_information_counts_fixed_sites() {
+        let mut cfg = Config::preset("primordia-2d-sun").unwrap();
+        cfg.world.size = vec![30, 30];
+        cfg.validate().unwrap();
+        let p = Params::new(&cfg);
+        let info = |scramble: bool| {
+            let mut st = State::init(&cfg, &p);
+            for c in 0..st.n {
+                st.hdr[c * HDR + H_FLAGS] = 0;
+            }
+            for k in 0..30usize {
+                let mut prog: Vec<u8> = (0..20).map(|i| 0x40 + i as u8).collect();
+                if scramble {
+                    for (i, b) in prog.iter_mut().enumerate().skip(10) {
+                        *b = (0x80 + (k * 37 + i * 11) % 127) as u8;
+                    }
+                }
+                st.hdr[k * HDR + H_FLAGS] = FL_OCC;
+                st.hdr[k * HDR + H_LEN] = 20;
+                st.tapes[k * st.lmax..k * st.lmax + 20].copy_from_slice(&prog);
+            }
+            conserved_information(&st)
+        };
+        let (all, _, fams) = info(false);
+        assert_eq!(fams, 1);
+        assert!((all - 20.0).abs() < 1e-9, "{all}");
+        let (half, _, _) = info(true);
+        assert!(half > 9.9 && half < 12.0, "{half}");
+    }
+
+    /// Executed repertoire: the minimal replicator runs 4 instruction kinds
+    /// and no behaviour instruction; PUSH SLEEP JMP runs 3 kinds, 1 behaviour.
+    #[test]
+    fn executed_repertoire_counts_kinds() {
+        let mut cfg = Config::preset("primordia-2d-sun").unwrap();
+        cfg.world.size = vec![30, 30];
+        cfg.validate().unwrap();
+        let p = Params::new(&cfg);
+        let run = |prog: &[u8]| {
+            let mut st = State::init(&cfg, &p);
+            for c in 0..st.n {
+                st.hdr[c * HDR + H_FLAGS] = 0;
+            }
+            st.hdr[H_FLAGS] = FL_OCC;
+            st.hdr[H_LEN] = prog.len() as u32;
+            st.tapes[..prog.len()].copy_from_slice(prog);
+            executed_repertoire(&cfg, &st, 10, &TRACKED_OPS)
+        };
+        assert_eq!(run(&isa::MINIMAL_REPLICATOR), (4.0, 0.0));
+        assert_eq!(run(&[0x45, 0x6E, 0xC2]), (3.0, 1.0));
     }
 }

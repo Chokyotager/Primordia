@@ -7,6 +7,7 @@ use primordia_core::isa;
 use primordia_core::params::*;
 use primordia_core::state::State;
 use primordia_core::Params;
+use rayon::prelude::*;
 use std::collections::HashMap;
 use std::io::Write;
 
@@ -39,6 +40,117 @@ pub fn high_order_entropy(st: &State, max: usize) -> (f64, f64, f64) {
     }
     let bpb = out.len() as f64 * 8.0 / n;
     (h0, bpb, h0 - bpb)
+}
+
+// ------------------------------------------------------------ complexity
+
+/// Conserved information (Adami's physical complexity) of program families:
+/// cells grouped by their first 8 tape bytes; in each family of 20+ cells,
+/// every position where most members still have a byte and the commonest
+/// byte is not empty contributes 1 - H/Hmax (H the entropy of that position
+/// over up to 200 members, Hmax = log2 of the sample size capped at 8 bits,
+/// the most such a sample can show). Positions that selection keeps fixed
+/// count ~1, drifting junk ~0. Returns the abundance-weighted mean over families,
+/// the maximum, and the number of families.
+pub fn conserved_information(st: &State) -> (f64, f64, usize) {
+    let mut fam: HashMap<&[u8], Vec<usize>> = HashMap::new();
+    for c in 0..st.n {
+        if st.occupied(c) && st.len(c) >= 8 {
+            fam.entry(&st.tape(c)[..8]).or_default().push(c);
+        }
+    }
+    let mut res = vec![];
+    for m in fam.values().filter(|m| m.len() >= 20) {
+        let step = (m.len() / 200).max(1);
+        let s: Vec<&[u8]> = m.iter().step_by(step).take(200).map(|&c| st.tape(c)).collect();
+        let n = s.len() as f64;
+        let hmax = n.min(256.0).log2();
+        let lmax = s.iter().map(|t| t.len()).max().unwrap_or(0);
+        let mut info = 0.0;
+        for i in 0..lmax {
+            let mut cnt = [0u32; 257];
+            for t in &s {
+                cnt[t.get(i).map(|&b| b as usize).unwrap_or(256)] += 1;
+            }
+            if 2 * cnt[256] as usize > s.len() {
+                break;
+            }
+            let top = (0..256).max_by_key(|&b| cnt[b]).unwrap();
+            if top == 0 {
+                continue;
+            }
+            let h: f64 = cnt.iter().filter(|&&k| k > 0).map(|&k| { let q = k as f64 / n; -q * q.log2() }).sum();
+            info += (1.0 - h / hmax).max(0.0);
+        }
+        res.push((m.len(), info));
+    }
+    if res.is_empty() {
+        return (f64::NAN, f64::NAN, 0);
+    }
+    let w: usize = res.iter().map(|r| r.0).sum();
+    let mean = res.iter().map(|r| r.0 as f64 * r.1).sum::<f64>() / w as f64;
+    let max = res.iter().map(|r| r.1).fold(0.0, f64::max);
+    (mean, max, res.len())
+}
+
+/// Instruction kind for the executed repertoire: PUSH n, JMP +n and JMP -n
+/// each count once, L/D twins count once, and NOP and fillers not at all.
+fn op_kind(b: u8) -> Option<u8> {
+    match b {
+        0x00 | 0x36..=0x3F | 0x70..=0x7F => None,
+        0x20..=0x35 => Some(b & !1),
+        0x40..=0x5F => Some(0x40),
+        0x80..=0xBF => Some(0x80),
+        0xC0..=0xFF => Some(0xC0),
+        _ => Some(b),
+    }
+}
+
+/// Executed repertoire: sample up to `samples` living cells (so abundance
+/// weights the result), run each program for one slice in the sandbox with a
+/// copy of itself as partner, and count the distinct instruction kinds it
+/// executes and how many of them are behaviour instructions (`TRACKED_OPS`
+/// other than CPY and SKIPZ). Returns the two means.
+pub fn executed_repertoire(cfg: &Config, st: &State, samples: usize, tracked: &[u8]) -> (f64, f64) {
+    let occ: Vec<usize> = (0..st.n).filter(|&c| st.occupied(c) && st.len(c) > 0).collect();
+    if occ.is_empty() {
+        return (f64::NAN, f64::NAN);
+    }
+    let p = sandbox_params(cfg, cfg.individual.l_max as usize);
+    let step = (occ.len() / samples).max(1);
+    let picks: Vec<usize> = occ.iter().step_by(step).take(samples).copied().collect();
+    let behaviour: Vec<u8> = tracked.iter().copied().filter(|&b| b != 0x12 && b != 0x0D).collect();
+    let r: Vec<(usize, usize)> = picks
+        .par_iter()
+        .map(|&c| {
+            let g = st.tape(c);
+            let mut sb = State::empty(&p);
+            let l = sb.lmax;
+            let n = g.len().min(l);
+            sb.tapes[..n].copy_from_slice(&g[..n]);
+            sb.tapes[l..l + n].copy_from_slice(&g[..n]);
+            for k in 0..2 {
+                sb.hdr[k * HDR + H_LEN] = n as u32;
+                sb.hdr[k * HDR + H_FLAGS] = FL_OCC;
+            }
+            let snap = flag_snapshot(&sb);
+            let mut tr = vec![];
+            exec_slice(&mut sb, &p, &snap, 0, Some(1), Some(&mut tr));
+            let mut seen = [false; 256];
+            let mut beh = [false; 256];
+            for s in &tr {
+                if let Some(k) = op_kind(s.op) {
+                    seen[k as usize] = true;
+                }
+                if behaviour.contains(&s.op) {
+                    beh[s.op as usize] = true;
+                }
+            }
+            (seen.iter().filter(|&&x| x).count(), beh.iter().filter(|&&x| x).count())
+        })
+        .collect();
+    let k = r.len() as f64;
+    (r.iter().map(|x| x.0 as f64).sum::<f64>() / k, r.iter().map(|x| x.1 as f64).sum::<f64>() / k)
 }
 
 // ------------------------------------------------------------ replicator assay

@@ -172,10 +172,28 @@ the live decay rate gives about 2).
 * **Cell states** (`life.parquet`, every 10 epochs): sunlight, asleep, dormant, SLEEP carriers, bonded,
   mean age, and shares older than one and two days.
 * **Body differentiation** (`metrics.parquet`, every 10 epochs). For each bonded body of 10+ cells, cell
-  *types* (members sharing their first 16 tape bytes) and *roles* (members with the same set of behaviour
-  instructions on their tape) are counted; a group counts only with at least 5 cells. (Up to M12 a group
-  also needed 5% of the body, so large bodies almost never scored.) Logged as mean and max per body and the
-  share of bodies with two or more.
+  *types* and *roles* are counted. Groups of identical program starts (first 16 tape slots) merge into one
+  type when within 4 slots of the type's founding group, largest first, so the many small patches of one
+  strain in a big body are one type; roles are members with the same set of behaviour instructions on their
+  tape. A type or role counts with 5+ cells. Logged as mean and max per body and the share of bodies with
+  two or more. A *kin body* has at least half of its bonds between kin; kin bodies with 2+ types are the
+  closest this measure comes to division of labour. (Up to M12 a type needed 5% of the body, so large bodies
+  almost never scored; for a while after it, unmerged 5-cell groups made big bodies score hundreds.)
+* **Conserved information** (every `entropy_every` epochs): Adami's physical complexity. Cells are grouped
+  into families by their first 8 tape bytes; in each family of 20+ cells (up to 200 sampled), every position
+  where most members still have a byte and the commonest byte is not empty adds 1 − H/Hmax, with H the
+  entropy of that position and Hmax = log₂ of the sample size, capped at 8 bits. Positions kept fixed by
+  selection count ~1 and drifting junk ~0, though junk copied recently also looks conserved while damage
+  is low. Logged as the abundance-weighted mean and the best family.
+* **Executed repertoire** (every `entropy_every` epochs): 400 sampled living programs each run one slice in
+  the assay sandbox with a copy of themselves as partner; logged as the mean number of distinct instruction
+  kinds executed (PUSH n, JMP ±n and L/D twins counted once; NOP and fillers not at all) and of behaviour
+  instructions executed. The sandbox has no neighbours or energy, so it shows what a program does when it
+  runs, not what it achieves in the world.
+* **High-order entropy** (the Computational Life measure): Shannon entropy of the byte histogram of sampled
+  tapes minus Brotli's compressed bits per byte. It is high when the soup is full of copies of shared
+  sequences, so it marks the takeover by replicators and falls as lineages diversify or programs shorten;
+  it is not a measure of how complex an individual program is.
 * **Kinship across bonds** (`kin_bonded`, `kin_unbonded`): the share of bonded and of unbonded occupied
   neighbour pairs whose first 16 tape slots agree in 12 or more places (the kin-cluster rule). Bonded pairs
   no more related than unbonded ones mean bodies are aggregates of strangers, and their "cell types" are
