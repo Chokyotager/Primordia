@@ -44,6 +44,18 @@ pub fn high_order_entropy(st: &State, max: usize) -> (f64, f64, f64) {
 
 // ------------------------------------------------------------ complexity
 
+/// Kinship of two programs from their first 16 tape slots: at least 75% of
+/// the filled (non-empty) bytes of the fuller one match the other in place,
+/// and it has at least 4 filled bytes. Empty padding never counts, so short
+/// programs can be kin and empty tapes never are.
+pub fn kin(a: &[u8], b: &[u8]) -> bool {
+    let w = 16.min(a.len()).min(b.len());
+    let filled = |t: &[u8]| t[..w].iter().filter(|&&x| x != 0).count();
+    let most = filled(a).max(filled(b));
+    let same = (0..w).filter(|&i| a[i] != 0 && a[i] == b[i]).count();
+    most >= 4 && 4 * same >= 3 * most
+}
+
 /// Conserved information (Adami's physical complexity) of program families:
 /// cells grouped by their first 8 tape bytes; in each family of 20+ cells,
 /// every position where most members still have a byte and the commonest

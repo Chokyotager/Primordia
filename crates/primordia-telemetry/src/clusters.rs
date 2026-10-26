@@ -1,5 +1,5 @@
 //! Cluster persistence: follows bonded bodies and kin clusters (patches of
-//! adjacent cells whose programs share >= 12 of their first 16 bytes) from one
+//! adjacent cells whose programs are kin, `analysis::kin`) from one
 //! sample to the next through their surviving member cells, and counts how
 //! many sunrises each cluster has lived through.
 
@@ -87,7 +87,7 @@ fn kin_labels(st: &State, p: &Params) -> Vec<u32> {
             }
             let t = t as usize;
             let b = &st.tapes[t * l..t * l + w];
-            if a.iter().zip(b).filter(|(x, y)| x == y).count() >= 12 {
+            if crate::analysis::kin(a, b) {
                 let (ra, rb) = (find(&mut par, c as u32), find(&mut par, t as u32));
                 if ra != rb {
                     par[ra.max(rb) as usize] = ra.min(rb);

@@ -783,8 +783,8 @@ pub struct BodyTypes {
     /// Share of counted bodies with at least two types / roles.
     pub multi_type: f64,
     pub multi_role: f64,
-    /// Kin bodies: at least half of their bonds join kin (12+ of the first 16
-    /// tape slots equal), i.e. organism-like rather than aggregates of
+    /// Kin bodies: at least half of their bonds join kin (`analysis::kin`),
+    /// i.e. organism-like rather than aggregates of
     /// strangers; and how many of them hold 2+ cell types.
     pub kin_bodies: usize,
     pub diff_kin_bodies: usize,
@@ -821,13 +821,16 @@ pub fn body_types(st: &primordia_core::State, p: &primordia_core::Params, bodies
         let mut roles: HashMap<u32, usize> = HashMap::new();
         let (mut kin_bonds, mut bonds) = (0usize, 0usize);
         for &c in m {
-            *prefixes.entry(head(c)).or_default() += 1;
+            // empty tapes (newborns not yet written) are not a cell type
+            if head(c).iter().any(|&x| x != 0) {
+                *prefixes.entry(head(c)).or_default() += 1;
+            }
             *roles.entry(st.tape(c).iter().fold(0, |a, &b| a | bit[b as usize])).or_default() += 1;
             for d in (0..6).step_by(2) {
                 if st.bonds(c) & (1 << d) != 0 {
                     let t = p.nbr[c * 6 + d] as usize;
                     bonds += 1;
-                    kin_bonds += (differ(head(c), head(t)) <= 4) as usize;
+                    kin_bonds += kin(head(c), head(t)) as usize;
                 }
             }
         }
@@ -864,14 +867,11 @@ pub fn body_types(st: &primordia_core::State, p: &primordia_core::Params, bodies
 }
 
 /// Kinship across faces: the share of bonded / unbonded occupied neighbour
-/// pairs whose programs share at least 12 of their first 16 bytes (the kin
-/// cluster rule). Bonded pairs no more related than unbonded ones mean bodies
+/// pairs whose programs are kin (`analysis::kin`, also the kin-cluster rule). Bonded pairs no more related than unbonded ones mean bodies
 /// are aggregates of strangers rather than clones.
 pub fn bond_kinship(st: &primordia_core::State, p: &primordia_core::Params) -> (f64, f64) {
-    // the first 16 tape slots, padding included, as in the kin-cluster tracker
     let (l, w) = (st.lmax, 16.min(st.lmax));
     let head = |c: usize| &st.tapes[c * l..c * l + w];
-    let kin = |a: &[u8], b: &[u8]| a.iter().zip(b).filter(|(x, y)| x == y).count() >= 12;
     let (mut bk, mut bn, mut uk, mut un) = (0u64, 0u64, 0u64, 0u64);
     for c in 0..st.n {
         if !st.occupied(c) {
@@ -1001,6 +1001,20 @@ mod tests {
         assert!((all - 20.0).abs() < 1e-9, "{all}");
         let (half, _, _) = info(true);
         assert!(half > 9.9 && half < 12.0, "{half}");
+    }
+
+    /// Kinship ignores empty padding: identical short programs are kin, empty
+    /// tapes and programs that only share padding are not.
+    #[test]
+    fn kin_ignores_padding() {
+        let pad = |p: &[u8]| { let mut t = p.to_vec(); t.resize(16, 0); t };
+        let copier = pad(&[0x12, 0x64, 0x67, 0x13, 0x15, 0xC4]);
+        let variant = pad(&[0x00, 0x64, 0x67, 0x13, 0x15, 0xC4]);
+        let other = pad(&[0x45, 0x6E, 0x61, 0x60, 0x41, 0xC4]);
+        assert!(analysis::kin(&copier, &copier));
+        assert!(analysis::kin(&copier, &variant), "5 of 6 filled bytes match");
+        assert!(!analysis::kin(&copier, &other), "only padding and one byte match");
+        assert!(!analysis::kin(&pad(&[]), &pad(&[])), "empty tapes are not kin");
     }
 
     /// Executed repertoire: the minimal replicator runs 4 instruction kinds

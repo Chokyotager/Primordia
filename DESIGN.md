@@ -170,7 +170,7 @@ the live decay rate gives about 2).
   body at dawn (`days.parquet`).
 * **Cluster persistence** (`telemetry.cluster_every`, default 250 epochs; `clusters.parquet`). Two kinds
   of cluster with at least 50 cells are tracked: bonded bodies, and kin clusters (connected patches of
-  neighbours whose programs share at least 12 of their first 16 bytes). A cluster continues one from the
+  neighbours whose programs are kin, see below). A cluster continues one from the
   previous sample when at least 25% of the earlier cluster's cells are still alive inside it (same site,
   birth epoch and lineage). A cluster that continues across a sunrise adds a night. Tracking restarts on
   `--resume`.
@@ -199,9 +199,13 @@ the live decay rate gives about 2).
   tapes minus Brotli's compressed bits per byte. It is high when the soup is full of copies of shared
   sequences, so it marks the takeover by replicators and falls as lineages diversify or programs shorten;
   it is not a measure of how complex an individual program is.
+* **Kinship** (`analysis::kin`, used for kin clusters, kin bodies and kinship across bonds): two programs are
+  kin when at least 75% of the filled (non-empty) bytes among the fuller one's first 16 slots match the
+  other in place, and it has at least 4. Empty padding never counts, so short programs can be kin and empty
+  newborn tapes never are. (Before M14's day 68 padding counted as matching, so in worlds of short programs
+  most cells looked related.) Empty tapes are also left out of cell types.
 * **Kinship across bonds** (`kin_bonded`, `kin_unbonded`): the share of bonded and of unbonded occupied
-  neighbour pairs whose first 16 tape slots agree in 12 or more places (the kin-cluster rule). Bonded pairs
-  no more related than unbonded ones mean bodies are aggregates of strangers, and their "cell types" are
-  strains rather than division of labour.
+  neighbour pairs that are kin. Bonded pairs no more related than unbonded ones mean bodies are aggregates
+  of strangers, and their "cell types" are strains rather than division of labour.
 * **Behaviour.** The frequency of 23 behaviour instructions in living programs, relative to a random
   byte (1×), is a live series; the full 256-opcode histogram goes to `opcodes.parquet`.

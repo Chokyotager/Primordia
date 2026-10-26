@@ -819,7 +819,7 @@ const SECTIONS = [
     { t: 'Organism candidates', s: ['organisms'] },
     { t: 'Cell types per body', s: ['cell types per body (merged)', 'roles per body'], n: ['program types', 'behaviour roles'], sub: 'bodies of 10+ cells; starts within 4 of 16 bytes are one type; a type holds 5+ cells' },
     { t: 'Kin bodies', s: ['kin bodies (>=50% kin bonds)', 'kin bodies with 2+ cell types'], n: ['kin bodies', 'with 2+ cell types'], sub: 'bodies of 10+ cells with at least half their bonds between kin' },
-    { t: 'Kin across bonds', s: ['kin across bonds %', 'kin across unbonded faces %'], n: ['bonded neighbours', 'unbonded neighbours'], u: '%', sub: 'neighbours sharing 12+ of their first 16 program bytes' },
+    { t: 'Kin across bonds', s: ['kin across bonds %', 'kin across unbonded faces %'], n: ['bonded neighbours', 'unbonded neighbours'], u: '%', sub: 'neighbours whose program starts match in 75%+ of their filled bytes' },
     { t: 'Most cell types in one body', s: ['most cell types in a body (merged)', 'most roles in a body'], n: ['program types', 'behaviour roles'] },
     { t: 'Differentiated bodies', s: ['bodies with 2+ cell types (merged) %', 'bodies with 2+ roles %'], n: ['2+ program types', '2+ roles'], u: '%' },
     { t: 'Bodies of 10+ cells', s: ['bodies of 10+ cells'] },
