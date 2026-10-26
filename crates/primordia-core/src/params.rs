@@ -28,6 +28,9 @@ pub const ORIENT_SHIFT: u32 = 8;
 pub const ORIENT_MASK: u32 = 0xFF << 8;
 pub const BOND_SHIFT: u32 = 16;
 pub const BOND_MASK: u32 = 0x3F << 16;
+/// Pending bond requests per face (bonds.mutual).
+pub const REQ_SHIFT: u32 = 24;
+pub const REQ_MASK: u32 = 0x3F << 24;
 
 /// Site words per cell (owned by the lattice site, not the individual).
 pub const SITE: usize = 4;
@@ -157,6 +160,9 @@ pub struct Params {
     pub decay_light_q16: u64,
     pub bond_break_q32: u32,
     pub vote_q16: u64,
+    pub bond_mutual: bool,
+    /// Q32 probability that a newborn stays bonded to its parent.
+    pub birth_bond_q32: u32,
     pub max_body: u32,
 
     pub arr: Vec<Vec<u32>>,
@@ -340,6 +346,8 @@ impl Params {
             decay_light_q16: to_q16(c.decay.light_factor) as u64,
             bond_break_q32: if c.bonds.enabled { q32u(c.bonds.break_rate) } else { 0 },
             vote_q16: to_q16(c.bonds.vote_threshold) as u64,
+            bond_mutual: c.bonds.enabled && c.bonds.mutual && !pair_concat,
+            birth_bond_q32: if c.bonds.enabled && !pair_concat { q32u(c.bonds.birth_bond) } else { 0 },
             max_body: c.bonds.max_body_move,
             arr,
             arr_mut,

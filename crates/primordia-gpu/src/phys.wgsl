@@ -609,7 +609,10 @@ fn k_flagclear(@builtin(global_invocation_id) gid: vec3<u32>) {
     let c = gidx(gid);
     if (c >= Q[Q_N]) { return; }
     let i = c * HDR + H_FLAGS;
-    hdr[i] = hdr[i] & ~(FL_EXEC | FL_NEWBORN);
+    // bond requests lapse after one epoch without a slice (bonds.mutual)
+    var req = 0u;
+    if ((hdr[i] & FL_EXEC) == 0u) { req = REQ_MASK; }
+    hdr[i] = hdr[i] & ~(FL_EXEC | FL_NEWBORN | req);
     if (!has(G_ENERGY) && H(c, H_SLEEP) > 0u) { setH(c, H_SLEEP, H(c, H_SLEEP) - 1u); }
 }
 

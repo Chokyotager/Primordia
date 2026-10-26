@@ -335,13 +335,17 @@ impl State {
             }
             let or = (fl & ORIENT_MASK) >> ORIENT_SHIFT;
             let bonds = (fl & BOND_MASK) >> BOND_SHIFT;
-            let mut nb = 0;
+            let reqs = (fl & REQ_MASK) >> REQ_SHIFT;
+            let (mut nb, mut nr) = (0, 0);
             for d in 0..6 {
                 if bonds & (1 << d) != 0 {
                     nb |= 1 << mirror_dir(d);
                 }
+                if reqs & (1 << d) != 0 {
+                    nr |= 1 << mirror_dir(d);
+                }
             }
-            h[H_FLAGS] = (fl & !(ORIENT_MASK | BOND_MASK)) | (o.mirror[or as usize] << ORIENT_SHIFT) | (nb << BOND_SHIFT);
+            h[H_FLAGS] = (fl & !(ORIENT_MASK | BOND_MASK | REQ_MASK)) | (o.mirror[or as usize] << ORIENT_SHIFT) | (nb << BOND_SHIFT) | (nr << REQ_SHIFT);
         });
         let swap_hand = |i: usize| -> usize {
             // field index under L<->D exchange

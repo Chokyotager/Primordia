@@ -44,6 +44,7 @@ pub mod pi {
     pub const EXT_Z: usize = 33;
     pub const NPAIRS: usize = 34;
     pub const SLEEP_SCALE: usize = 35;
+    pub const BIRTH_BOND: usize = 36;
     pub const COSTS: usize = 64;
     pub const PWRITE: usize = 320;
     pub const CAT: usize = 384;
@@ -66,6 +67,7 @@ pub mod flag {
     pub const PAIR_RANDOM: u32 = 1024;
     pub const RANDOM_FACING: u32 = 2048;
     pub const SLEEP_SHIELD: u32 = 4096;
+    pub const BOND_MUTUAL: u32 = 8192;
 }
 
 /// Static (per-config) part of the parameter buffer. EPOCH, MIRRORED, COLOR
@@ -98,6 +100,7 @@ pub fn param_words(p: &Params) -> Vec<u32> {
         (p.pair_random, flag::PAIR_RANDOM),
         (p.random_facing, flag::RANDOM_FACING),
         (p.sleep_shield, flag::SLEEP_SHIELD),
+        (p.bond_mutual, flag::BOND_MUTUAL),
     ] {
         if on {
             f |= b;
@@ -119,6 +122,7 @@ pub fn param_words(p: &Params) -> Vec<u32> {
     w[pi::E_SCALE] = p.e_scale;
     w[pi::F_SCALE] = p.f_scale;
     w[pi::SLEEP_SCALE] = p.sleep_scale;
+    w[pi::BIRTH_BOND] = p.birth_bond_q32;
     w[pi::SIG_EMIT] = p.sig_emit;
     let ncat = p.cat.len().min(pi::MAX_CAT);
     w[pi::NCAT] = if p.chem_on { ncat as u32 } else { 0 };
@@ -179,6 +183,8 @@ pub fn constants() -> String {
         ("ORIENT_MASK", ORIENT_MASK),
         ("BOND_SHIFT", BOND_SHIFT),
         ("BOND_MASK", BOND_MASK),
+        ("REQ_SHIFT", REQ_SHIFT),
+        ("REQ_MASK", REQ_MASK),
         ("PHASE_EXEC", phase::EXEC),
         ("PHASE_LINEAGE", phase::LINEAGE),
     ] {
@@ -221,6 +227,7 @@ pub fn constants() -> String {
         ("P_EXT_Z", pi::EXT_Z),
         ("P_NPAIRS", pi::NPAIRS),
         ("P_SLEEP_SCALE", pi::SLEEP_SCALE),
+        ("P_BIRTH_BOND", pi::BIRTH_BOND),
         ("P_COSTS", pi::COSTS),
         ("P_PWRITE", pi::PWRITE),
         ("P_CAT", pi::CAT),
@@ -242,6 +249,7 @@ pub fn constants() -> String {
         ("F_PAIR_RANDOM", flag::PAIR_RANDOM),
         ("F_RANDOM_FACING", flag::RANDOM_FACING),
         ("F_SLEEP_SHIELD", flag::SLEEP_SHIELD),
+        ("F_BOND_MUTUAL", flag::BOND_MUTUAL),
     ] {
         s += &format!("const {n}: u32 = {v}u;\n");
     }

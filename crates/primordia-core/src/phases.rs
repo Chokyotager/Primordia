@@ -676,7 +676,12 @@ pub fn chemistry(st: &mut State, p: &Params) {
 pub fn absorb_upkeep(st: &mut State, p: &Params) {
     let n = st.n;
     // clear per-epoch flags first (always, even without energy)
-    st.hdr.par_chunks_mut(HDR).for_each(|h| h[H_FLAGS] &= !(FL_EXEC | FL_NEWBORN));
+    // bond requests lapse after one epoch without a slice (bonds.mutual)
+    st.hdr.par_chunks_mut(HDR).for_each(|h| {
+        let f = h[H_FLAGS];
+        let req = if f & FL_EXEC == 0 { REQ_MASK } else { 0 };
+        h[H_FLAGS] = f & !(FL_EXEC | FL_NEWBORN | req);
+    });
     if !p.energy_on {
         st.hdr.par_chunks_mut(HDR).for_each(|h| {
             if h[H_SLEEP] > 0 {

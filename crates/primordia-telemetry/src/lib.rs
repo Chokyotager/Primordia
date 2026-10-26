@@ -59,6 +59,9 @@ pub struct Summary {
     pub body_roles_mean: f64,
     pub body_roles_max: usize,
     pub multi_type_bodies: f64,
+    /// Share of bonded / unbonded neighbour pairs that are kin (`bond_kinship`).
+    pub kin_bonded: f64,
+    pub kin_unbonded: f64,
     pub energy_residual: i64,
     pub matter_residual: [i64; 3],
     pub atom_residual: i64,
@@ -186,6 +189,8 @@ impl Recorder {
                     ("body_roles_max", I),
                     ("multi_type_bodies", F),
                     ("multi_role_bodies", F),
+                    ("kin_bonded", F),
+                    ("kin_unbonded", F),
                 ]),
             )?,
             chir: Table::new(dir, "chirality", &chem_cols)?,
@@ -401,6 +406,7 @@ impl Recorder {
             // bodies (every opcode_every to bound cost)
             let (mut nb, mut mean_b, mut max_b, mut mexp, mut orgs) = (s.bodies as i64, 0.0, s.max_body as i64, 0.0, s.organisms as i64);
             let mut bt = BodyTypes::default();
+            let (mut kin_b, mut kin_u) = (f64::NAN, f64::NAN);
             if due(self.cfg.opcode_every.max(1)) {
                 let bodies = phases::components(st, p);
                 nb = bodies.count as i64;
@@ -411,6 +417,9 @@ impl Recorder {
                 mexp = if occ > 0 { (0..st.n).filter(|&c| st.occupied(c)).map(|c| ex[c] as f64 / 65536.0).sum::<f64>() / occ as f64 } else { 0.0 };
                 orgs = organisms(st, &bodies) as i64;
                 bt = body_types(st, &bodies);
+                (kin_b, kin_u) = bond_kinship(st, p);
+                s.kin_bonded = kin_b;
+                s.kin_unbonded = kin_u;
                 s.body_types_mean = bt.types_mean;
                 s.body_types_max = bt.types_max;
                 s.body_roles_mean = bt.roles_mean;
@@ -449,6 +458,8 @@ impl Recorder {
                 self.series("most roles in a body", e, bt.roles_max as f64);
                 self.series("bodies with 2+ cell types %", e, 100.0 * bt.multi_type);
                 self.series("bodies with 2+ roles %", e, 100.0 * bt.multi_role);
+                self.series("kin across bonds %", e, 100.0 * kin_b);
+                self.series("kin across unbonded faces %", e, 100.0 * kin_u);
             }
             let (mut h0, mut bpb, mut hoe) = (f64::NAN, f64::NAN, f64::NAN);
             if due(self.cfg.entropy_every.max(1)) {
@@ -491,6 +502,8 @@ impl Recorder {
                 V::I(bt.roles_max as i64),
                 V::F(bt.multi_type),
                 V::F(bt.multi_role),
+                V::F(kin_b),
+                V::F(kin_u),
             ])?;
             self.series("population", e, occ as f64);
             self.series("mean tape length", e, s.mean_len);
@@ -740,9 +753,11 @@ pub struct BodyTypes {
 }
 
 pub const BODY_TYPES_MIN: usize = 10;
+pub const BODY_TYPE_CELLS: usize = 5;
 
 /// Count cell types and roles per body. A group counts only if it holds at
-/// least 2 cells and 5% of the body, so lone mutants are not a type.
+/// least `BODY_TYPE_CELLS` cells, so lone mutants are not a type (an absolute
+/// size, so that large bodies are not held to a higher bar).
 pub fn body_types(st: &primordia_core::State, bodies: &phases::Bodies) -> BodyTypes {
     let mut members: HashMap<u32, Vec<usize>> = HashMap::new();
     for c in 0..st.n {
@@ -754,7 +769,7 @@ pub fn body_types(st: &primordia_core::State, bodies: &phases::Bodies) -> BodyTy
     for (i, &b) in TRACKED_OPS.iter().enumerate() {
         bit[b as usize] = 1 << i;
     }
-    let counted = |groups: &mut dyn Iterator<Item = &usize>, size: usize| groups.filter(|&&k| k >= 2 && 20 * k >= size).count();
+    let counted = |groups: &mut dyn Iterator<Item = &usize>, _size: usize| groups.filter(|&&k| k >= BODY_TYPE_CELLS).count();
     let mut r = BodyTypes::default();
     let (mut tsum, mut rsum, mut tmulti, mut rmulti) = (0usize, 0usize, 0usize, 0usize);
     for m in members.values().filter(|m| m.len() >= BODY_TYPES_MIN) {
@@ -779,6 +794,40 @@ pub fn body_types(st: &primordia_core::State, bodies: &phases::Bodies) -> BodyTy
         (r.types_mean, r.roles_mean, r.multi_type, r.multi_role) = (tsum as f64 / n, rsum as f64 / n, tmulti as f64 / n, rmulti as f64 / n);
     }
     r
+}
+
+/// Kinship across faces: the share of bonded / unbonded occupied neighbour
+/// pairs whose programs share at least 12 of their first 16 bytes (the kin
+/// cluster rule). Bonded pairs no more related than unbonded ones mean bodies
+/// are aggregates of strangers rather than clones.
+pub fn bond_kinship(st: &primordia_core::State, p: &primordia_core::Params) -> (f64, f64) {
+    // the first 16 tape slots, padding included, as in the kin-cluster tracker
+    let (l, w) = (st.lmax, 16.min(st.lmax));
+    let head = |c: usize| &st.tapes[c * l..c * l + w];
+    let kin = |a: &[u8], b: &[u8]| a.iter().zip(b).filter(|(x, y)| x == y).count() >= 12;
+    let (mut bk, mut bn, mut uk, mut un) = (0u64, 0u64, 0u64, 0u64);
+    for c in 0..st.n {
+        if !st.occupied(c) {
+            continue;
+        }
+        for a in 0..p.geom.dims as usize {
+            let d = 2 * a;
+            let t = p.nbr[c * 6 + d];
+            if t == NONE || !st.occupied(t as usize) {
+                continue;
+            }
+            let k = kin(head(c), head(t as usize)) as u64;
+            if st.bonds(c) & (1 << d) != 0 {
+                bk += k;
+                bn += 1;
+            } else {
+                uk += k;
+                un += 1;
+            }
+        }
+    }
+    let r = |k: u64, n: u64| if n > 0 { k as f64 / n as f64 } else { f64::NAN };
+    (r(bk, bn), r(uk, un))
 }
 
 /// Operational organism candidates (§13.2, simplified): bonded bodies of
@@ -809,7 +858,8 @@ mod tests {
     use primordia_core::{Config, Params, State};
 
     /// A bonded row of 20 cells: 10 copiers, 9 sleepers and one lone mutant
-    /// is two cell types and two roles (the mutant is too rare to count).
+    /// is two cell types and two roles (the mutant is too rare to count), and
+    /// 17 of the 19 bonds join kin.
     #[test]
     fn body_types_count_groups() {
         let mut cfg = Config::preset("primordia-2d-sun").unwrap();
@@ -820,9 +870,11 @@ mod tests {
         for c in 0..st.n {
             st.hdr[c * HDR + H_FLAGS] = 0;
         }
-        let copier = [0x12u8, 0x13, 0x15, 0xC2];
-        let sleeper = [0x5Fu8, 0x6E, 0x41, 0xC2];
-        let mutant = [0x12u8, 0x61, 0x15, 0xC2];
+        let pushes: Vec<u8> = (0x40..0x4C).collect();
+        let copier: Vec<u8> = [0x12u8, 0x13, 0x15, 0xC2].iter().chain(&pushes).copied().collect();
+        let sleeper: Vec<u8> = [0x5Fu8, 0x6E, 0x41, 0xC2, 0x50, 0x51, 0x52, 0x53].iter().chain(&pushes[4..]).copied().collect();
+        let mut mutant = copier.clone();
+        mutant[1] = 0x61; // BOND: a new role, still kin of the copiers
         for x in 0..20usize {
             let c = x + 30 * 5;
             let tape: &[u8] = if x < 10 { &copier } else if x < 19 { &sleeper } else { &mutant };
@@ -834,8 +886,8 @@ mod tests {
                 fl |= 1 << BOND_SHIFT; // +x face
             }
             st.hdr[c * HDR + H_FLAGS] = fl;
-            st.hdr[c * HDR + H_LEN] = 4;
-            st.tapes[c * st.lmax..c * st.lmax + 4].copy_from_slice(tape);
+            st.hdr[c * HDR + H_LEN] = 16;
+            st.tapes[c * st.lmax..c * st.lmax + 16].copy_from_slice(tape);
         }
         let bodies = phases::components(&st, &p);
         assert_eq!(bodies.count, 1);
@@ -843,5 +895,8 @@ mod tests {
         assert_eq!(bt.bodies, 1);
         assert_eq!((bt.types_max, bt.roles_max), (2, 2));
         assert_eq!(bt.multi_type, 1.0);
+        let (kb, _) = bond_kinship(&st, &p);
+        // kin bonds: 9 among copiers, 8 among sleepers; not copier/sleeper or sleeper/mutant
+        assert!((kb - 17.0 / 19.0).abs() < 1e-9, "kin across bonds {kb}");
     }
 }

@@ -82,6 +82,8 @@ by golden and parity tests. They came out of the long live runs, in this order:
 | `individual.sleep_absorb` | a sleeping cell keeps this fraction of its light absorption | with protection alone, constant short daytime naps took over (97% of cells asleep) and replaced bonded bodies; a sleeper with no income pays for sleeping by day but hardly at night |
 | `individual.sleep_upkeep` | a sleeping cell pays this fraction of its upkeep (default 1/8, the spec's value) | in the M5 live run a copier that sleeps after every copied byte (`CPY SLEEP` in its loop) took over on day 14: 85% of cells asleep, bodies broken up |
 | `energy.vents.stagger` | the founding vents start at random ages below their lifetime | in M11 all six were created at epoch 0 with a 100-day lifetime and switched off together on day 100, killing every long-lived body |
+| `bonds.mutual` | `BOND`/`BONDS_L`/`BONDS_D` leave a request; the bond forms only when the neighbour bonds back before the requester's next slice (a request lapses after an epoch without a slice) | in M12 bonded neighbours were no more related than unbonded ones, so bodies were aggregates of strangers; a bond also lets the partner write past shielding |
+| `bonds.birth_bond` | a child made by `ALLOC` or `DIVIDE` stays bonded to its parent with this probability | lets bodies grow clonally, the usual route to multicellularity |
 | `individual.dormant_idle` | the dormancy counter behind `starve_after` counts only epochs in which a halted cell did not execute | a copier that runs until it is out of energy ends every slice halted, so busy, well-fed cells counted as starving |
 | `individual.dormant_grace`, `dormant_absorb`, `dormant_rot` | once dormant for the grace period, a cell keeps only this fraction of its light absorption and its tape decays this many times faster | a dormant cell paid nothing, kept absorbing and woke every ~85 epochs even by moonlight, so dormancy was a free way to sit out the night; now only a bonded neighbour's shared energy can rescue it |
 | `shielding.light_cover` | how much face cover (bonds, occupied neighbours) reduces light absorption; radiation, decay and write shielding keep the full cover | in 2D the sun is overhead, yet every bond cost a cell a quarter of its light, which taxed bodies |
@@ -122,6 +124,16 @@ from day 93 a strongly bonding lineage spread (BOND 5–14×, giant mats again) 
 (23–25% of bodies with 2+ cell types against 12–16%, 30–39-byte programs). `runs/live-m12.toml` staggers
 the founding vents (`energy.vents.stagger`).
 
+M12 ran 533 days. Its long-lived vent bodies peaked at 27 nights around day 85; from day 77 the same
+bonding lineage took over (it did again from M12's day-71.5 snapshot with a new seed, and 10× thermal bond
+breaking only delayed it by 15–20 days), and the world then stayed flat for 430 days. Snapshot analysis
+showed why "bodies" did not become organisms: bonded neighbours shared 8.3–8.4 of their first 16 program
+bytes, unbonded neighbours 8.5 (random pairs 2–5), so bonding was indiscriminate. Programs sat near 20
+bytes, about where ~6 × 10⁻⁴ damage per byte and epoch (decay 3 × 10⁻⁴, background mutation 2.4 × 10⁻⁴,
+radiation) gives one hit per genome per generation; near vents, with constant copying, they reached 94–112
+bytes against the 128-byte cap. `runs/live-m13.toml` adds mutual adhesion and birth bonds, cuts decay to
+5 × 10⁻⁵ and background mutation to 10⁻⁴, and allows 256-byte genomes (step budget 1024, per-byte upkeep 0.06).
+
 `runs/live-m1.toml` to `live-m3.toml` are the earlier steps.
 
 **Dormancy sweep (M5).** On a 201² world (2 seeds, 10 days; means over days 6–10), against M4:
@@ -161,7 +173,12 @@ the live decay rate gives about 2).
   mean age, and shares older than one and two days.
 * **Body differentiation** (`metrics.parquet`, every 10 epochs). For each bonded body of 10+ cells, cell
   *types* (members sharing their first 16 tape bytes) and *roles* (members with the same set of behaviour
-  instructions on their tape) are counted; a group counts only with at least 2 cells and 5% of the body.
-  Logged as mean and max per body and the share of bodies with two or more.
+  instructions on their tape) are counted; a group counts only with at least 5 cells. (Up to M12 a group
+  also needed 5% of the body, so large bodies almost never scored.) Logged as mean and max per body and the
+  share of bodies with two or more.
+* **Kinship across bonds** (`kin_bonded`, `kin_unbonded`): the share of bonded and of unbonded occupied
+  neighbour pairs whose first 16 tape slots agree in 12 or more places (the kin-cluster rule). Bonded pairs
+  no more related than unbonded ones mean bodies are aggregates of strangers, and their "cell types" are
+  strains rather than division of labour.
 * **Behaviour.** The frequency of 23 behaviour instructions in living programs, relative to a random
   byte (1×), is a live series; the full 256-opcode histogram goes to `opcodes.parquet`.

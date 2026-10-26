@@ -520,9 +520,11 @@ impl<'a> Cpu<'a> {
                     return Flow::Next(1);
                 }
                 pay!(cost + n as u32);
-                if let Some(t) = nb(st, p, me, self.facing(st)) {
+                let d = self.facing(st);
+                if let Some(t) = nb(st, p, me, d) {
                     if !st.occupied(t) {
                         self.new_child(st, t, n, 0, epoch);
+                        self.birth_bond(st, t, d);
                     }
                 }
                 return Flow::Next(1);
@@ -541,11 +543,13 @@ impl<'a> Cpu<'a> {
                 if !ok {
                     return Flow::Next(1);
                 }
-                if let Some(t) = nb(st, p, me, self.facing(st)) {
+                let d = self.facing(st);
+                if let Some(t) = nb(st, p, me, d) {
                     if !st.occupied(t) {
                         let e = st.h(me, H_E) / 2;
                         *st.hm(me, H_E) -= e;
                         self.new_child(st, t, n, e, epoch);
+                        self.birth_bond(st, t, d);
                         let l = st.lmax;
                         st.tapes.copy_within(me * l + so..me * l + eo, t * l);
                         st.tapes.copy_within(me * l + eo..me * l + ls, me * l + so);
@@ -845,15 +849,36 @@ impl<'a> Cpu<'a> {
             if st.occupied(t) {
                 let me = self.me;
                 let (bm, bt) = (1 << (BOND_SHIFT + d), 1 << (BOND_SHIFT + opposite(d)));
+                let (rm, rt) = (1 << (REQ_SHIFT + d), 1 << (REQ_SHIFT + opposite(d)));
                 if on {
+                    if self.p.bond_mutual {
+                        // no answering request from t: leave one of our own
+                        if st.hdr[t * HDR + H_FLAGS] & rt == 0 {
+                            st.hdr[me * HDR + H_FLAGS] |= rm;
+                            return;
+                        }
+                        st.hdr[t * HDR + H_FLAGS] &= !rt;
+                        st.hdr[me * HDR + H_FLAGS] &= !rm;
+                    }
                     st.hdr[me * HDR + H_FLAGS] |= bm;
                     st.hdr[t * HDR + H_FLAGS] |= bt;
                 } else {
-                    st.hdr[me * HDR + H_FLAGS] &= !bm;
+                    st.hdr[me * HDR + H_FLAGS] &= !(bm | rm);
                     st.hdr[t * HDR + H_FLAGS] &= !bt;
                 }
             }
         }
+    }
+
+    /// bonds.birth_bond: the newborn at `t` (in direction d) stays bonded to
+    /// its parent with that probability (no handshake needed).
+    fn birth_bond(&mut self, st: &mut State, t: usize, d: u32) {
+        let p = self.p;
+        if p.birth_bond_q32 == 0 || p.geom.dims == 0 || self.rnd() >= p.birth_bond_q32 {
+            return;
+        }
+        st.hdr[self.me * HDR + H_FLAGS] |= 1 << (BOND_SHIFT + d);
+        st.hdr[t * HDR + H_FLAGS] |= 1 << (BOND_SHIFT + opposite(d));
     }
 }
 
@@ -867,7 +892,8 @@ pub fn exec_slice(st: &mut State, p: &Params, snap: &[u32], c: usize, fixed_part
     if p.energy_on && fl & FL_HALT != 0 {
         return;
     }
-    st.hdr[c * HDR + H_FLAGS] |= FL_EXEC;
+    // a slice withdraws this cell's earlier bond requests (bonds.mutual)
+    st.hdr[c * HDR + H_FLAGS] = (st.hdr[c * HDR + H_FLAGS] & !REQ_MASK) | FL_EXEC;
     let epoch = st.epoch;
     let mirrored = st.mirrored;
     let mut cpu = Cpu {

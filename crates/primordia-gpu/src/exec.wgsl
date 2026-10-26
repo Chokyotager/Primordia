@@ -562,9 +562,10 @@ fn step() -> i32 {
             return 1;
         }
         if (!pay(cost + n)) { return END; }
-        let t = nbw(me, facing());
+        let d = facing();
+        let t = nbw(me, d);
         if (t != NONE) {
-            if (!occ(t)) { new_child(t, n, 0u); dirty = true; }
+            if (!occ(t)) { new_child(t, n, 0u); birth_bond(t, d); dirty = true; }
         }
         return 1;
     }
@@ -582,12 +583,14 @@ fn step() -> i32 {
         if (ok) { n = eo - so; }
         if (!pay(cost + n)) { return END; }
         if (!ok) { return 1; }
-        let t = nbw(me, facing());
+        let d = facing();
+        let t = nbw(me, d);
         if (t != NONE) {
             if (!occ(t)) {
                 let e = g_e / 2u;
                 g_e = g_e - e;
                 new_child(t, n, e);
+                birth_bond(t, d);
                 dirty = true;
                 for (var i = 0u; i < n; i = i + 1u) {
                     tset(t, i, tb(me, so + i));
@@ -940,22 +943,41 @@ fn bond(d: u32, on: bool) {
         if (occ(t)) {
             let bm = 1u << (BOND_SHIFT + d);
             let bt = 1u << (BOND_SHIFT + (d ^ 1u));
+            let rm = 1u << (REQ_SHIFT + d);
+            let rt = 1u << (REQ_SHIFT + (d ^ 1u));
             if (on) {
+                if (has(F_BOND_MUTUAL)) {
+                    // no answering request from t: leave one of our own
+                    if ((hdr[t * HDR + H_FLAGS] & rt) == 0u) {
+                        hdr[me * HDR + H_FLAGS] = hdr[me * HDR + H_FLAGS] | rm;
+                        return;
+                    }
+                    hdr[t * HDR + H_FLAGS] = hdr[t * HDR + H_FLAGS] & ~rt;
+                    hdr[me * HDR + H_FLAGS] = hdr[me * HDR + H_FLAGS] & ~rm;
+                }
                 hdr[me * HDR + H_FLAGS] = hdr[me * HDR + H_FLAGS] | bm;
                 hdr[t * HDR + H_FLAGS] = hdr[t * HDR + H_FLAGS] | bt;
             } else {
-                hdr[me * HDR + H_FLAGS] = hdr[me * HDR + H_FLAGS] & ~bm;
+                hdr[me * HDR + H_FLAGS] = hdr[me * HDR + H_FLAGS] & ~(bm | rm);
                 hdr[t * HDR + H_FLAGS] = hdr[t * HDR + H_FLAGS] & ~bt;
             }
         }
     }
 }
 
+// bonds.birth_bond: the newborn at t (direction d) stays bonded to its parent
+fn birth_bond(t: u32, d: u32) {
+    if (P[P_BIRTH_BOND] == 0u || g_dims == 0u || rnd() >= P[P_BIRTH_BOND]) { return; }
+    hdr[me * HDR + H_FLAGS] = hdr[me * HDR + H_FLAGS] | (1u << (BOND_SHIFT + d));
+    hdr[t * HDR + H_FLAGS] = hdr[t * HDR + H_FLAGS] | (1u << (BOND_SHIFT + (d ^ 1u)));
+}
+
 fn exec_slice(c: u32, fp: u32) {
     let fl = flags(c);
     if ((fl & FL_OCC) == 0u || (fl & FL_EXEC) != 0u || H(c, H_SLEEP) > 0u) { return; }
     if (has(F_ENERGY) && (fl & FL_HALT) != 0u) { return; }
-    hdr[c * HDR + H_FLAGS] = fl | FL_EXEC;
+    // a slice withdraws this cell's earlier bond requests (bonds.mutual)
+    hdr[c * HDR + H_FLAGS] = (fl & ~REQ_MASK) | FL_EXEC;
     me = c;
     canon_id = canon(c);
     ip = 0;

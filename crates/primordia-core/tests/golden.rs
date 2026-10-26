@@ -278,6 +278,86 @@ fn t1_sleep_absorb() {
     assert!(half > 0 && half < full, "half {half} of {full}");
 }
 
+/// bonds.mutual: BOND only leaves a request until the neighbour bonds back;
+/// a request lapses after an epoch in which its owner did not execute.
+/// Without the rule BOND bonds at once.
+#[test]
+fn t1_bond_mutual() {
+    for mutual in [false, true] {
+        let mut cfg = deterministic_cfg(2);
+        cfg.bonds.mutual = mutual;
+        let (p, mut st) = blank(&cfg);
+        let east = p.orient.valid[2].iter().copied().find(|&o| p.orient.f[o as usize] == 0).unwrap();
+        let west = p.orient.valid[2].iter().copied().find(|&o| p.orient.f[o as usize] == 1).unwrap();
+        let (a, b) = (p.geom.index([5, 5, 0]), p.geom.index([6, 5, 0]));
+        put(&mut st, &p, a, &[op::BOND, op::HALT], east, 1000);
+        put(&mut st, &p, b, &[op::BOND, op::HALT], west, 1000);
+        run1(&mut st, &p, a);
+        if !mutual {
+            assert_eq!(st.bonds(a), 1, "bonds at once without the rule");
+            continue;
+        }
+        assert_eq!(st.bonds(a), 0, "a one-sided BOND does not bond");
+        assert_eq!(st.flags(a) & REQ_MASK, 1 << REQ_SHIFT, "it leaves a request toward +x");
+        run1(&mut st, &p, b);
+        assert_eq!((st.bonds(a), st.bonds(b)), (1, 2), "the answer bonds both");
+        assert_eq!((st.flags(a) | st.flags(b)) & REQ_MASK, 0, "requests are used up");
+        // a lone request lapses after an epoch without a slice
+        st.hdr[a * HDR + H_FLAGS] &= !(BOND_MASK | FL_EXEC);
+        st.hdr[b * HDR + H_FLAGS] &= !(BOND_MASK | FL_EXEC);
+        run1(&mut st, &p, a);
+        primordia_core::phases::absorb_upkeep(&mut st, &p);
+        assert_ne!(st.flags(a) & REQ_MASK, 0, "kept through the epoch it was made");
+        primordia_core::phases::absorb_upkeep(&mut st, &p);
+        assert_eq!(st.flags(a) & REQ_MASK, 0, "lapsed after an epoch without a slice");
+    }
+}
+
+/// bonds.birth_bond: a child made by ALLOC stays bonded to its parent with
+/// that probability (1 = always, 0 = never), even under bonds.mutual.
+#[test]
+fn t1_birth_bond() {
+    for (pb, want) in [(0.0, 0u32), (1.0, 1)] {
+        let mut cfg = deterministic_cfg(2);
+        cfg.bonds.birth_bond = pb;
+        cfg.bonds.mutual = true;
+        let (p, mut st) = blank(&cfg);
+        let east = p.orient.valid[2].iter().copied().find(|&o| p.orient.f[o as usize] == 0).unwrap();
+        let (a, b) = (p.geom.index([5, 5, 0]), p.geom.index([6, 5, 0]));
+        put(&mut st, &p, a, &[0x44, op::ALLOC, op::HALT], east, 1000);
+        run1(&mut st, &p, a);
+        assert!(st.occupied(b), "ALLOC made a child");
+        assert_eq!(st.bonds(a), want, "birth_bond {pb}");
+        assert_eq!(st.bonds(b), want << 1);
+    }
+}
+
+/// The mirror twin stays exact with mutual adhesion and birth bonds on
+/// (requests are directional, like bonds).
+#[test]
+fn t7_twin_mutual_and_birth_bonds() {
+    for dims in [2u32, 3] {
+        let mut cfg = full_cfg(dims);
+        cfg.bonds.mutual = true;
+        cfg.bonds.birth_bond = 0.5;
+        cfg.validate().unwrap();
+        let mut a = Sim::new(cfg.clone(), Box::new(CpuExec)).unwrap();
+        seed_programs(&mut a);
+        let mst = a.st.mirror(&a.p);
+        let mut b = Sim::from_state(cfg.clone(), Params::new(&cfg), mst, Box::new(CpuExec)).unwrap();
+        for e in 0..80 {
+            a.step();
+            b.step();
+            if let Some(d) = a.st.mirror(&a.p).first_diff(&b.st) {
+                panic!("dims {dims}: twin diverged at epoch {e}: {:?}", d);
+            }
+        }
+        let reqs = (0..a.st.n).filter(|&c| a.st.flags(c) & REQ_MASK != 0).count();
+        let bonded = (0..a.st.n).filter(|&c| a.st.bonds(c) != 0).count();
+        eprintln!("dims {dims}: {reqs} cells with pending requests, {bonded} bonded");
+    }
+}
+
 /// energy.vents.stagger: the initial vents start at distinct random ages
 /// below their lifetime (identically in the mirror twin); off, all start at 0.
 #[test]

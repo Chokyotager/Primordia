@@ -321,6 +321,13 @@ pub struct BondCfg {
     pub break_activation: f64,
     pub max_body_move: u32,
     pub vote_threshold: f64,
+    /// Adhesion needs both sides: BOND toward a neighbour only leaves a
+    /// request, and the bond forms when that neighbour bonds back before the
+    /// requester's next slice. A cell cannot force a bond on a stranger.
+    pub mutual: bool,
+    /// Probability that a child made by ALLOC or DIVIDE stays bonded to its
+    /// parent (cells that do not separate after division).
+    pub birth_bond: f64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -563,7 +570,7 @@ impl Default for ShieldCfg {
 }
 impl Default for BondCfg {
     fn default() -> Self {
-        BondCfg { enabled: true, gamma: 4.0, break_rate: 1e-4, break_activation: 0.5, max_body_move: 4096, vote_threshold: 0.5 }
+        BondCfg { enabled: true, gamma: 4.0, break_rate: 1e-4, break_activation: 0.5, max_body_move: 4096, vote_threshold: 0.5, mutual: false, birth_bond: 0.0 }
     }
 }
 impl Default for CopyErr {
@@ -835,6 +842,7 @@ impl Config {
         ensure!(ind.l_init <= ind.l_max, "l_init > l_max");
         ensure!((1..=256).contains(&ind.sleep_scale), "individual.sleep_scale must be 1..=256");
         ensure!((0.0..=1.0).contains(&ind.sleep_absorb), "individual.sleep_absorb must be in 0..=1");
+        ensure!((0.0..=1.0).contains(&self.bonds.birth_bond), "bonds.birth_bond must be in 0..=1");
         ensure!((0.0..=1.0).contains(&ind.sleep_upkeep), "individual.sleep_upkeep must be in 0..=1");
         ensure!((0.0..=1.0).contains(&ind.dormant_absorb), "individual.dormant_absorb must be in 0..=1");
         ensure!((0.0..=1000.0).contains(&ind.dormant_rot), "individual.dormant_rot must be in 0..=1000");

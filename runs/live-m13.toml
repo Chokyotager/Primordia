@@ -1,0 +1,68 @@
+# Live world M13: M12's world (s_bond 0.4, share_beta 0.125, sleep at half
+# upkeep, sleepers unshielded, moonlight 0.04, strong 100-day staggered vents,
+# 10-day lifespan) with a new seed and four changes aimed at complexity:
+# - bonds.mutual: a bond forms only when both cells bond each other. In M12
+#   bonded neighbours were no more related than unbonded ones (bodies were
+#   aggregates of strangers), and a bond lets a neighbour write past shielding.
+# - bonds.birth_bond 0.5: half of all children stay attached to the parent,
+#   so bodies can grow clonally.
+# - less damage per byte (decay 3e-4 -> 5e-5, background mutation 2.4e-4 ->
+#   1e-4): at ~6e-4 per byte and epoch a ~20-byte genome took about one hit
+#   per generation, the error threshold where M12's programs sat.
+# - longer, cheaper genomes: l_max 128 -> 256 (vent programs averaged 94-112
+#   bytes), step_budget 1024 so they can still be copied in one slice, and
+#   per-byte upkeep 0.12 -> 0.06.
+# Start fresh with: --events runs/seed-501.jsonl
+preset = "primordia-2d-sun"
+seed = 2
+epochs = 1000000000
+
+[world]
+size = [501, 501]
+
+[individual]
+l_max = 256
+step_budget = 1024  # a 256-byte copy takes ~1000 steps
+starve_after = 800
+max_age = 20000  # 10 days
+sleep_scale = 16
+sleep_shield = false
+sleep_absorb = 0.0
+sleep_upkeep = 0.5
+
+[energy]
+share_beta = 0.125
+
+[energy.sun]
+i0 = 150
+moon = 0.04
+
+[energy.upkeep]
+base = 3.5
+per_byte = 0.06
+
+[energy.vents]
+enabled = true
+count = 6
+rate = 200000  # 500x the default; heat stays 400
+lifetime = 200000  # 100 days
+spawn_rate = 4e-5  # with the longer lifetime, keeps ~8 vents
+stagger = true  # founding vents start at random ages
+floor_only = false
+drift = 0.01
+
+[shielding]
+s_bond = 0.4
+
+[bonds]
+mutual = true
+birth_bond = 0.5
+
+[mutation]
+background = 1e-4
+
+[decay]
+rate = 5e-5
+
+[telemetry]
+snapshot_every = 11000  # alternates midday / dawn
