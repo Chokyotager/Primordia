@@ -134,6 +134,11 @@ radiation) gives one hit per genome per generation; near vents, with constant co
 bytes against the 128-byte cap. `runs/live-m13.toml` adds mutual adhesion and birth bonds, cuts decay to
 5 × 10⁻⁵ and background mutation to 10⁻⁴, and allows 256-byte genomes (step budget 1024, per-byte upkeep 0.06).
 
+In M13 the sleeping lineage took over again from day 12, now without the sleep shield: with decay cut
+sixfold a sleeper's program survived the night intact (80–90% of cells asleep, BOND gone from programs,
+kin bodies down from ~200 to ~20, no body past 5 nights). The best program family did hold 60–120 conserved
+bytes, against M12's best of ~49. `runs/live-m14.toml` shortens sleeps (`sleep_scale` 16 → 4).
+
 `runs/live-m1.toml` to `live-m3.toml` are the earlier steps.
 
 **Dormancy sweep (M5).** On a 201² world (2 seeds, 10 days; means over days 6–10), against M4:
