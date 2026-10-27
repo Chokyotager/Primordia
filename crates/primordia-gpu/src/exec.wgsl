@@ -937,6 +937,23 @@ fn step() -> i32 {
     return next;
 }
 
+// programs kin by their first 16 slots (see exec::tapes_kin)
+fn tapes_kin(a: u32, b: u32) -> bool {
+    let w = min(16u, g_lmax);
+    var fa = 0u;
+    var fb = 0u;
+    var same = 0u;
+    for (var i = 0u; i < w; i = i + 1u) {
+        let x = tb(a, i);
+        let y = tb(b, i);
+        if (x != 0u) { fa = fa + 1u; }
+        if (y != 0u) { fb = fb + 1u; }
+        if (x != 0u && x == y) { same = same + 1u; }
+    }
+    let most = max(fa, fb);
+    return most >= 4u && 4u * same >= 3u * most;
+}
+
 fn bond(d: u32, on: bool) {
     let t = nbw(me, d);
     if (t != NONE) {
@@ -946,6 +963,8 @@ fn bond(d: u32, on: bool) {
             let rm = 1u << (REQ_SHIFT + d);
             let rt = 1u << (REQ_SHIFT + (d ^ 1u));
             if (on) {
+                // like-with-like adhesion: strangers do not stick
+                if (has(F_BOND_KIN) && !tapes_kin(me, t)) { return; }
                 if (has(F_BOND_MUTUAL)) {
                     // no answering request from t: leave one of our own
                     if ((hdr[t * HDR + H_FLAGS] & rt) == 0u) {

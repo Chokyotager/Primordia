@@ -49,11 +49,7 @@ pub fn high_order_entropy(st: &State, max: usize) -> (f64, f64, f64) {
 /// and it has at least 4 filled bytes. Empty padding never counts, so short
 /// programs can be kin and empty tapes never are.
 pub fn kin(a: &[u8], b: &[u8]) -> bool {
-    let w = 16.min(a.len()).min(b.len());
-    let filled = |t: &[u8]| t[..w].iter().filter(|&&x| x != 0).count();
-    let most = filled(a).max(filled(b));
-    let same = (0..w).filter(|&i| a[i] != 0 && a[i] == b[i]).count();
-    most >= 4 && 4 * same >= 3 * most
+    primordia_core::exec::tapes_kin(a, b)
 }
 
 /// Conserved information (Adami's physical complexity) of program families:

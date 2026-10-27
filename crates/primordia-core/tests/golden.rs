@@ -313,6 +313,38 @@ fn t1_bond_mutual() {
     }
 }
 
+/// bonds.kin_only: BOND joins only cells whose programs are kin; a stranger
+/// is refused, a relative accepted, and birth bonds are exempt.
+#[test]
+fn t1_bond_kin_only() {
+    for (kin_only, partner_kin, want) in [(false, false, 1u32), (true, false, 0), (true, true, 1)] {
+        let mut cfg = deterministic_cfg(2);
+        cfg.bonds.kin_only = kin_only;
+        let (p, mut st) = blank(&cfg);
+        let east = p.orient.valid[2].iter().copied().find(|&o| p.orient.f[o as usize] == 0).unwrap();
+        let (a, b) = (p.geom.index([5, 5, 0]), p.geom.index([6, 5, 0]));
+        let me = [op::BOND, op::HALT, 0x41, 0x42, 0x43, 0x44];
+        let stranger = [0x45u8, 0x46, 0x47, 0x48, 0x49, 0x4A];
+        put(&mut st, &p, a, &me, east, 1000);
+        put(&mut st, &p, b, if partner_kin { &me } else { &stranger }, east, 1000);
+        run1(&mut st, &p, a);
+        assert_eq!(st.bonds(a), want, "kin_only {kin_only} partner kin {partner_kin}");
+    }
+    let s = |t: &[u8]| { let mut v = t.to_vec(); v.resize(16, 0); v };
+    assert!(primordia_core::exec::tapes_kin(&s(&[1, 2, 3, 4]), &s(&[1, 2, 3, 4])));
+    assert!(!primordia_core::exec::tapes_kin(&s(&[]), &s(&[])), "empty tapes are not kin");
+    // birth bonds ignore the rule (the newborn's tape is still empty)
+    let mut cfg = deterministic_cfg(2);
+    cfg.bonds.kin_only = true;
+    cfg.bonds.birth_bond = 1.0;
+    let (p, mut st) = blank(&cfg);
+    let east = p.orient.valid[2].iter().copied().find(|&o| p.orient.f[o as usize] == 0).unwrap();
+    let a = p.geom.index([5, 5, 0]);
+    put(&mut st, &p, a, &[0x44, op::ALLOC, op::HALT], east, 1000);
+    run1(&mut st, &p, a);
+    assert_eq!(st.bonds(a), 1, "birth bond despite kin_only");
+}
+
 /// bonds.birth_bond: a child made by ALLOC stays bonded to its parent with
 /// that probability (1 = always, 0 = never), even under bonds.mutual.
 #[test]
@@ -340,6 +372,7 @@ fn t7_twin_mutual_and_birth_bonds() {
         let mut cfg = full_cfg(dims);
         cfg.bonds.mutual = true;
         cfg.bonds.birth_bond = 0.5;
+        cfg.bonds.kin_only = dims == 3;
         cfg.validate().unwrap();
         let mut a = Sim::new(cfg.clone(), Box::new(CpuExec)).unwrap();
         seed_programs(&mut a);

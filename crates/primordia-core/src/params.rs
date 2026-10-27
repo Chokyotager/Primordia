@@ -161,6 +161,7 @@ pub struct Params {
     pub bond_break_q32: u32,
     pub vote_q16: u64,
     pub bond_mutual: bool,
+    pub bond_kin: bool,
     /// Q32 probability that a newborn stays bonded to its parent.
     pub birth_bond_q32: u32,
     pub max_body: u32,
@@ -347,6 +348,7 @@ impl Params {
             bond_break_q32: if c.bonds.enabled { q32u(c.bonds.break_rate) } else { 0 },
             vote_q16: to_q16(c.bonds.vote_threshold) as u64,
             bond_mutual: c.bonds.enabled && c.bonds.mutual && !pair_concat,
+            bond_kin: c.bonds.enabled && c.bonds.kin_only && !pair_concat,
             birth_bond_q32: if c.bonds.enabled && !pair_concat { q32u(c.bonds.birth_bond) } else { 0 },
             max_body: c.bonds.max_body_move,
             arr,

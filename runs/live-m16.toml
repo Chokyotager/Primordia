@@ -1,0 +1,105 @@
+# Live world M16: as M15 (M12's world with mutual adhesion, birth bonds 0.5,
+# less damage per byte, 256-byte genomes, sleep x4, n_cat 16, photolysis
+# 2e-2) with like-with-like adhesion and a 10x larger chemical store.
+# - bonds.kin_only: BOND joins only cells whose programs are kin (75% of
+#   filled bytes in the first 16 slots). In M15, from day 150, one chimeric
+#   mat bonded ~80% of all cells (190k-cell body), with bonded neighbours less
+#   related than unbonded ones: mutual adhesion let any two BOND carriers stick.
+# - chemistry.init 400/400/200: ~24,000 energy of substrate per site, about
+#   four nights of moonlight, so running CAT after dark can carry a cell
+#   through the night (M15's store, ~2,300 per site, never drew CAT in).
+# Start fresh with: --events runs/seed-501.jsonl
+preset = "primordia-2d-sun"
+seed = 2
+epochs = 1000000000
+
+[world]
+size = [501, 501]
+
+[individual]
+l_max = 256
+step_budget = 1024  # a 256-byte copy takes ~1000 steps
+starve_after = 800
+max_age = 20000  # 10 days
+sleep_scale = 4  # PUSH31 SLEEP = 124 epochs
+sleep_shield = false
+sleep_absorb = 0.0
+sleep_upkeep = 0.5
+
+[energy]
+share_beta = 0.125
+
+[energy.sun]
+i0 = 150
+moon = 0.04
+
+[energy.upkeep]
+base = 3.5
+per_byte = 0.06
+
+[energy.vents]
+enabled = true
+count = 6
+rate = 200000  # 500x the default; heat stays 400
+lifetime = 200000  # 100 days
+spawn_rate = 4e-5  # with the longer lifetime, keeps ~8 vents
+stagger = true  # founding vents start at random ages
+floor_only = false
+drift = 0.01
+
+[shielding]
+s_bond = 0.4
+
+[bonds]
+mutual = true
+birth_bond = 0.5
+kin_only = true  # like-with-like adhesion
+
+[mutation]
+background = 1e-4
+
+[chemistry]
+init = [400, 400, 200, 0]  # X1, X2, X3, X4 per hand: 10x the default store
+n_cat = 16  # events per CAT at full folding (4 by default)
+
+[[chemistry.reactions]]
+r = ["X1", "X2"]
+p = ["X3"]
+energy = 12
+catalyzable = true
+kind = "mass"
+rate = 1e-6
+activation = 0.5
+
+[[chemistry.reactions]]  # light recharges the store: 10x the default
+r = ["X3"]
+p = ["X1", "X2"]
+energy = 0
+catalyzable = false
+kind = "photolysis"
+rate = 2e-2
+activation = 0.0
+
+[[chemistry.reactions]]
+r = ["X4"]
+p = ["X3"]
+energy = 20
+catalyzable = true
+kind = "mass"
+rate = 1e-5
+activation = 0.5
+
+[[chemistry.reactions]]
+r = ["X3"]
+p = ["X1", "X2"]
+energy = -12
+catalyzable = false
+kind = "mass"
+rate = 1e-4
+activation = 0.6
+
+[decay]
+rate = 5e-5
+
+[telemetry]
+snapshot_every = 11000  # alternates midday / dawn

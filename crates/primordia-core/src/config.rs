@@ -328,6 +328,10 @@ pub struct BondCfg {
     /// Probability that a child made by ALLOC or DIVIDE stays bonded to its
     /// parent (cells that do not separate after division).
     pub birth_bond: f64,
+    /// Like-with-like adhesion: BOND joins two cells only if their programs
+    /// are kin (`exec::tapes_kin`), as adhesion molecules that stick only to
+    /// their own kind. Birth bonds are exempt.
+    pub kin_only: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -570,7 +574,7 @@ impl Default for ShieldCfg {
 }
 impl Default for BondCfg {
     fn default() -> Self {
-        BondCfg { enabled: true, gamma: 4.0, break_rate: 1e-4, break_activation: 0.5, max_body_move: 4096, vote_threshold: 0.5, mutual: false, birth_bond: 0.0 }
+        BondCfg { enabled: true, gamma: 4.0, break_rate: 1e-4, break_activation: 0.5, max_body_move: 4096, vote_threshold: 0.5, mutual: false, birth_bond: 0.0, kin_only: false }
     }
 }
 impl Default for CopyErr {

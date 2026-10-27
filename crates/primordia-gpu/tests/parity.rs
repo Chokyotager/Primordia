@@ -154,6 +154,7 @@ fn t4_dormancy_and_light_cover() {
         c.energy.share_beta = if dims == 2 { 0.25 } else { 0.16 }; // at the stability limit: the limiter engages
         c.bonds.mutual = true;
         c.bonds.birth_bond = 0.5;
+        c.bonds.kin_only = dims == 3;
         c.energy.sun.moon = 0.05;
         c.decay.light_factor = 3.0;
         c.validate().unwrap();
@@ -230,6 +231,7 @@ fn t4_resident_fuzz() {
         c.shielding.light_cover = [1.0, 0.0, 0.5][(rnd() % 3) as usize];
         c.energy.share_beta = [0.1, 0.16][(rnd() % 2) as usize];
         c.bonds.mutual = rnd() % 2 == 0;
+        c.bonds.kin_only = rnd() % 2 == 0;
         c.bonds.birth_bond = [0.0, 0.5, 1.0][(rnd() % 3) as usize];
         c.energy.upkeep.base = 4.0;
         if c.validate().is_err() {

@@ -83,6 +83,7 @@ by golden and parity tests. They came out of the long live runs, in this order:
 | `individual.sleep_upkeep` | a sleeping cell pays this fraction of its upkeep (default 1/8, the spec's value) | in the M5 live run a copier that sleeps after every copied byte (`CPY SLEEP` in its loop) took over on day 14: 85% of cells asleep, bodies broken up |
 | `energy.vents.stagger` | the founding vents start at random ages below their lifetime | in M11 all six were created at epoch 0 with a 100-day lifetime and switched off together on day 100, killing every long-lived body |
 | `bonds.mutual` | `BOND`/`BONDS_L`/`BONDS_D` leave a request; the bond forms only when the neighbour bonds back before the requester's next slice (a request lapses after an epoch without a slice) | in M12 bonded neighbours were no more related than unbonded ones, so bodies were aggregates of strangers; a bond also lets the partner write past shielding |
+| `bonds.kin_only` | `BOND` joins two cells only if their programs are kin (75% of the filled bytes among the first 16 slots match, at least 4); birth bonds are exempt | in M15 mutual adhesion still let any two cells carrying `BOND` stick, and one chimeric mat bonded ~80% of the world |
 | `bonds.birth_bond` | a child made by `ALLOC` or `DIVIDE` stays bonded to its parent with this probability | lets bodies grow clonally, the usual route to multicellularity |
 | `individual.dormant_idle` | the dormancy counter behind `starve_after` counts only epochs in which a halted cell did not execute | a copier that runs until it is out of energy ends every slice halted, so busy, well-fed cells counted as starving |
 | `individual.dormant_grace`, `dormant_absorb`, `dormant_rot` | once dormant for the grace period, a cell keeps only this fraction of its light absorption and its tape decays this many times faster | a dormant cell paid nothing, kept absorbing and woke every ~85 epochs even by moonlight, so dormancy was a free way to sit out the night; now only a bonded neighbour's shared energy can rescue it |
@@ -146,6 +147,13 @@ padding-free kin rule). Its sites held about 2,300 energy of unused X1+X2: CAT w
 since an unfolded CAT nets only ~3 energy and light recharged the store by ~0.6 per site and epoch.
 `runs/live-m15.toml` raises `chemistry.n_cat` to 16 and the photolysis rate to 2e-2, so the chemical store
 becomes a daylight reserve that only programs running CAT can spend, worth ~10× more to a folded catalyst.
+
+M15 followed M14 for 150 days (17-byte programs, CAT selected out to ~0.01× a random byte) and then the
+bonding lineage took over: from day 150 about 80% of cells were bonded into one 175k–194k-cell mat whose
+bonded neighbours were less related than unbonded ones (21% vs 24% kin). Mutual adhesion only kept out cells
+that do not run `BOND`. The chemical store stayed unused; its ceiling (~1,000 energy per site per day) was
+too small against copying speed. `runs/live-m16.toml` adds like-with-like adhesion (`bonds.kin_only`) and a
+10× larger store (`chemistry.init` 400/400/200, ~24,000 energy per site).
 
 `runs/live-m1.toml` to `live-m3.toml` are the earlier steps.
 

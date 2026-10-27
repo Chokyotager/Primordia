@@ -68,6 +68,7 @@ pub mod flag {
     pub const RANDOM_FACING: u32 = 2048;
     pub const SLEEP_SHIELD: u32 = 4096;
     pub const BOND_MUTUAL: u32 = 8192;
+    pub const BOND_KIN: u32 = 16384;
 }
 
 /// Static (per-config) part of the parameter buffer. EPOCH, MIRRORED, COLOR
@@ -101,6 +102,7 @@ pub fn param_words(p: &Params) -> Vec<u32> {
         (p.random_facing, flag::RANDOM_FACING),
         (p.sleep_shield, flag::SLEEP_SHIELD),
         (p.bond_mutual, flag::BOND_MUTUAL),
+        (p.bond_kin, flag::BOND_KIN),
     ] {
         if on {
             f |= b;
@@ -250,6 +252,7 @@ pub fn constants() -> String {
         ("F_RANDOM_FACING", flag::RANDOM_FACING),
         ("F_SLEEP_SHIELD", flag::SLEEP_SHIELD),
         ("F_BOND_MUTUAL", flag::BOND_MUTUAL),
+        ("F_BOND_KIN", flag::BOND_KIN),
     ] {
         s += &format!("const {n}: u32 = {v}u;\n");
     }

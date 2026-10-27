@@ -12,6 +12,17 @@ use crate::state::State;
 
 /// Lattice neighbour that is not a wall cell.
 #[inline]
+/// Kinship of two programs from their first 16 tape slots: at least 75% of
+/// the filled (non-empty) bytes of the fuller one match the other in place,
+/// and it has at least 4 filled bytes. Shared with WGSL and telemetry.
+pub fn tapes_kin(a: &[u8], b: &[u8]) -> bool {
+    let w = 16.min(a.len()).min(b.len());
+    let filled = |t: &[u8]| t[..w].iter().filter(|&&x| x != 0).count() as u32;
+    let most = filled(a).max(filled(b));
+    let same = (0..w).filter(|&i| a[i] != 0 && a[i] == b[i]).count() as u32;
+    most >= 4 && 4 * same >= 3 * most
+}
+
 pub fn nb(st: &State, p: &Params, c: usize, d: u32) -> Option<usize> {
     match p.geom.neighbor(c, d) {
         Some(t) if st.site[t * SITE + S_WALL] == 0 => Some(t),
@@ -851,6 +862,11 @@ impl<'a> Cpu<'a> {
                 let (bm, bt) = (1 << (BOND_SHIFT + d), 1 << (BOND_SHIFT + opposite(d)));
                 let (rm, rt) = (1 << (REQ_SHIFT + d), 1 << (REQ_SHIFT + opposite(d)));
                 if on {
+                    // like-with-like adhesion: strangers do not stick
+                    let l = st.lmax;
+                    if self.p.bond_kin && !tapes_kin(&st.tapes[me * l..(me + 1) * l], &st.tapes[t * l..(t + 1) * l]) {
+                        return;
+                    }
                     if self.p.bond_mutual {
                         // no answering request from t: leave one of our own
                         if st.hdr[t * HDR + H_FLAGS] & rt == 0 {
