@@ -680,7 +680,7 @@ pub fn absorb_upkeep(st: &mut State, p: &Params) {
     st.hdr.par_chunks_mut(HDR).for_each(|h| {
         let f = h[H_FLAGS];
         let req = if f & FL_EXEC == 0 { REQ_MASK } else { 0 };
-        h[H_FLAGS] = f & !(FL_EXEC | FL_NEWBORN | req);
+        h[H_FLAGS] = (f & !(FL_EXEC | FL_NEWBORN | FL_SLEEPING | req)) | if h[H_SLEEP] > 0 { FL_SLEEPING } else { 0 };
     });
     if !p.energy_on {
         st.hdr.par_chunks_mut(HDR).for_each(|h| {
@@ -998,7 +998,7 @@ pub fn mutate_decay(st: &mut State, p: &Params, map: Option<&Vec<u32>>) {
     let light = &st.light;
     let i0i = ((p.sun_i0_q16 >> 16) as u32).max(1);
     let matter = p.matter_on;
-    let flip_frame = |v: u8, bit: u32| -> u8 { if mirrored { isa::mirror(isa::mirror(v) ^ (1 << bit)) } else { v ^ (1 << bit) } };
+    let flip_frame = |v: u8, draw: u32| isa::mutate_bit(v, draw, mirrored);
     st.tapes
         .par_chunks_mut(lmax)
         .zip(st.hdr.par_chunks_mut(HDR))
@@ -1037,7 +1037,7 @@ pub fn mutate_decay(st: &mut State, p: &Params, map: Option<&Vec<u32>>) {
                     let pos = t.iter().enumerate().filter(|(_, b)| elig(**b)).nth(j).unwrap().0;
                     let old = t[pos];
                     let new = match ch {
-                        0 | 1 => flip_frame(old, rnd() % 8),
+                        0 | 1 => flip_frame(old, rnd()),
                         2 => isa::mirror(old),
                         _ => 0,
                     };

@@ -27,6 +27,7 @@ fn t11_seeded_takeover() {
         for _ in 0..epochs {
             sim.step();
         }
+        sim.sync(); // resident backends otherwise leave CPU tapes at epoch zero
         let f = frac_with_replicator(&sim);
         let took = f > 0.5;
         takeovers += took as u32;

@@ -61,7 +61,7 @@ enum Cmd {
         #[arg(long, default_value_t = 0.0)]
         gpu_headroom: f32,
         /// Continue from a snapshot (<run>/snapshots/e*.psnap); `config` is then ignored
-        /// in favour of that run's config.toml (plus any --set overrides)
+        /// in favour of the checkpoint's effective config (plus --set overrides)
         #[arg(long)]
         resume: Option<PathBuf>,
     },
@@ -124,11 +124,15 @@ enum Cmd {
 }
 
 fn load_config(spec: &str, seed: Option<u64>, sets: &[String]) -> Result<Config> {
-    let mut c = if Path::new(spec).exists() {
+    let c = if Path::new(spec).exists() {
         Config::from_file(Path::new(spec))?
     } else {
         Config::preset(spec).with_context(|| format!("{spec} is neither a file nor a preset"))?
     };
+    apply_overrides(c, seed, sets)
+}
+
+fn apply_overrides(mut c: Config, seed: Option<u64>, sets: &[String]) -> Result<Config> {
     if let Some(s) = seed {
         c.seed = s;
     }
@@ -139,6 +143,50 @@ fn load_config(spec: &str, seed: Option<u64>, sets: &[String]) -> Result<Config>
     }
     c.validate()?;
     Ok(c)
+}
+
+fn optional_events(path: &Path) -> Result<Vec<Event>> {
+    if path.exists() { read_events(path) } else { Ok(vec![]) }
+}
+
+/// New checkpoints save their effective config. Legacy checkpoints recover it
+/// by applying prior successful layout-preserving set events to the run config.
+fn snapshot_config(path: &Path) -> Result<Config> {
+    let (version, hash, epoch) = State::snapshot_header(path)?;
+    let sidecar = path.with_extension("toml");
+    if sidecar.exists() {
+        let cfg = Config::from_file(&sidecar)?;
+        ensure!(config_hash(&cfg) == hash, "snapshot configuration hash does not match {}", sidecar.display());
+        return Ok(cfg);
+    }
+    let dir = path.parent().and_then(|p| p.parent()).context("snapshot must live in <run>/snapshots/")?;
+    let mut cfg = Config::from_file(&dir.join("config.toml"))?;
+    let mut events = optional_events(&dir.join("events.jsonl"))?;
+    events.sort_by_key(|e| e.epoch);
+    for e in events.iter().filter(|e| e.epoch < epoch && e.kind == "set") {
+        if let Ok(next) = primordia_core::world::edited_config(&cfg, e) { cfg = next; }
+    }
+    if version >= 2 {
+        ensure!(config_hash(&cfg) == hash, "cannot recover the snapshot's effective configuration");
+    }
+    Ok(cfg)
+}
+
+fn checkpoint_state(path: &Path, cfg: &Config) -> Result<State> {
+    let base = snapshot_config(path)?;
+    let old = Params::new(&base);
+    let p = Params::new(cfg);
+    ensure!(old.geom.dims == p.geom.dims && old.geom.size == p.geom.size && old.lmax == p.lmax
+        && old.k == p.k && old.s == p.s && old.nf == p.nf && base.chemistry.species == cfg.chemistry.species,
+        "checkpoint overrides would change the state layout");
+    let (mut st, _) = State::read_snapshot(path, &p)?;
+    if config_hash(&base) != config_hash(cfg) {
+        // Close the old accounting interval before intentionally changing rules.
+        phases::ledger_check(&mut st, &old);
+        st.tally = Default::default();
+        st.reset_ledger(&p);
+    }
+    Ok(st)
 }
 
 fn backend(p: &Params, cpu: bool) -> (Box<dyn primordia_core::ExecBackend>, String) {
@@ -166,6 +214,9 @@ pub struct RunDir {
 
 impl RunDir {
     pub fn create(dir: &Path, cfg: &Config, adapter: &str, parent: Option<&str>) -> Result<RunDir> {
+        if dir.exists() {
+            ensure!(std::fs::read_dir(dir)?.next().is_none(), "run directory {} is not empty; choose a new --out directory", dir.display());
+        }
         std::fs::create_dir_all(dir.join("snapshots"))?;
         std::fs::write(dir.join("config.toml"), cfg.to_toml())?;
         let manifest = serde_json::json!({
@@ -183,6 +234,17 @@ impl RunDir {
         let events = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("events.jsonl"))?;
         Ok(RunDir { dir: dir.to_path_buf(), hashes, events })
     }
+    /// Store an independent replay origin inside the new run directory.
+    pub fn origin(&self, st: &State, cfg: &Config, source: &Path) -> Result<()> {
+        let path = self.snapshot_state(st, cfg)?;
+        let metadata = serde_json::json!({
+            "snapshot": path.strip_prefix(&self.dir)?, "local": true,
+            "source_snapshot": std::fs::canonicalize(source)?, "start_epoch": st.epoch,
+        });
+        std::fs::write(self.dir.join("branch.json"), serde_json::to_string_pretty(&metadata)?)?;
+        Ok(())
+    }
+
     pub fn log_event(&mut self, e: &Event) -> Result<()> {
         writeln!(self.events, "{}", serde_json::to_string(e)?)?;
         Ok(())
@@ -190,6 +252,7 @@ impl RunDir {
     pub fn snapshot_state(&self, st: &State, cfg: &Config) -> Result<PathBuf> {
         let path = self.dir.join("snapshots").join(format!("e{:010}.psnap", st.epoch));
         st.write_snapshot(&path, config_hash(cfg))?;
+        std::fs::write(path.with_extension("toml"), cfg.to_toml())?;
         Ok(path)
     }
 }
@@ -254,7 +317,10 @@ fn run_headless_feed(sim: &mut Sim, rd: RunDir, epochs: u64, progress: u64, feed
     let mut wants: std::collections::BTreeMap<u64, Want> = Default::default();
     let deliver = |sim: &mut Sim, obs: &Observer, wants: &mut std::collections::BTreeMap<u64, Want>, wait: bool| {
         let rate = (sim.st.epoch - start) as f64 / t0.elapsed().as_secs_f64().max(1e-9);
-        for st in sim.take_snapshots(wait) {
+        let snapshots = sim.take_snapshots(wait);
+        let births = sim.take_births();
+        if !births.is_empty() { obs.send(Msg::Births(births)); }
+        for st in snapshots {
             let w = wants.remove(&st.epoch).unwrap_or_default();
             obs.deliver(st, w, rate, backend.clone());
         }
@@ -265,7 +331,7 @@ fn run_headless_feed(sim: &mut Sim, rd: RunDir, epochs: u64, progress: u64, feed
         if !b.is_empty() {
             obs.send(Msg::Births(b));
         }
-        let mut w = obs.want(sim.st.epoch, false);
+        let mut w = obs.want(sim.st.epoch, false, &sim.cfg, sim.config_revision);
         if sim.st.epoch == start + epochs && sim.cfg.telemetry.snapshot_every > 0 {
             w.save = true;
         }
@@ -310,21 +376,25 @@ fn main() -> Result<()> {
         }
         Cmd::Run { config, seed, headless, epochs, out, cpu, set, progress, events, autorun, web, exec_only, resume, gpu_headroom } => {
             let parent_dir = resume.as_ref().map(|sp| sp.parent().and_then(|d| d.parent()).map(|d| d.to_path_buf()).context("snapshot must live in <run>/snapshots/")).transpose()?;
-            let cfg = match &parent_dir {
-                Some(d) => load_config(&d.join("config.toml").display().to_string(), seed, &set)?,
+            let cfg = match &resume {
+                Some(path) => apply_overrides(snapshot_config(path)?, seed, &set)?,
                 None => load_config(&config, seed, &set)?,
             };
             let epochs = epochs.unwrap_or(cfg.epochs);
-            let dir = out.unwrap_or_else(|| default_dir(&cfg, &config));
+            let dir = match out {
+                Some(dir) => dir,
+                None => match (&resume, &parent_dir) {
+                    (Some(path), Some(parent)) => PathBuf::from(format!("{}-resume-e{}", parent.display(), State::snapshot_header(path)?.2)),
+                    _ => default_dir(&cfg, &config),
+                },
+            };
             let p = Params::new(&cfg);
             let be = primordia_gpu::backend_mode(&p, !(cpu || !cfg.gpu.exec), !exec_only);
             let name = be.name();
             println!("primordia run: {} cells, dims {}, backend {name}, out {}", p.geom.n, p.geom.dims, dir.display());
-            let mut rd = RunDir::create(&dir, &cfg, &name, None)?;
             let st0 = match &resume {
                 Some(sp) => {
-                    let (mut st, _) = State::read_snapshot(sp, &p)?;
-                    st.reset_ledger(&p);
+                    let st = checkpoint_state(sp, &cfg)?;
                     println!("resuming from {} at epoch {}", sp.display(), st.epoch);
                     st
                 }
@@ -334,13 +404,16 @@ fn main() -> Result<()> {
             let mut sim = Sim::from_state(cfg.clone(), p.clone(), st0, be)?;
             let mut evs = match (&events, &parent_dir) {
                 (Some(ev), _) => read_events(ev)?,
-                (None, Some(d)) => read_events(&d.join("events.jsonl"))?,
+                (None, Some(d)) => optional_events(&d.join("events.jsonl"))?,
                 _ => vec![],
             };
             evs.retain(|e| e.epoch >= start_epoch);
             for e in evs {
                 sim.push_event(e);
             }
+            let parent = resume.as_ref().map(|p| p.display().to_string());
+            let mut rd = RunDir::create(&dir, &cfg, &name, parent.as_deref())?;
+            if let Some(source) = &resume { rd.origin(&sim.st, &cfg, source)?; }
             if headless {
                 let feed = match &web {
                     Some(addr) => {
@@ -367,20 +440,19 @@ fn main() -> Result<()> {
         Cmd::Replay { run_dir, to, cpu } => replay(&run_dir, to, cpu)?,
         Cmd::Branch { snapshot, diff, out, epochs, cpu } => {
             let parent_dir = snapshot.parent().and_then(|p| p.parent()).context("snapshot must live in <run>/snapshots/")?;
-            let base: toml::Value = toml::from_str(&std::fs::read_to_string(parent_dir.join("config.toml"))?)?;
+            let base: toml::Value = toml::from_str(&snapshot_config(&snapshot)?.to_toml())?;
             let d: toml::Value = toml::from_str(&std::fs::read_to_string(&diff)?)?;
             let mut merged = base.clone();
             merge(&mut merged, &d);
             let cfg: Config = merged.try_into()?;
             cfg.validate()?;
             let p = Params::new(&cfg);
-            let (st, _) = State::read_snapshot(&snapshot, &p)?;
+            let st = checkpoint_state(&snapshot, &cfg)?;
             let dir = out.unwrap_or_else(|| PathBuf::from(format!("{}-branch-e{}", parent_dir.display(), st.epoch)));
             let (be, name) = backend(&p, cpu || !cfg.gpu.exec);
             let rd = RunDir::create(&dir, &cfg, &name, Some(&snapshot.display().to_string()))?;
-            std::fs::write(dir.join("branch.json"), serde_json::to_string_pretty(&serde_json::json!({"snapshot": snapshot, "diff": d.to_string(), "start_epoch": st.epoch}))?)?;
+            rd.origin(&st, &cfg, &snapshot)?;
             let mut sim = Sim::from_state(cfg.clone(), p, st, be)?;
-            sim.st.reset_ledger(&sim.p.clone());
             let s = run_headless(&mut sim, rd, epochs.unwrap_or(cfg.epochs), 100)?;
             print_summary(&s);
         }
@@ -432,10 +504,9 @@ fn replay(run_dir: &Path, to: Option<u64>, cpu: bool) -> Result<()> {
     let branch = run_dir.join("branch.json");
     let st = if branch.exists() {
         let b: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&branch)?)?;
-        let snap = PathBuf::from(b["snapshot"].as_str().unwrap());
-        let (mut st, _) = State::read_snapshot(&snap, &p)?;
-        st.reset_ledger(&p);
-        st
+        let path = PathBuf::from(b["snapshot"].as_str().context("branch origin needs snapshot")?);
+        let snap = if b["local"].as_bool() == Some(true) { run_dir.join(path) } else { path };
+        checkpoint_state(&snap, &cfg)?
     } else {
         State::init(&cfg, &p)
     };

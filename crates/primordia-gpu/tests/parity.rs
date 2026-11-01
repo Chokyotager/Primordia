@@ -247,7 +247,7 @@ fn t4_resident_fuzz() {
         let evs = [
             Event { epoch: 10, kind: "wall".into(), params: serde_json::json!({"center":[5,5,4],"radius":1.5,"type":"absorb"}) },
             Event { epoch: 15, kind: "paint".into(), params: serde_json::json!({"field":"F","center":[8,8,3],"radius":3,"amount":400}) },
-            Event { epoch: 20, kind: "seed".into(), params: serde_json::json!({"genome":"36 36 36 36 36 36 36 4d 67 40 2c 12 13 15 c4","center":[3,6,2],"radius":2,"mirror":true}) },
+            Event { epoch: 20, kind: "seed".into(), params: serde_json::json!({"genome":"36 36 36 36 36 36 36 4f 67 40 2c 12 13 15 c4","center":[3,6,2],"radius":2,"mirror":true}) },
             Event { epoch: 25, kind: "set".into(), params: serde_json::json!({"key":"energy.absorb_alpha","value":0.2}) },
             Event { epoch: 30, kind: "wall".into(), params: serde_json::json!({"center":[12,3,6],"radius":1,"type":"reflect"}) },
         ];
@@ -295,14 +295,17 @@ fn t4_pipelined_snapshots() {
         births_a.extend(a.take_births());
         b.step();
         if a.st.epoch % 7 == 0 {
-            want.insert(a.st.epoch, a.st.hash());
+            want.insert(a.st.epoch, (a.st.hash(), a.st.ledger.clone(), a.st.tally.clone()));
             b.request_snapshot();
         }
     }
     let snaps = b.take_snapshots(true);
     assert_eq!(snaps.len(), want.len());
     for s in &snaps {
-        assert_eq!(s.hash(), want[&s.epoch], "snapshot at epoch {}", s.epoch);
+        let expected = &want[&s.epoch];
+        assert_eq!(s.hash(), expected.0, "snapshot at epoch {}", s.epoch);
+        assert_eq!(s.ledger, expected.1, "snapshot ledger at epoch {}", s.epoch);
+        assert_eq!(s.tally, expected.2, "snapshot tally at epoch {}", s.epoch);
     }
     b.sync();
     assert_eq!(a.st.hash(), b.st.hash());
@@ -310,4 +313,89 @@ fn t4_pipelined_snapshots() {
     assert_eq!(a.st.ledger, b.st.ledger);
     assert_eq!(b.faults, 0);
     eprintln!("pipelined: {} snapshots identical", snaps.len());
+}
+
+#[test]
+fn live_boundary_and_reaction_edits_refresh_gpu_state() {
+    use primordia_core::{events::Event, params::F_F};
+    use primordia_core::geom::Boundary;
+    let mut c = cfg(2); c.world.size = vec![9, 9]; c.world.init_occupancy = 0.0;
+    c.energy.sun.enabled = false; c.energy.vents.enabled = false; c.energy.kappa_f = 0.1;
+    c.energy.dissipation = 0.1; c.mutation.enabled = false; c.decay.enabled = false;
+    let p = Params::new(&c); let Ok(gpu) = GpuExec::with_mode(&p, true) else { return };
+    let mut a = Sim::new(c.clone(), Box::new(CpuExec)).unwrap(); let mut b = Sim::new(c.clone(), Box::new(gpu)).unwrap();
+    for _ in 0..5 { a.step(); b.step(); }
+    b.request_snapshot(); let old = a.st.clone(); b.sync();
+    let mut reactions = c.chemistry.reactions.clone(); reactions.push(reactions[0].clone());
+    for sim in [&mut a, &mut b] {
+        for at in 0..sim.st.n { *sim.st.fm(at, F_F) = 0; }
+        let at = sim.p.geom.index([0, 4, 0]); *sim.st.fm(at, F_F) = 10000; sim.st.reset_ledger(&sim.p); sim.touch();
+        for (key, value) in [
+            ("world.boundary", serde_json::json!(["reflecting", "torus"])),
+            ("chemistry.reactions", serde_json::to_value(&reactions).unwrap()),
+        ] { sim.push_event(Event { epoch: 5, kind: "set".into(), params: serde_json::json!({"key":key,"value":value}) }); }
+    }
+    a.step(); b.step(); b.request_snapshot(); let new = a.st.clone();
+    for _ in 0..5 { a.step(); b.step(); }
+    let snapshots = b.take_snapshots(true); b.sync();
+    assert!(a.rejected.is_empty() && b.rejected.is_empty()); assert_eq!(a.st.hash(), b.st.hash());
+    assert_eq!(snapshots.len(), 2);
+    for (s, expected) in snapshots.iter().zip([old, new]) { assert_eq!(s.hash(), expected.hash()); assert_eq!(s.ledger, expected.ledger); }
+    assert_eq!(snapshots[0].params.geom.boundary[0], Boundary::Torus);
+    assert_eq!(snapshots[1].params.geom.boundary[0], Boundary::Reflecting);
+    assert_eq!(snapshots[1].f(p.geom.index([8, 4, 0]), F_F), 0);
+}
+
+#[test]
+fn maximum_field_counts_and_more_than_4096_vents_match_cpu() {
+    let mut c = cfg(2); c.world.size = vec![9, 9]; c.world.init_occupancy = 0.0;
+    c.chemistry.species = (0..8).map(|i| format!("X{i}")).collect();
+    c.chemistry.mass = vec![1; 8]; c.chemistry.init = vec![100; 8]; c.chemistry.reactions.clear(); c.signals.count = 8;
+    c.energy.vents.count = 4097; c.energy.vents.rate = 1; c.energy.vents.heat = 1; c.energy.vents.x4_rate = 1;
+    c.energy.vents.drift = 0.0; c.energy.vents.stagger = false; c.validate().unwrap();
+    check(c, 3, false, true);
+}
+
+#[test]
+fn high_mean_mutation_matches_cpu() {
+    use primordia_core::events::Event;
+    let mut c = cfg(2); c.world.size = vec![9, 9]; c.world.init_occupancy = 1.0;
+    c.individual.l_init = 256; c.individual.l_max = 256; c.individual.step_budget = 0;
+    c.energy.enabled = false; c.energy.sun.enabled = false; c.energy.vents.enabled = false;
+    c.chemistry.enabled = false; c.matter.enabled = false; c.bonds.enabled = false; c.decay.enabled = false;
+    c.mutation.activation = 0.0; c.mutation.radiation = 0.0; c.mutation.hand_flip = 0.0; c.mutation.background = 0.04;
+    let p = Params::new(&c); let Ok(gpu) = GpuExec::with_mode(&p, true) else { return };
+    let mut a = Sim::new(c.clone(), Box::new(CpuExec)).unwrap(); let mut b = Sim::new(c, Box::new(gpu)).unwrap();
+    for sim in [&mut a, &mut b] {
+        for (epoch, rate) in [(2, 0.1), (4, 0.3), (6, 1.0)] {
+            sim.push_event(Event { epoch, kind: "set".into(), params: serde_json::json!({"key":"mutation.background","value":rate}) });
+        }
+    }
+    for _ in 0..8 { a.step(); b.step(); b.sync(); assert_eq!(a.st.hash(), b.st.hash()); assert_eq!(a.st.ledger, b.st.ledger); }
+}
+
+#[test]
+fn birth_log_can_hold_every_newborn_in_an_epoch() {
+    use primordia_core::params::*;
+    // Repeating executor/empty/empty triples ensure each ALLOC has a free
+    // neighbor and creates more than the former 16,384-record cap at once.
+    let mut c = cfg(1); c.world.size = vec![3 * 16_500]; c.world.init_occupancy = 0.0;
+    c.individual.l_max = 4; c.individual.l_init = 0; c.individual.step_budget = 2;
+    c.individual.pair_order = primordia_core::config::PairOrder::SelfFirst; c.individual.random_initial_facing = false;
+    c.energy.enabled = false; c.energy.sun.enabled = false; c.energy.vents.enabled = false;
+    c.chemistry.enabled = false; c.matter.enabled = false; c.bonds.enabled = false;
+    c.mutation.enabled = false; c.decay.enabled = false;
+    let p = Params::new(&c); let Ok(gpu) = GpuExec::with_mode(&p, true) else { return };
+    let mut a = Sim::new(c.clone(), Box::new(CpuExec)).unwrap(); let mut b = Sim::new(c, Box::new(gpu)).unwrap();
+    for sim in [&mut a, &mut b] {
+        for i in (0..sim.st.n).step_by(3) {
+            let base = i * sim.st.lmax; sim.st.tapes[base..base + 2].copy_from_slice(&[0x44, op::ALLOC]);
+            *sim.st.hm(i, H_LEN) = 2; *sim.st.hm(i, H_FLAGS) = FL_OCC | (p.orient.valid[1][0] << ORIENT_SHIFT);
+            *sim.st.hm(i, H_LINEAGE) = i as u32 + 1;
+        }
+        sim.st.reset_ledger(&p); sim.touch();
+    }
+    a.step(); b.step(); b.sync(); let births = b.take_births();
+    assert_eq!(births.len(), 16_500); assert_eq!(births, a.take_births());
+    assert_eq!(a.st.hash(), b.st.hash()); assert!(b.rejected.is_empty());
 }

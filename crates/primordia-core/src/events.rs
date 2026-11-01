@@ -273,19 +273,33 @@ pub fn mirror_region(st: &mut State, p: &Params, lo: [i64; 3], hi: [i64; 3]) -> 
         for i in 0..nf {
             st.fields[c * nf + crate::phases::swap_hand_field(p, i)] = src.fields[s * nf + i];
         }
+        st.site[c * SITE..(c + 1) * SITE].copy_from_slice(&src.site[s * SITE..(s + 1) * SITE]);
+        let vote = st.site[c * SITE + S_VOTE];
+        if vote > 0 { st.site[c * SITE + S_VOTE] = crate::geom::mirror_dir(vote - 1) + 1; }
+        st.light[c] = src.light[s];
         let fl = st.hdr[c * HDR + H_FLAGS];
         if fl & FL_OCC == 0 {
             continue;
         }
         let or = (fl & ORIENT_MASK) >> ORIENT_SHIFT;
         let bonds = (fl & BOND_MASK) >> BOND_SHIFT;
+        let req = (fl & REQ_MASK) >> REQ_SHIFT;
+        let mut nr = 0;
         let mut nb = 0;
         for d in 0..6 {
+            if req & (1 << d) != 0 { nr |= 1 << crate::geom::mirror_dir(d); }
             if bonds & (1 << d) != 0 {
                 nb |= 1 << crate::geom::mirror_dir(d);
             }
         }
-        st.hdr[c * HDR + H_FLAGS] = (fl & !(ORIENT_MASK | BOND_MASK)) | (p.orient.mirror[or as usize] << ORIENT_SHIFT) | (nb << BOND_SHIFT);
+        st.hdr[c * HDR + H_FLAGS] = (fl & !(ORIENT_MASK | BOND_MASK | REQ_MASK)) | (p.orient.mirror[or as usize] << ORIENT_SHIFT) | (nb << BOND_SHIFT) | (nr << REQ_SHIFT);
+    }
+    for vent in &mut st.vents {
+        if inside(vent.pos as usize) {
+            let mut q = g.coords(vent.pos as usize);
+            q[0] = lo2[0] + hi2[0] - q[0];
+            vent.pos = g.index(q) as u32;
+        }
     }
     // a region mirror moves matter between the L and D classes: log the change
     let after = st.matter_totals(p);
@@ -296,9 +310,6 @@ pub fn mirror_region(st: &mut State, p: &Params, lo: [i64; 3], hi: [i64; 3]) -> 
 }
 
 pub fn read_events(path: &std::path::Path) -> Result<Vec<Event>> {
-    if !path.exists() {
-        return Ok(vec![]);
-    }
-    let s = std::fs::read_to_string(path)?;
+    let s = std::fs::read_to_string(path).with_context(|| format!("read events {}", path.display()))?;
     s.lines().filter(|l| !l.trim().is_empty()).map(|l| serde_json::from_str(l).map_err(|e| e.into())).collect()
 }

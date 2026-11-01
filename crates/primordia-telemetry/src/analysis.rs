@@ -224,14 +224,15 @@ pub fn assay_genome(cfg: &Config, genome: &[u8], count: usize) -> AssayResult {
             }
             let old = g[i];
             g[i] = 0;
-            // the ablated genome must still copy the original's essential bytes
+            // Preserve self-copying of the remaining nonzero bytes.
             if sandbox_identity(&p, &g) < 0.9 {
                 g[i] = old;
             }
         }
         let first = g.iter().position(|&b| b != 0).unwrap_or(0);
         let last = g.iter().rposition(|&b| b != 0).unwrap_or(0);
-        minimal = g[first..=last].to_vec();
+        let trimmed = g[first..=last].to_vec();
+        minimal = if sandbox_identity(&p, &trimmed) >= 0.9 { trimmed } else { g };
     }
     AssayResult { genome: genome.to_vec(), count, identity, replicator, minimal }
 }

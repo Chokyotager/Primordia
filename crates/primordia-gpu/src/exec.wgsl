@@ -239,13 +239,15 @@ fn pool_add(c: u32, cl: u32, d: i32) {
     fields[i] = u32(i32(fields[i]) + d);
 }
 
-fn flip_frame(v: u32, bit: u32) -> u32 {
-    if (g_mirrored) { return mirror_b(mirror_b(v) ^ (1u << bit)); }
+fn flip_frame(v: u32, draw: u32) -> u32 {
+    let bit = draw & 7u;
+    let frame = (((draw >> 3u) & 1u) != 0u) != g_mirrored;
+    if (frame) { return mirror_b(mirror_b(v) ^ (1u << bit)); }
     return v ^ (1u << bit);
 }
 
 fn shield_ok(t: u32) -> bool {
-    if (has(F_SLEEP_SHIELD) && t != me && hdr[t * HDR + H_SLEEP] > 0u) { return false; }
+    if (has(F_SLEEP_SHIELD) && t != me && (hdr[t * HDR + H_SLEEP] > 0u || (flags(t) & FL_SLEEPING) != 0u)) { return false; }
     if (!has(F_SHIELD) || t == me) { return true; }
     var key = 6u;
     var dir_to_me = NONE;
@@ -326,7 +328,7 @@ fn write_byte(addr: u32, v_in: u32, ipu: u32, total: u32) -> bool {
     if (P[P_PDEL] != 0u) {
         let r = rnd();
         if (r < P[P_PSUB]) {
-            let bit = rnd() % 8u;
+            let bit = rnd();
             v = flip_frame(v, bit);
         } else if (r < P[P_PINS]) {
             mode = 1u;
@@ -577,7 +579,7 @@ fn step() -> i32 {
         var s0 = 0;
         if (partner_first) { s0 = i32(lp); }
         let so = u32(rem_i(h0 - s0, ti));
-        let eo = u32(rem_i(h1 - s0, ti));
+        let eo = select(u32(rem_i(h1 - s0, ti)), ls, h1 - s0 == i32(ls));
         let ok = so < eo && eo <= ls;
         var n = 0u;
         if (ok) { n = eo - so; }
@@ -639,7 +641,7 @@ fn step() -> i32 {
             if (!pay(cost)) { return END; }
             return 1;
         }
-        let base = P[P_COSTS + 0x60u];
+        let base = cost;
         var c2 = base;
         var vote = false;
         var tgt = NONE;
@@ -993,7 +995,7 @@ fn birth_bond(t: u32, d: u32) {
 
 fn exec_slice(c: u32, fp: u32) {
     let fl = flags(c);
-    if ((fl & FL_OCC) == 0u || (fl & FL_EXEC) != 0u || H(c, H_SLEEP) > 0u) { return; }
+    if ((fl & FL_OCC) == 0u || (fl & (FL_EXEC | FL_SLEEPING)) != 0u || H(c, H_SLEEP) > 0u) { return; }
     if (has(F_ENERGY) && (fl & FL_HALT) != 0u) { return; }
     // a slice withdraws this cell's earlier bond requests (bonds.mutual)
     hdr[c * HDR + H_FLAGS] = (fl & ~REQ_MASK) | FL_EXEC;

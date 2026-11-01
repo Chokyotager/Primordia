@@ -30,10 +30,18 @@ cargo build --release
 
 * `--set key=value` overrides any config key (TOML value syntax).
 * `--events file.jsonl` applies a logged intervention list, such as the seed events in `runs/seed-*.jsonl`.
-* `--resume <run>/snapshots/e….psnap` continues a run, with its plot history.
+* `--resume <run>/snapshots/e….psnap` continues from the checkpoint's effective configuration, with its plot history.
+  It writes a new run (default `<run>-resume-e<epoch>`); use `--out` to choose another empty directory.
+  Resume and branch save a local starting snapshot so the new directory can replay independently.
+* Nonempty output directories and missing explicit `--events` files are errors. New snapshots have
+  matching `.toml` configuration sidecars; keep those with their `.psnap` files.
 * `--autorun` starts the viewer running; `--headless` runs without it.
 * `--web 0.0.0.0:8765` serves the read-only browser viewer (also with `--headless`).
 * `--cpu` uses the CPU golden model; `--exec-only` keeps physics on the CPU.
+
+The correctness fixes described in [DESIGN.md](DESIGN.md#correctness-and-checkpoint-semantics) change
+mutation statistics and sleep/division behavior. Legacy snapshots remain readable, but continuing them
+uses the corrected rules; replay historical hashes with the commit recorded in the original manifest.
 
 ### The live world
 

@@ -130,16 +130,32 @@ pub fn arr_lookup(table: &[u32], t: u32) -> u32 {
     table[i.min(ARR_SIZE - 1)]
 }
 
-/// exp(-lambda) table for Poisson sampling: index = lambda in Q10 (lambda < 64).
-pub const POIS_SIZE: usize = 64 * 1024;
+// Small means use inverse-CDF recurrence. Larger means use interpolated Q32
+// CDFs so neither intermediate overflow nor exp(-lambda) underflow occurs.
+// Grid spacing 1/64 adds at most 1/16384 to the variance (a mixture of the
+// adjacent Poissons), with the exact interpolated mean before the event cap.
+pub const POIS_EXP_SIZE: usize = 4 * 1024 + 1;
+pub const POIS_CAP: u32 = 64;
+pub const POIS_GRID: u32 = 64;
+pub const POIS_MAX: u32 = 128;
 
-pub fn poisson_exp_table() -> Vec<u32> {
-    (0..POIS_SIZE)
-        .map(|i| {
-            let v = det_exp(-(i as f64) / 1024.0) * Q32 as f64;
-            if v >= u32::MAX as f64 { u32::MAX } else { v as u32 }
-        })
-        .collect()
+pub fn poisson_exp_table() -> std::sync::Arc<Vec<u32>> {
+    static TABLE: std::sync::OnceLock<std::sync::Arc<Vec<u32>>> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| {
+        let q32 = |v: f64| (v * Q32 as f64).clamp(0.0, u32::MAX as f64) as u32;
+        let mut t: Vec<u32> = (0..POIS_EXP_SIZE).map(|i| q32(det_exp(-(i as f64) / 1024.0))).collect();
+        for i in 0..=POIS_MAX * POIS_GRID {
+            let lam = i as f64 / POIS_GRID as f64;
+            let mut prob = det_exp(-lam);
+            let mut cdf = prob;
+            for k in 0..POIS_CAP {
+                t.push(q32(cdf));
+                prob = prob * lam / (k + 1) as f64;
+                cdf += prob;
+            }
+        }
+        std::sync::Arc::new(t)
+    }).clone()
 }
 
 #[cfg(test)]
@@ -273,27 +289,47 @@ pub fn sat_add(a: u32, b: u32) -> u32 {
     a.saturating_add(b)
 }
 
-/// Poisson sample with mean `lam24` (Q24). Shared with WGSL.
+/// Sample min(Poisson(lambda), kmax), kmax <= 64, using one uniform u32.
+/// Large-mean CDF interpolation is shared bit-for-bit with WGSL. At lambda
+/// >= 128 the probability of a result below 64 is less than one Q32 unit.
 pub fn poisson24(table: &[u32], lam24: u32, u: u32, kmax: u32) -> u32 {
-    if lam24 == 0 {
+    assert!(kmax <= POIS_CAP);
+    if lam24 == 0 || kmax == 0 {
         return 0;
     }
+    if lam24 > 4 << 24 {
+        if lam24 >= POIS_MAX << 24 { return kmax; }
+        let row = (lam24 >> 18) as usize;
+        let frac = lam24 & ((1 << 18) - 1);
+        let cdf = |k: u32| {
+            let at = POIS_EXP_SIZE + row * POIS_CAP as usize + k as usize;
+            let a = table[at];
+            let b = table[at + POIS_CAP as usize];
+            a - (((a - b) as u64 * frac as u64) >> 18) as u32
+        };
+        let (mut lo, mut hi) = (0, kmax);
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if u < cdf(mid) { hi = mid; } else { lo = mid + 1; }
+        }
+        return lo;
+    }
     let mut p: u32 = if lam24 < (1 << 20) {
-        let l = lam24 << 8; // Q32
+        let l = lam24 << 8;
         let l2 = ((l as u64 * l as u64) >> 32) as u32;
         let l3 = ((l2 as u64 * l as u64) >> 32) as u32;
-        0xFFFF_FFFFu32.wrapping_sub(l).wrapping_add(l2 / 2).wrapping_sub(l3 / 6)
+        u32::MAX.wrapping_sub(l).wrapping_add(l2 / 2).wrapping_sub(l3 / 6)
     } else {
-        table[((lam24 >> 14) as usize).min(POIS_SIZE - 1)]
+        table[(lam24 >> 14) as usize]
     };
     let mut cdf = p;
     let mut k = 0;
     while u >= cdf && k < kmax {
         k += 1;
-        p = (((p as u64 * lam24 as u64) >> 24) as u32) / k;
-        if p == 0 {
-            break;
-        }
+        // Divide while wide, before narrowing. For lambda <= 4 the numerator
+        // also fits u32, allowing the identical fast recurrence in WGSL.
+        p = (((p as u64 * lam24 as u64) >> 24) / k as u64) as u32;
+        if p == 0 { break; }
         cdf = cdf.saturating_add(p);
     }
     k

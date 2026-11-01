@@ -76,7 +76,7 @@ fn kin_labels(st: &State, p: &Params) -> Vec<u32> {
     let mut par: Vec<u32> = (0..n as u32).collect();
     let faces = p.geom.faces() as usize;
     for c in 0..n {
-        if !st.occupied(c) || st.tapes[c * l] == 0 {
+        if !st.occupied(c) {
             continue;
         }
         let a = &st.tapes[c * l..c * l + w];
@@ -188,9 +188,14 @@ impl Tracker {
                         *pairs.entry((a, b)).or_default() += 1;
                     }
                 }
-                for ((a, b), cnt) in pairs {
+                // One old identity can continue in only one descendant.
+                // Sort ties by labels so hash-map iteration cannot choose heirs.
+                let mut candidates: Vec<_> = pairs.into_iter().collect();
+                candidates.sort_by_key(|&((a, b), cnt)| (std::cmp::Reverse(cnt), a, b));
+                let mut inherited = std::collections::HashSet::new();
+                for ((a, b), cnt) in candidates {
                     let sa = pv.tracks.get(&a).map(|t| t.size).unwrap_or(u32::MAX);
-                    if cnt as f64 >= CARRY * sa as f64 && cnt > best.get(&b).map(|x| x.0).unwrap_or(0) {
+                    if cnt as f64 >= CARRY * sa as f64 && !best.contains_key(&b) && inherited.insert(a) {
                         best.insert(b, (cnt, a));
                     }
                 }

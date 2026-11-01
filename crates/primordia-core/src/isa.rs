@@ -65,6 +65,15 @@ pub mod op {
     pub const HALT: u8 = 0x6F;
 }
 
+/// Equal mixture of a bit-flip kernel and its mirror conjugate. The random
+/// frame removes opcode-encoding handedness bias; XOR with `mirrored` keeps
+/// paired runs exactly mirrored under their shared random stream.
+pub fn mutate_bit(b: u8, draw: u32, mirrored: bool) -> u8 {
+    let bit = draw & 7;
+    let frame = ((draw >> 3) & 1 != 0) ^ mirrored;
+    if frame { mirror(mirror(b) ^ (1 << bit)) } else { b ^ (1 << bit) }
+}
+
 /// Monomer classes.
 pub const CL_L: u8 = 0;
 pub const CL_D: u8 = 1;

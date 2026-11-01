@@ -181,6 +181,7 @@ pub fn constants() -> String {
         ("FL_HALT", FL_HALT),
         ("FL_EXEC", FL_EXEC),
         ("FL_NEWBORN", FL_NEWBORN),
+        ("FL_SLEEPING", FL_SLEEPING),
         ("ORIENT_SHIFT", ORIENT_SHIFT),
         ("ORIENT_MASK", ORIENT_MASK),
         ("BOND_SHIFT", BOND_SHIFT),
@@ -493,7 +494,7 @@ pub fn phys_words(p: &Params) -> Vec<u32> {
     w
 }
 
-/// Arrhenius tables followed by the Poisson exp(-lambda) table.
+/// Arrhenius tables followed by the small-mean exponential and large-mean Poisson CDF tables.
 pub fn phys_tables(p: &Params) -> Vec<u32> {
     let mut t = vec![];
     for a in &p.arr {
@@ -568,6 +569,9 @@ pub fn phys_constants() -> String {
         ("Q_ARR_DEC", qi::ARR_DEC),
         ("Q_ARR_BOND", qi::ARR_BOND),
         ("Q_POIS_OFF", qi::POIS_OFF),
+        ("POIS_EXP_SIZE", crate::fixed::POIS_EXP_SIZE),
+        ("POIS_CAP", crate::fixed::POIS_CAP as usize),
+        ("POIS_MAX", crate::fixed::POIS_MAX as usize),
         ("Q_MASS", qi::MASS),
         ("Q_RX", qi::RX),
         ("RX_STRIDE", qi::RX_STRIDE),

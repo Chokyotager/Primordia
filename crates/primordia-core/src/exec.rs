@@ -143,14 +143,14 @@ impl<'a> Cpu<'a> {
         let i = c * st.nf + self.p.f_pool(cl);
         st.fields[i] = (st.fields[i] as i64 + d as i64) as u32;
     }
-    fn flip_frame(&self, v: u8, bit: u32) -> u8 {
-        if self.mirrored { isa::mirror(isa::mirror(v) ^ (1 << bit)) } else { v ^ (1 << bit) }
+    fn flip_frame(&self, v: u8, draw: u32) -> u8 {
+        isa::mutate_bit(v, draw, self.mirrored)
     }
 
     /// Soft geometric shielding for a write into foreign cell `t`.
     fn shield_ok(&mut self, st: &State, t: usize) -> bool {
         let p = self.p;
-        if p.sleep_shield && t != self.me && st.h(t, H_SLEEP) > 0 {
+        if p.sleep_shield && t != self.me && (st.h(t, H_SLEEP) > 0 || st.flags(t) & FL_SLEEPING != 0) {
             return false;
         }
         if !p.shield_on || t == self.me {
@@ -243,7 +243,7 @@ impl<'a> Cpu<'a> {
         if p.p_del != 0 {
             let r = self.rnd();
             if r < p.p_sub {
-                let bit = self.rnd() % 8;
+                let bit = self.rnd();
                 v = self.flip_frame(v, bit);
             } else if r < p.p_ins {
                 mode = 1;
@@ -344,9 +344,8 @@ impl<'a> Cpu<'a> {
     }
 
     /// Plan a move in direction d: (cost, vote, swap target). No side effects.
-    fn plan_move(&self, st: &State, d: u32) -> (u32, bool, Option<usize>) {
+    fn plan_move(&self, st: &State, d: u32, base: u32) -> (u32, bool, Option<usize>) {
         let p = self.p;
-        let base = p.costs[op::MOVE as usize];
         if st.bonds(self.me) != 0 {
             return (base, true, None);
         }
@@ -547,7 +546,7 @@ impl<'a> Cpu<'a> {
                 }
                 let s0 = if self.partner_first { lp } else { 0 } as i32;
                 let so = (self.h0 - s0).rem_euclid(ti) as usize;
-                let eo = (self.h1 - s0).rem_euclid(ti) as usize;
+                let eo = if self.h1 - s0 == ls as i32 { ls } else { (self.h1 - s0).rem_euclid(ti) as usize };
                 let ok = so < eo && eo <= ls;
                 let n = if ok { eo - so } else { 0 };
                 pay!(cost + n as u32);
@@ -609,7 +608,7 @@ impl<'a> Cpu<'a> {
                     pay!(cost);
                     return Flow::Next(1);
                 }
-                let (c2, vote, target) = self.plan_move(st, d);
+                let (c2, vote, target) = self.plan_move(st, d, cost);
                 pay!(c2);
                 if vote {
                     st.site[me * SITE + S_VOTE] = d + 1;
@@ -902,7 +901,7 @@ impl<'a> Cpu<'a> {
 /// `fixed_partner`: Some(..) in 0D (the paired slot).
 pub fn exec_slice(st: &mut State, p: &Params, snap: &[u32], c: usize, fixed_partner: Option<usize>, mut trace: Option<&mut Vec<TraceStep>>) {
     let fl = st.flags(c);
-    if fl & FL_OCC == 0 || fl & FL_EXEC != 0 || st.h(c, H_SLEEP) > 0 {
+    if fl & FL_OCC == 0 || fl & (FL_EXEC | FL_SLEEPING) != 0 || st.h(c, H_SLEEP) > 0 {
         return;
     }
     if p.energy_on && fl & FL_HALT != 0 {

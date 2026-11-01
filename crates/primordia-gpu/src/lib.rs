@@ -21,12 +21,12 @@ const EXEC_SHADER: &str = include_str!("exec.wgsl");
 const PHYS_SHADER: &str = include_str!("phys.wgsl");
 const WG: u32 = 64;
 const CTL_LEN: usize = 96;
-const BIRTH_CAP: usize = 16384;
+
 /// Epochs that may be in flight at once.
 const RING: usize = 6;
 /// Asynchronous full-state copies that may be outstanding.
 const COPIES: usize = 3;
-const MAX_VENTS: usize = 4096;
+
 const NONE: u32 = 0xFFFF_FFFF;
 /// Union-find rounds per epoch (each gated off on the GPU once converged).
 const LAB_ROUNDS: usize = 24;
@@ -91,11 +91,11 @@ pub struct GpuExec {
     phys_layout: wgpu::BindGroupLayout,
     pipes: Pipes,
     bufs: Option<Bufs>,
-    layout_key: (usize, usize, usize),
+    layout_key: (usize, usize, usize, usize, usize, usize),
     words: Vec<u32>,
     qwords: Vec<u32>,
-    /// number of transport batches; ctl blocks: [0,3) normal frame,
-    /// [3,6) mirrored frame, 6 = bonded energy flux
+    /// Number of transport batches; ctl blocks: [0,n) normal frame,
+    /// [n,2*n) mirrored frame, 2*n = bonded energy flux.
     n_batches: usize,
     map_key: u64,
     pub resident: bool,
@@ -224,7 +224,7 @@ impl GpuExec {
             phys_layout,
             pipes: Pipes { snap, exec, phys },
             bufs: None,
-            layout_key: (0, 0, 0),
+            layout_key: (0, 0, 0, 0, 0, 0),
             words: wgsl::param_words(p),
             qwords: wgsl::phys_words(p),
             n_batches: 0,
@@ -247,7 +247,8 @@ impl GpuExec {
 
     fn alloc(&mut self, p: &Params) {
         let n = p.geom.n;
-        let key = (n, p.lmax, p.nf);
+        let batches = phases::transport_batches(p, false).len();
+        let key = (n, p.lmax, p.nf, p.geom.size[1] as usize, wgsl::phys_tables(p).len(), batches);
         if self.bufs.is_some() && self.layout_key == key {
             return;
         }
@@ -271,7 +272,7 @@ impl GpuExec {
         });
         let small = d.create_buffer(&wgpu::BufferDescriptor {
             label: Some("small"),
-            size: ((ts::N * 2 + BIRTH_CAP * 6) * 4) as u64,
+            size: ((ts::N * 2 + n * 6) * 4) as u64,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -283,7 +284,7 @@ impl GpuExec {
         let tables = mk("tables", (wgsl::phys_tables(p).len() * 4) as u64);
         let light = mk("light", (n * 4) as u64);
         let rows = mk("rows", (p.geom.size[1].max(1) as usize * 4) as u64);
-        let vents = mk("vents", ((MAX_VENTS + 1) * 4) as u64);
+        let vents = mk("vents", ((2 * n + 1) * 4) as u64);
         let mmap = mk("mmap", (n * 4) as u64);
         let jf = mk("jf", (n * 3 * 8 * 4) as u64);
         let bo = mk("bo", (n * 8 * 4) as u64);
@@ -291,18 +292,18 @@ impl GpuExec {
         let expo = mk("expo", (n * 4) as u64);
         let tally = mk("tally", (ts::N * 2 * 4) as u64);
         let ctl = mk("ctl", (CTL_LEN * 4) as u64);
-        let ctl_all = mk("ctl_all", (CTL_LEN * 4 * 8) as u64);
+        let ctl_all = mk("ctl_all", (CTL_LEN * 4 * (2 * batches + 1)) as u64);
         let bw = mk("bw", (n * 12 * 4) as u64);
         let shdr = mk("shdr", sizes[1]);
         let stape = mk("stape", sizes[0]);
-        let births = mk("births", (BIRTH_CAP * 6 * 4) as u64);
+        let births = mk("births", (n * 6 * 4) as u64);
         // kernels write the dispatch arguments into iargs_w (bound); a copy moves
         // them into iargs (indirect-only), since one buffer cannot be both in
         // a single dispatch
         let iargs_w = mk("iargs_w", 64);
         let iargs = d.create_buffer(&wgpu::BufferDescriptor { label: Some("iargs"), size: 64, usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let params_all = mk("params_all", (pi::LEN * 4 * 28) as u64);
-        let res_size = ((ts::N * 2 + BIRTH_CAP * 6) * 4) as u64;
+        let res_size = ((ts::N * 2 + n * 6) * 4) as u64;
         let mk_slot = |label: &str, size: u64| Slot {
             buf: d.create_buffer(&wgpu::BufferDescriptor { label: Some(label), size, usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false }),
             ready: Arc::new(AtomicBool::new(false)),
@@ -361,18 +362,17 @@ impl GpuExec {
     fn write_static(&mut self, p: &Params) {
         let b = self.bufs.as_ref().unwrap();
         self.queue.write_buffer(&b.tables, 0, bytemuck::cast_slice(&wgsl::phys_tables(p)));
-        let mut all = vec![0u32; CTL_LEN * 8];
-        let mut nb = 0;
+        self.queue.write_buffer(&b.nbr, 0, bytemuck::cast_slice(&p.nbr));
+        let nb = phases::transport_batches(p, false).len();
+        let mut all = vec![0u32; CTL_LEN * (2 * nb + 1)];
         for (bi, batch) in phases::transport_batches(p, false).iter().enumerate() {
             write_ctl(&mut all[bi * CTL_LEN..(bi + 1) * CTL_LEN], p, batch, bi as u32, phase::TRANSPORT, 0);
-            nb = bi + 1;
         }
-        assert!(nb <= 3, "too many transport batches");
         for (bi, batch) in phases::transport_batches(p, true).iter().enumerate() {
-            write_ctl(&mut all[(3 + bi) * CTL_LEN..(4 + bi) * CTL_LEN], p, batch, bi as u32, phase::TRANSPORT, 0);
+            write_ctl(&mut all[(nb + bi) * CTL_LEN..(nb + bi + 1) * CTL_LEN], p, batch, bi as u32, phase::TRANSPORT, 0);
         }
         let e = FluxSpec { kappa: p.beta_q16, gamma: None, bonded_only: true, stream: 0x20000, outside: None };
-        write_ctl(&mut all[6 * CTL_LEN..7 * CTL_LEN], p, &[(0, e, 0, 255)], 0x20000, phase::ABSORB, 1);
+        write_ctl(&mut all[2 * nb * CTL_LEN..(2 * nb + 1) * CTL_LEN], p, &[(0, e, 0, 255)], 0x20000, phase::ABSORB, 1);
         self.queue.write_buffer(&b.ctl_all, 0, bytemuck::cast_slice(&all));
         self.n_batches = nb;
     }
@@ -495,7 +495,7 @@ impl GpuExec {
             let data = slot.buf.slice(..).get_mapped_range().expect("mapped result");
             let w: &[u32] = bytemuck::cast_slice(&data);
             let tally: Vec<u64> = (0..ts::N).map(|s| w[2 * s] as u64 | (w[2 * s + 1] as u64) << 32).collect();
-            let nb = (tally[ts::BIRTH_COUNT] as usize).min(BIRTH_CAP);
+            let nb = (tally[ts::BIRTH_COUNT] as usize).min(self.layout_key.0);
             let bw = &w[ts::N * 2..];
             let mut births: Vec<[u32; 6]> = (0..nb).map(|i| [bw[i * 6], bw[i * 6 + 1], bw[i * 6 + 2], bw[i * 6 + 3], bw[i * 6 + 4], bw[i * 6 + 5]]).collect();
             births.sort_by_key(|x| x[3]);
@@ -714,8 +714,12 @@ impl ExecBackend for GpuExec {
             qw[qi::MIRRORED] = mirrored as u32;
             q.write_buffer(&b.q, 0, bytemuck::cast_slice(&qw));
             q.write_buffer(&b.rows, 0, bytemuck::cast_slice(&phases::row_lights(p, epoch)));
-            let mut vw = vec![vents.len().min(MAX_VENTS) as u32];
-            vw.extend(vents.iter().take(MAX_VENTS));
+            // Aggregate duplicate positions without limiting the vent count.
+            // At most n distinct positions fit in the allocated 2*n+1 words.
+            let mut counts = std::collections::BTreeMap::<u32, u32>::new();
+            for &v in vents { *counts.entry(v).or_default() += 1; }
+            let mut vw = vec![counts.len() as u32];
+            for (pos, count) in counts { vw.extend([pos, count]); }
             q.write_buffer(&b.vents, 0, bytemuck::cast_slice(&vw));
             if let Some(m) = map {
                 let key = m.iter().fold(0xcbf29ce484222325u64, |h, &x| (h ^ x as u64).wrapping_mul(0x100000001b3));
@@ -745,7 +749,7 @@ impl ExecBackend for GpuExec {
             self.phys1(&mut enc, "k_vents");
         }
         if dims > 0 {
-            let base = if mirrored { 3 } else { 0 };
+            let base = if mirrored { self.n_batches } else { 0 };
             for bi in 0..self.n_batches {
                 self.use_ctl(&mut enc, base + bi);
                 for k in ["k_flux_a", "k_flux_b", "k_flux_c", "k_flux_d"] {
@@ -762,7 +766,7 @@ impl ExecBackend for GpuExec {
             self.phys(&mut enc, "k_expo", n);
             self.phys(&mut enc, "k_absorb", n);
             if p.bonds_on && p.beta_q16 > 0 {
-                self.use_ctl(&mut enc, 6);
+                self.use_ctl(&mut enc, 2 * self.n_batches);
                 for k in ["k_flux_a", "k_flux_b", "k_flux_c", "k_flux_d"] {
                     self.phys(&mut enc, k, n);
                 }
@@ -807,7 +811,7 @@ impl ExecBackend for GpuExec {
         let b = self.bufs.as_ref().unwrap();
         let tsz = (ts::N * 2 * 4) as u64;
         enc.copy_buffer_to_buffer(&b.tally, 0, &b.res[si].buf, 0, tsz);
-        enc.copy_buffer_to_buffer(&b.births, 0, &b.res[si].buf, tsz, (BIRTH_CAP * 6 * 4) as u64);
+        enc.copy_buffer_to_buffer(&b.births, 0, &b.res[si].buf, tsz, n as u64 * 6 * 4);
         let sub = self.queue.submit([enc.finish()]);
         let b = self.bufs.as_mut().unwrap();
         let slot = &mut b.res[si];

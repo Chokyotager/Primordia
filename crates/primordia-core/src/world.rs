@@ -5,7 +5,8 @@ use crate::events::{self, Event};
 use crate::exec;
 use crate::params::Params;
 use crate::phases;
-use crate::state::{State, Tally};
+use crate::state::{LedgerState, State, Tally};
+use std::sync::Arc;
 use anyhow::Result;
 
 /// Phase 6 implementation (CPU golden model or GPU).
@@ -92,8 +93,30 @@ pub fn config_hash(cfg: &Config) -> u64 {
     h
 }
 
+/// An observation and the exact rules that produced it. Configuration travels
+/// with the state rather than following the observer thread's delivery timing.
+#[derive(Clone)]
+pub struct Snapshot {
+    pub state: State,
+    pub cfg: Arc<Config>,
+    pub params: Arc<Params>,
+}
+impl std::ops::Deref for Snapshot {
+    type Target = State;
+    fn deref(&self) -> &State { &self.state }
+}
+struct SnapshotMeta {
+    vents: Vec<crate::state::Vent>,
+    next_vent: u32,
+    mirrored: bool,
+    cfg: Arc<Config>,
+    params: Arc<Params>,
+    accounting: Option<(LedgerState, Tally)>,
+}
+
 pub struct Sim {
     pub cfg: Config,
+    pub config_revision: u64,
     pub p: Params,
     pub st: State,
     /// Full event log (applied and pending), sorted by epoch.
@@ -112,28 +135,34 @@ pub struct Sim {
     /// whose GPU results have not arrived yet.
     pending: std::collections::VecDeque<(u64, Tally)>,
     /// Vents at each requested snapshot epoch.
-    snap_vents: std::collections::BTreeMap<u64, (Vec<crate::state::Vent>, u32)>,
+    snapshot_meta: std::collections::BTreeMap<u64, SnapshotMeta>,
+    completed_epoch: u64,
+    pending_copies: Vec<StateCopy>,
     /// Finished snapshots not yet taken.
-    snaps: Vec<State>,
-    /// Births / deaths / body moves of finished epochs (for snapshots).
-    epoch_stats: std::collections::BTreeMap<u64, (u64, u64, u64)>,
+    snaps: Vec<Snapshot>,
     /// Number of epochs whose labelling did not converge on the GPU (must stay 0).
     pub faults: u64,
 }
 
 impl Sim {
     pub fn new(cfg: Config, backend: Box<dyn ExecBackend>) -> Result<Sim> {
+        cfg.validate()?;
         let p = Params::new(&cfg);
         let st = State::init(&cfg, &p);
         Self::from_state(cfg, p, st, backend)
     }
     pub fn from_state(cfg: Config, p: Params, st: State, mut backend: Box<dyn ExecBackend>) -> Result<Sim> {
+        cfg.validate()?;
+        anyhow::ensure!(st.n == p.geom.n && st.lmax == p.lmax && st.nf == p.nf, "state layout does not match parameters");
         backend.reconfigure(&p);
         let map_image = load_map_image(&cfg, &p)?;
         let resident = backend.resident();
         Ok(Sim {
             cfg,
+            config_revision: 0,
             p,
+            completed_epoch: st.epoch,
+            pending_copies: vec![],
             st,
             events: vec![],
             backend,
@@ -143,9 +172,8 @@ impl Sim {
             cpu_stale: false,
             gpu_stale: resident,
             pending: Default::default(),
-            snap_vents: Default::default(),
+            snapshot_meta: Default::default(),
             snaps: vec![],
-            epoch_stats: Default::default(),
             faults: 0,
         })
     }
@@ -179,47 +207,41 @@ impl Sim {
     /// Resident backends copy on the GPU asynchronously; others copy at once.
     pub fn request_snapshot(&mut self) {
         let e = self.st.epoch;
+        if self.snapshot_meta.contains_key(&e) || self.snaps.iter().any(|s| s.epoch == e) { return; }
+        let cfg = Arc::new(self.cfg.clone());
+        let params = Arc::new(self.p.clone());
         if self.backend.resident() && self.cpu_stale {
-            self.snap_vents.insert(e, (self.st.vents.clone(), self.st.next_vent));
+            let accounting = (self.completed_epoch == e).then(|| (self.st.ledger.clone(), self.st.tally.clone()));
+            self.snapshot_meta.insert(e, SnapshotMeta {
+                vents: self.st.vents.clone(), next_vent: self.st.next_vent,
+                mirrored: self.st.mirrored, cfg, params, accounting,
+            });
             self.backend.request_copy(e);
         } else {
-            let mut s = self.st.clone();
-            let (b, d, m) = (self.st.tally.births, self.st.tally.deaths, self.st.tally.body_moves);
-            s.tally = Default::default();
-            (s.tally.births, s.tally.deaths, s.tally.body_moves) = (b, d, m);
-            self.snaps.push(s);
+            self.snaps.push(Snapshot { state: self.st.clone(), cfg, params });
         }
     }
-    /// Finished snapshots, oldest first. `wait`: block for all requested ones.
-    pub fn take_snapshots(&mut self, wait: bool) -> Vec<State> {
+    /// Finished snapshots, oldest first, with their epoch's rules/accounting.
+    pub fn take_snapshots(&mut self, wait: bool) -> Vec<Snapshot> {
         if self.backend.resident() {
-            // results first, so the ledger is current up to the snapshot epochs
             self.collect(wait);
-            for c in self.backend.poll_copies(wait) {
-                let mut s = State {
-                    n: self.st.n,
-                    lmax: self.st.lmax,
-                    nf: self.st.nf,
-                    epoch: c.epoch,
-                    mirrored: self.st.mirrored,
-                    tapes: c.tapes,
-                    hdr: c.hdr,
-                    fields: c.fields,
-                    site: c.site,
-                    vents: vec![],
-                    next_vent: 0,
-                    tally: Default::default(),
-                    ledger: self.st.ledger.clone(),
-                    light: c.light,
+            self.pending_copies.extend(self.backend.poll_copies(wait));
+            self.collect(wait);
+            for c in std::mem::take(&mut self.pending_copies) {
+                if self.snapshot_meta[&c.epoch].accounting.is_none() {
+                    self.pending_copies.push(c);
+                    continue;
+                }
+                let meta = self.snapshot_meta.remove(&c.epoch).expect("snapshot metadata");
+                let (ledger, tally) = meta.accounting.expect("snapshot epoch accounting collected");
+                let state = State {
+                    n: meta.params.geom.n, lmax: meta.params.lmax, nf: meta.params.nf,
+                    epoch: c.epoch, mirrored: meta.mirrored,
+                    tapes: c.tapes, hdr: c.hdr, fields: c.fields, site: c.site,
+                    vents: meta.vents, next_vent: meta.next_vent,
+                    tally, ledger, light: c.light,
                 };
-                if let Some((v, nv)) = self.snap_vents.remove(&c.epoch) {
-                    s.vents = v;
-                    s.next_vent = nv;
-                }
-                if let Some(&(b, d, m)) = c.epoch.checked_sub(1).and_then(|e| self.epoch_stats.get(&e)) {
-                    (s.tally.births, s.tally.deaths, s.tally.body_moves) = (b, d, m);
-                }
-                self.snaps.push(s);
+                self.snaps.push(Snapshot { state, cfg: meta.cfg, params: meta.params });
             }
         }
         std::mem::take(&mut self.snaps)
@@ -254,11 +276,6 @@ impl Sim {
             tl.births = r.tally[ts::BIRTHS];
             tl.deaths = r.tally[ts::DEATHS];
             tl.body_moves = r.tally[ts::BODY_MOVES];
-            self.epoch_stats.insert(e, (tl.births, tl.deaths, tl.body_moves));
-            while self.epoch_stats.len() > 64 {
-                let k = *self.epoch_stats.keys().next().unwrap();
-                self.epoch_stats.remove(&k);
-            }
             if r.tally[ts::FAULT] != 0 {
                 self.faults += 1;
                 self.rejected.push(format!("epoch {e}: GPU body labelling did not converge ({} cells); body moves skipped", r.tally[ts::FAULT]));
@@ -273,6 +290,10 @@ impl Sim {
                 let a = if p.chem_on { t(ts::L_ATOMS) } else { 0 };
                 phases::ledger_apply(&mut self.st, t(ts::L_ENERGY), m, a);
                 self.reset_tally();
+            }
+            self.completed_epoch = e + 1;
+            if let Some(meta) = self.snapshot_meta.get_mut(&(e + 1)) {
+                meta.accounting = Some((self.st.ledger.clone(), self.st.tally.clone()));
             }
         }
     }
@@ -416,18 +437,34 @@ impl Sim {
     }
 
     fn apply_set(&mut self, ev: &Event) -> Result<()> {
-        let key = ev.params.get("key").and_then(|v| v.as_str()).ok_or_else(|| anyhow::anyhow!("set needs key"))?;
-        let val = ev.params.get("value").cloned().unwrap_or(serde_json::Value::Null);
-        let tv: toml::Value = json_to_toml(&val)?;
-        let new = self.cfg.with_override(key, tv)?;
+        let new = edited_config(&self.cfg, ev)?;
         let np = Params::new(&new);
-        anyhow::ensure!(np.nf == self.p.nf && np.lmax == self.p.lmax && np.geom.n == self.p.geom.n, "edit would change the state layout");
+        let map_image = load_map_image(&new, &np)?;
+        // Consume old copies before reconfiguration can replace GPU buffers.
+        let snapshots = self.take_snapshots(true);
+        self.snaps.extend(snapshots);
+        self.backend.reconfigure(&np);
         self.cfg = new;
+        self.config_revision += 1;
         self.p = np;
-        self.backend.reconfigure(&self.p);
+        self.map_image = map_image;
         self.touch();
         Ok(())
     }
+}
+
+/// Apply a set event without changing the interpretation of stored arrays.
+/// Shared by the live simulation and legacy checkpoint configuration recovery.
+pub fn edited_config(cfg: &Config, ev: &Event) -> Result<Config> {
+    let key = ev.params.get("key").and_then(|v| v.as_str()).ok_or_else(|| anyhow::anyhow!("set needs key"))?;
+    let value = json_to_toml(ev.params.get("value").unwrap_or(&serde_json::Value::Null))?;
+    let new = cfg.with_override(key, value)?;
+    let p = Params::new(cfg);
+    let np = Params::new(&new);
+    anyhow::ensure!(np.nf == p.nf && np.k == p.k && np.s == p.s && np.lmax == p.lmax
+        && np.geom.dims == p.geom.dims && np.geom.size == p.geom.size
+        && new.chemistry.species == cfg.chemistry.species, "edit would change the state layout");
+    Ok(new)
 }
 
 pub fn json_to_toml(v: &serde_json::Value) -> Result<toml::Value> {

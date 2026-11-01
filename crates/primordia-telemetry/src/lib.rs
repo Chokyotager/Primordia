@@ -106,7 +106,9 @@ pub struct Recorder {
     pub last_clusters: Vec<clusters::Cluster>,
     pop_sunset: Option<u64>,
     pop_sunrise: Option<u64>,
-    births_day: u64,
+    births_by_epoch: BTreeMap<u64, u64>,
+    births_closed_through: u64,
+    day_period: u64,
 }
 
 /// Behaviour instructions whose frequency is logged as a live series.
@@ -279,7 +281,9 @@ impl Recorder {
             last_clusters: vec![],
             pop_sunset: None,
             pop_sunrise: None,
-            births_day: 0,
+            births_by_epoch: BTreeMap::new(),
+            births_closed_through: sim.st.epoch,
+            day_period: sim.p.day_period,
         })
     }
 
@@ -303,27 +307,31 @@ impl Recorder {
     /// True when `record` will read cell state after this epoch (so a
     /// resident simulation must provide a snapshot).
     pub fn needs_state(&self, epoch: u64) -> bool {
-        needs_state(&self.cfg, epoch)
+        needs_state(&self.cfg, epoch) || day_boundary(self.day_period, epoch)
     }
 
     /// Record everything due after the epoch that just finished (blocking:
     /// syncs a resident simulation when cell state is needed).
     pub fn record(&mut self, sim: &mut Sim) -> Result<()> {
-        let b = sim.take_births();
-        self.record_births(&b)?;
-        if self.needs_state(sim.st.epoch) {
+        self.cfg = sim.cfg.telemetry.clone();
+        if needs_state(&self.cfg, sim.st.epoch) || day_boundary(sim.p.day_period, sim.st.epoch) || self.day_period != sim.p.day_period {
             sim.sync();
+            let b = sim.take_births();
+            self.record_births(&b)?;
             let cfg = sim.cfg.clone();
             self.record_state(&sim.st, &sim.p, &cfg)
         } else {
+            let b = sim.take_births();
+            self.record_births(&b)?;
             self.record_ledger(&sim.st);
             Ok(())
         }
     }
 
     pub fn record_births(&mut self, births: &[primordia_core::world::Birth]) -> Result<()> {
-        self.births_day += births.len() as u64;
+        anyhow::ensure!(births.iter().all(|b| b[0] as u64 >= self.births_closed_through), "birth arrived after its accounting interval was closed");
         for b in births {
+            *self.births_by_epoch.entry(b[0] as u64).or_default() += 1;
             self.lineage.push(vec![V::I(b[0] as i64), V::I(b[1] as i64), V::I(b[2] as i64), V::I(b[3] as i64), V::I(b[4] as i64), V::I(b[5] as i64)])?;
         }
         Ok(())
@@ -341,6 +349,19 @@ impl Recorder {
     /// Record from a state snapshot taken after epoch `st.epoch - 1`.
     pub fn record_state(&mut self, st: &primordia_core::State, p: &primordia_core::Params, cfg: &primordia_core::Config) -> Result<()> {
         let e = st.epoch; // epochs completed
+        self.cfg = cfg.telemetry.clone();
+        if self.day_period != p.day_period {
+            // A changed day length starts a new (possibly partial) interval.
+            self.day_period = p.day_period;
+            self.pop_sunset = None;
+            self.pop_sunrise = None;
+            self.births_by_epoch = self.births_by_epoch.split_off(&e.saturating_sub(1));
+            self.births_closed_through = e.saturating_sub(1);
+        }
+        if p.day_period == 0 {
+            self.births_by_epoch = self.births_by_epoch.split_off(&e);
+            self.births_closed_through = e;
+        }
         let due = |every: u64| every > 0 && e % every == 0;
         let mut s = std::mem::take(&mut self.summary);
         s.epoch = e;
@@ -348,7 +369,7 @@ impl Recorder {
         s.energy_residual = st.ledger.energy_residual;
         s.matter_residual = st.ledger.matter_residual;
         s.atom_residual = st.ledger.atom_residual;
-        if due(self.cfg.metrics_every.max(1)) {
+        if due(self.cfg.metrics_every.max(1)) || day_boundary(p.day_period, e) {
             let mut occ = 0u64;
             let mut halted = 0u64;
             let mut sleeping = 0u64;
@@ -368,7 +389,7 @@ impl Recorder {
                     if h[H_FLAGS] & FL_HALT != 0 {
                         halted += 1;
                     }
-                    if h[H_SLEEP] > 0 {
+                    if h[H_SLEEP] > 0 || h[H_FLAGS] & FL_SLEEPING != 0 {
                         sleeping += 1;
                     }
                     if st.tape(c).contains(&isa::op::SLEEP) {
@@ -552,7 +573,10 @@ impl Recorder {
             }
             if dp > 0 && e % dp == 0 && e > 0 {
                 let surv = self.pop_sunset.map(|ps| if ps > 0 { occ as f64 / ps as f64 } else { 0.0 });
-                let births = std::mem::take(&mut self.births_day);
+                let future = self.births_by_epoch.split_off(&e);
+                let births = self.births_by_epoch.values().sum::<u64>();
+                self.births_by_epoch = future;
+                self.births_closed_through = e;
                 let deaths = self.pop_sunrise.map(|p0| (births as i64 - (occ as i64 - p0 as i64)).max(0));
                 if let Some(v) = surv {
                     s.night_survival = v;
@@ -761,6 +785,10 @@ impl Recorder {
 }
 
 /// True when the recorder needs cell state after `epoch` epochs.
+pub fn day_boundary(period: u64, epoch: u64) -> bool {
+    period > 0 && epoch > 0 && (epoch % period == 0 || epoch % period == period / 2)
+}
+
 pub fn needs_state(c: &primordia_core::config::TelemetryCfg, epoch: u64) -> bool {
     [c.metrics_every, c.opcode_every, c.chirality_every, c.entropy_every, c.assay_every, c.census_every, c.ecology_every, c.cluster_every]
         .iter()

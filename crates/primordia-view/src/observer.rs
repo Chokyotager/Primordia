@@ -9,6 +9,7 @@ use anyhow::Result;
 use primordia_core::events::Event;
 use primordia_core::world::Birth;
 use primordia_core::{Config, Params, State};
+use primordia_core::world::Snapshot;
 use primordia_telemetry::{Recorder, Summary};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -39,7 +40,7 @@ pub struct Want {
 pub enum Msg {
     Births(Vec<Birth>),
     Event(Event),
-    State(Box<State>, Want, f64, String),
+    State(Box<Snapshot>, Want, f64, String),
     View(ViewSettings),
     Done,
 }
@@ -64,7 +65,7 @@ pub struct Observer {
     pub shared: Arc<Mutex<Shared>>,
     /// The observer is idle and can take an optional (render / web) snapshot.
     pub idle: Arc<AtomicBool>,
-    cadence: primordia_core::config::TelemetryCfg,
+    last_revision: u64,
     feed: bool,
     last_render: Instant,
     last_web: Instant,
@@ -77,10 +78,9 @@ impl Observer {
         let shared = Arc::new(Mutex::new(Shared::default()));
         let idle = Arc::new(AtomicBool::new(true));
         let has_feed = feed.is_some();
-        let cadence = cfg.telemetry.clone();
         let (s2, i2) = (shared.clone(), idle.clone());
         let handle = std::thread::spawn(move || run(rx, cfg, p, rec, sink, feed, view, s2, i2, render));
-        Observer { tx, handle: Some(handle), shared, idle, cadence, feed: has_feed, last_render: Instant::now() - Duration::from_secs(10), last_web: Instant::now() - Duration::from_secs(10), render_every: Duration::from_millis(80) }
+        Observer { tx, handle: Some(handle), shared, idle, last_revision: 0, feed: has_feed, last_render: Instant::now() - Duration::from_secs(10), last_web: Instant::now() - Duration::from_secs(10), render_every: Duration::from_millis(80) }
     }
 
     pub fn send(&self, m: Msg) {
@@ -88,10 +88,12 @@ impl Observer {
     }
 
     /// What the stepping thread should snapshot after epoch `epoch`.
-    pub fn want(&mut self, epoch: u64, render_dirty: bool) -> Want {
-        let t = &self.cadence;
+    pub fn want(&mut self, epoch: u64, render_dirty: bool, cfg: &Config, revision: u64) -> Want {
+        let changed = revision != self.last_revision;
+        self.last_revision = revision;
+        let t = &cfg.telemetry;
         let mut w = Want {
-            telemetry: primordia_telemetry::needs_state(t, epoch),
+            telemetry: changed || primordia_telemetry::needs_state(t, epoch) || primordia_telemetry::day_boundary(cfg.energy.sun.day_period, epoch),
             sink: (t.hash_every > 0 && epoch % t.hash_every == 0) || (t.snapshot_every > 0 && epoch % t.snapshot_every == 0),
             ..Default::default()
         };
@@ -109,7 +111,7 @@ impl Observer {
 
     /// Deliver a snapshot; optional work (render / web only) is dropped
     /// rather than stalling the simulation when the observer is busy.
-    pub fn deliver(&self, st: State, w: Want, eps: f64, backend: String) {
+    pub fn deliver(&self, st: Snapshot, w: Want, eps: f64, backend: String) {
         let required = w.telemetry || w.sink || w.save;
         if !required && !(w.render || w.web) {
             return;
@@ -132,7 +134,7 @@ impl Observer {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn run(rx: Receiver<Msg>, cfg: Config, p: Params, mut rec: Recorder, mut sink: Option<Box<dyn Sink>>, feed: Option<Arc<web::Feed>>, mut view: ViewSettings, shared: Arc<Mutex<Shared>>, idle: Arc<AtomicBool>, render: bool) -> Summary {
+fn run(rx: Receiver<Msg>, _cfg: Config, p: Params, mut rec: Recorder, mut sink: Option<Box<dyn Sink>>, feed: Option<Arc<web::Feed>>, mut view: ViewSettings, shared: Arc<Mutex<Shared>>, idle: Arc<AtomicBool>, render: bool) -> Summary {
     let mut chron = Chronicler::new();
     let mut ctx = render::RenderCtx::default();
     let mut last_series = Instant::now() - Duration::from_secs(60);
@@ -149,7 +151,9 @@ fn run(rx: Receiver<Msg>, cfg: Config, p: Params, mut rec: Recorder, mut sink: O
             Msg::Done => break,
             Msg::View(v) => view = ViewSettings { params: view.params.clone(), ..v },
             Msg::Births(b) => {
-                let _ = rec.record_births(&b);
+                if let Err(e) = rec.record_births(&b) {
+                    note(&shared, "⚠", format!("birth accounting error: {e:#}"), rec.summary.epoch);
+                }
             }
             Msg::Event(e) => {
                 if let Some(s) = sink.as_mut() {
@@ -157,8 +161,12 @@ fn run(rx: Receiver<Msg>, cfg: Config, p: Params, mut rec: Recorder, mut sink: O
                 }
                 note(&shared, "✋", format!("Intervention: {} {}", e.kind, e.params), e.epoch);
             }
-            Msg::State(st, w, eps, backend) => {
-                rec.record_ledger(&st);
+            Msg::State(snapshot, w, eps, backend) => {
+                let st = &snapshot.state;
+                let cfg = &*snapshot.cfg;
+                let p = &*snapshot.params;
+                view.params = snapshot.params.clone();
+                rec.record_ledger(st);
                 if w.telemetry {
                     if let Err(e) = rec.record_state(&st, &p, &cfg) {
                         note(&shared, "⚠", format!("telemetry error: {e:#}"), st.epoch);

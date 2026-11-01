@@ -24,6 +24,8 @@ pub const FL_OCC: u32 = 1;
 pub const FL_HALT: u32 = 2;
 pub const FL_EXEC: u32 = 4;
 pub const FL_NEWBORN: u32 = 8;
+/// Slept at the start of this epoch; remains protected after the counter reaches zero.
+pub const FL_SLEEPING: u32 = 16;
 pub const ORIENT_SHIFT: u32 = 8;
 pub const ORIENT_MASK: u32 = 0xFF << 8;
 pub const BOND_SHIFT: u32 = 16;
@@ -171,7 +173,7 @@ pub struct Params {
     pub arr_rac: usize,
     pub arr_decay: usize,
     pub arr_bond: usize,
-    pub pois: Vec<u32>,
+    pub pois: std::sync::Arc<Vec<u32>>,
     /// Raw lattice neighbour table, n x 6, NONE where there is no neighbour.
     pub nbr: Vec<u32>,
     pub x4_species: Option<usize>,
@@ -363,7 +365,7 @@ impl Params {
                     (0..6u32).map(move |d| g.neighbor(c, d).map(|t| t as u32).unwrap_or(NONE))
                 })
                 .collect(),
-            x4_species: if c.chemistry.enabled {
+            x4_species: if c.chemistry.enabled && !c.chemistry.species.is_empty() {
                 c.chemistry.species.iter().position(|s| s == "X4").or(Some(c.chemistry.species.len().saturating_sub(1)))
             } else {
                 None

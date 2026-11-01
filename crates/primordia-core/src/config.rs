@@ -830,6 +830,38 @@ impl Config {
     }
 
     pub fn validate(&self) -> Result<()> {
+        for (name, value) in [
+            ("world.init_occupancy", self.world.init_occupancy),
+            ("energy.absorb_alpha", self.energy.absorb_alpha),
+            ("energy.dissipation", self.energy.dissipation),
+            ("temperature.relax", self.temperature.relax),
+            ("chemistry.global_sink", self.chemistry.global_sink),
+            ("signals.decay", self.signals.decay),
+            ("energy.sun.attenuation", self.energy.sun.attenuation),
+            ("energy.vents.spawn_rate", self.energy.vents.spawn_rate),
+            ("energy.vents.drift", self.energy.vents.drift),
+            ("chirality.eta_min", self.chirality.eta_min),
+            ("chirality.sigma_min", self.chirality.sigma_min),
+            ("chirality.cross_inhibition", self.chirality.cross_inhibition),
+            ("shielding.s_bond", self.shielding.s_bond),
+            ("shielding.s_occupied", self.shielding.s_occupied),
+            ("shielding.w_occupied", self.shielding.w_occupied),
+            ("bonds.vote_threshold", self.bonds.vote_threshold),
+            ("mutation.copy.sub", self.mutation.copy.sub),
+            ("mutation.copy.ins", self.mutation.copy.ins),
+            ("mutation.copy.del", self.mutation.copy.del),
+        ] {
+            ensure!((0.0..=1.0).contains(&value), "{name} must be in 0..=1");
+        }
+        ensure!(self.mutation.copy.sub + self.mutation.copy.ins + self.mutation.copy.del <= 1.0, "copy error probabilities sum to more than 1");
+        for (name, value) in [
+            ("mutation.background", self.mutation.background), ("mutation.radiation", self.mutation.radiation),
+            ("mutation.hand_flip", self.mutation.hand_flip), ("decay.rate", self.decay.rate),
+            ("decay.light_factor", self.decay.light_factor), ("bonds.break_rate", self.bonds.break_rate),
+            ("chirality.racemization.rate", self.chirality.racemization.rate),
+        ] { ensure!(value.is_finite() && value >= 0.0, "{name} must be finite and nonnegative"); }
+        ensure!(self.energy.sense_energy_scale > 0 && self.energy.sense_free_scale > 0, "sense scales must be positive");
+        ensure!(self.temperature.t_ref.is_finite() && self.temperature.t_ref > 0.0, "temperature.t_ref must be positive");
         let w = &self.world;
         ensure!(w.dims <= 3, "dims must be 0..=3");
         let axes = if w.dims == 0 { 1 } else { w.dims as usize };
@@ -873,12 +905,17 @@ impl Config {
             ensure!(ch.mass.len() == ch.species.len(), "chemistry.mass length");
             ensure!(ch.init.len() == ch.species.len(), "chemistry.init length");
             ensure!(ch.species.len() <= 8, "at most 8 species");
+            ensure!(ch.reactions.len() <= crate::wgsl::qi::MAX_RX, "at most {} reactions are supported by the shared CPU/GPU model", crate::wgsl::qi::MAX_RX);
+            ensure!(ch.mass.iter().all(|&m| m > 0), "chemical masses must be positive");
+            let names: std::collections::BTreeSet<_> = ch.species.iter().collect();
+            ensure!(names.len() == ch.species.len(), "duplicate chemical species");
             for (i, r) in ch.reactions.iter().enumerate() {
+                ensure!(r.rate.is_finite() && r.rate >= 0.0, "reaction {i}: invalid rate");
                 let m = |names: &Vec<String>| -> Result<u32> {
                     let mut s = 0;
                     for n in names {
                         let k = ch.species.iter().position(|x| x == n).with_context(|| format!("unknown species {n}"))?;
-                        s += ch.mass[k];
+                        s = u32::checked_add(s, ch.mass[k]).context("reaction mass overflow")?;
                     }
                     Ok(s)
                 };

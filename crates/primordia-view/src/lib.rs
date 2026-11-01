@@ -298,7 +298,9 @@ fn stepper(mut sim: Sim, mut obs: Observer, rx: Receiver<Cmd>, status: Arc<Mutex
                     let w = wants.entry(sim.st.epoch).or_default();
                     w.save = true;
                     w.telemetry = true;
-                    for st in sim.take_snapshots(true) {
+                    let snapshots = sim.take_snapshots(true);
+                    obs.send(Msg::Births(sim.take_births()));
+                    for st in snapshots {
                         let w = wants.remove(&st.epoch).unwrap_or_default();
                         obs.deliver(st, w, eps, backend.clone());
                     }
@@ -374,7 +376,7 @@ fn stepper(mut sim: Sim, mut obs: Observer, rx: Receiver<Cmd>, status: Arc<Mutex
             }
         }
         // what the observer needs from the state after this epoch
-        let mut w = obs.want(sim.st.epoch, dirty);
+        let mut w = obs.want(sim.st.epoch, dirty, &sim.cfg, sim.config_revision);
         if !do_step {
             // paused: telemetry and run-dir cadences were already served
             w.telemetry = false;
@@ -391,7 +393,11 @@ fn stepper(mut sim: Sim, mut obs: Observer, rx: Receiver<Cmd>, status: Arc<Mutex
                 dirty = false;
             }
         }
-        for st in sim.take_snapshots(false) {
+        let snapshots = sim.take_snapshots(false);
+        let births = sim.take_births();
+        for x in &births { lineage.insert(x[2], x[1]); }
+        if !births.is_empty() { obs.send(Msg::Births(births)); }
+        for st in snapshots {
             let w = wants.remove(&st.epoch).unwrap_or_default();
             obs.deliver(st, w, eps, backend.clone());
         }
@@ -505,7 +511,7 @@ fn inspect(sim: &Sim, c: usize, lineage: &HashMap<u32, u32>) -> Inspect {
     let mut trace = vec![];
     if fl & FL_OCC != 0 {
         let mut copy = st.clone();
-        copy.hdr[c * HDR + H_FLAGS] &= !(FL_EXEC | FL_HALT);
+        copy.hdr[c * HDR + H_FLAGS] &= !(FL_EXEC | FL_HALT | FL_SLEEPING);
         copy.hdr[c * HDR + H_SLEEP] = 0;
         let snap = flag_snapshot(&copy);
         let partner = if p.geom.dims == 0 { Some((c + 1) % st.n) } else { None };
@@ -700,7 +706,7 @@ impl App {
             paint_species: 0,
             paint_hand: 0,
             radius: 4.0,
-            genome: "36 36 36 36 36 36 36 4d 67 40 2c 12 13 15 c4".into(),
+            genome: "36 36 36 36 36 36 36 4f 67 40 2c 12 13 15 c4".into(),
             mirror_seed: false,
             seed_energy: 1000,
             wall_type: "reflect".into(),
@@ -967,7 +973,7 @@ impl eframe::App for App {
                                     self.genome = isa::to_hex(&isa::MINIMAL_REPLICATOR);
                                 }
                                 if ui.selectable_label(false, "metabolic budding replicator (L)").clicked() {
-                                    self.genome = "36 36 36 36 36 36 36 4d 67 40 2c 12 13 15 c4".into();
+                                    self.genome = "36 36 36 36 36 36 36 4f 67 40 2c 12 13 15 c4".into();
                                 }
                                 for g in top.iter().take(10) {
                                     if ui.selectable_label(false, format!("evolved: {g}")).clicked() {

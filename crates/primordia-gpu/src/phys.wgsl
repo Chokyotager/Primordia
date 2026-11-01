@@ -33,7 +33,7 @@ const C_ANYOUT: u32 = 3u;
 const C_PHASE: u32 = 4u;
 const C_F: u32 = 8u;
 const CF_STRIDE: u32 = 10u;
-const BIRTH_CAP: u32 = 16384u;
+
 
 // ------------------------------------------------------------- arithmetic
 
@@ -292,13 +292,17 @@ fn k_sun(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocatio
 fn k_vents() {
     let nv = vents[0];
     for (var i = 0u; i < nv; i = i + 1u) {
-        let c = vents[1u + i];
-        if (!has(G_CHEM_ONLY)) { setF(c, 0u, sat_add(F(c, 0u), Q[Q_VENT_RATE])); }
-        setF(c, 1u, sat_add(F(c, 1u), Q[Q_VENT_HEAT]));
-        let x4 = Q[Q_X4];
-        if (x4 != NONE) {
-            for (var h = 0u; h < 2u; h = h + 1u) {
-                setF(c, f_chem(x4, h), F(c, f_chem(x4, h)) + Q[Q_VENT_X4]);
+        let c = vents[1u + 2u * i];
+        let count = vents[2u + 2u * i];
+        // Repeat injections to retain identical saturation/rounding semantics.
+        for (var j = 0u; j < count; j = j + 1u) {
+            if (!has(G_CHEM_ONLY)) { setF(c, 0u, sat_add(F(c, 0u), Q[Q_VENT_RATE])); }
+            setF(c, 1u, sat_add(F(c, 1u), Q[Q_VENT_HEAT]));
+            let x4 = Q[Q_X4];
+            if (x4 != NONE) {
+                for (var h = 0u; h < 2u; h = h + 1u) {
+                    setF(c, f_chem(x4, h), F(c, f_chem(x4, h)) + Q[Q_VENT_X4]);
+                }
             }
         }
     }
@@ -612,7 +616,7 @@ fn k_flagclear(@builtin(global_invocation_id) gid: vec3<u32>) {
     // bond requests lapse after one epoch without a slice (bonds.mutual)
     var req = 0u;
     if ((hdr[i] & FL_EXEC) == 0u) { req = REQ_MASK; }
-    hdr[i] = hdr[i] & ~(FL_EXEC | FL_NEWBORN | req);
+    hdr[i] = (hdr[i] & ~(FL_EXEC | FL_NEWBORN | FL_SLEEPING | req)) | select(0u, FL_SLEEPING, H(c, H_SLEEP) > 0u);
     if (!has(G_ENERGY) && H(c, H_SLEEP) > 0u) { setH(c, H_SLEEP, H(c, H_SLEEP) - 1u); }
 }
 
@@ -711,7 +715,7 @@ fn site_cell(c: u32) {
             h = (h ^ tb(c, i)) * 0x01000193u;
         }
         let slot = atomicAdd(&tally[2u * T_BIRTH_COUNT], 1u);
-        if (slot < BIRTH_CAP) {
+        if (slot < Q[Q_N]) {
             let b = slot * 6u;
             births[b] = Q[Q_EPOCH];
             births[b + 1u] = H(c, H_PARENT);
@@ -1038,7 +1042,25 @@ fn mrnd() -> u32 {
     return r;
 }
 fn poisson24(lam: u32, u: u32, kmax: u32) -> u32 {
-    if (lam == 0u) { return 0u; }
+    if (lam == 0u || kmax == 0u) { return 0u; }
+    if (lam > (4u << 24u)) {
+        if (lam >= (POIS_MAX << 24u)) { return kmax; }
+        let row = lam >> 18u;
+        let frac = lam & ((1u << 18u) - 1u);
+        var lo = 0u;
+        var hi = kmax;
+        loop {
+            if (lo >= hi) { break; }
+            let mid = (lo + hi) / 2u;
+            let at = Q[Q_POIS_OFF] + POIS_EXP_SIZE + row * POIS_CAP + mid;
+            let a = TB[at];
+            let b = TB[at + POIS_CAP];
+            let x = mulhilo(a - b, frac);
+            let cdf = a - ((x.x << 14u) | (x.y >> 18u));
+            if (u < cdf) { hi = mid; } else { lo = mid + 1u; }
+        }
+        return lo;
+    }
     var p: u32;
     if (lam < (1u << 20u)) {
         let l = lam << 8u;
@@ -1046,7 +1068,7 @@ fn poisson24(lam: u32, u: u32, kmax: u32) -> u32 {
         let l3 = mulhilo(l2, l).x;
         p = 0xFFFFFFFFu - l + l2 / 2u - l3 / 6u;
     } else {
-        p = TB[Q[Q_POIS_OFF] + min(lam >> 14u, 65535u)];
+        p = TB[Q[Q_POIS_OFF] + (lam >> 14u)];
     }
     var cdf = p;
     var k = 0u;
@@ -1064,9 +1086,11 @@ fn elig(ch: u32, b: u32) -> bool {
     if (ch == 2u) { return is_chiral(b); }
     return b != 0u;
 }
-fn flip_frame(v: u32, bit: u32) -> u32 {
-    if (mirrored()) { return mirror_b(mirror_b(v) ^ (1u << bit)); }
-    return (v ^ (1u << bit)) & 0xFFu;
+fn flip_frame(v: u32, draw: u32) -> u32 {
+    let bit = draw & 7u;
+    let frame = (((draw >> 3u) & 1u) != 0u) != mirrored();
+    if (frame) { return mirror_b(mirror_b(v) ^ (1u << bit)); }
+    return v ^ (1u << bit);
 }
 
 fn mutate_cell(c: u32) {
@@ -1123,7 +1147,7 @@ fn mutate_cell(c: u32) {
             let old = tb(c, pos);
             var nw = 0u;
             if (ch <= 1u) {
-                nw = flip_frame(old, mrnd() % 8u);
+                nw = flip_frame(old, mrnd());
             } else if (ch == 2u) {
                 nw = mirror_b(old);
             }

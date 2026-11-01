@@ -10,7 +10,7 @@ use anyhow::{Result, ensure};
 use rayon::prelude::*;
 use std::io::{Read, Write};
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Vent {
     pub id: u32,
     pub pos: u32,
@@ -19,7 +19,7 @@ pub struct Vent {
 }
 
 /// Per-epoch ledger tallies (reset at the start of every epoch).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Tally {
     pub energy_source: i64,
     pub energy_sink: i64,
@@ -35,7 +35,7 @@ pub struct Tally {
     pub body_moves: u64,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct LedgerState {
     pub energy_prev: i64,
     pub matter_expected: [i64; 3],
@@ -458,7 +458,7 @@ impl State {
         let f = std::fs::File::create(path)?;
         let mut z = zstd::Encoder::new(f, 3)?;
         z.write_all(b"PSNP")?;
-        z.write_all(&1u32.to_le_bytes())?;
+        z.write_all(&2u32.to_le_bytes())?;
         z.write_all(&config_hash.to_le_bytes())?;
         z.write_all(&self.epoch.to_le_bytes())?;
         z.write_all(&[self.mirrored as u8])?;
@@ -486,53 +486,90 @@ impl State {
             lb.extend_from_slice(&x.to_le_bytes());
         }
         put(&mut z, &lb)?;
+        put(&mut z, &serde_json::to_vec(&(&self.ledger, &self.tally))?)?;
+        put(&mut z, &w32(&self.light))?;
         z.finish()?;
         Ok(())
     }
 
+    /// Version, configuration hash, and completed epoch, without loading arrays.
+    pub fn snapshot_header(path: &std::path::Path) -> Result<(u32, u64, u64)> {
+        let mut z = zstd::Decoder::new(std::fs::File::open(path)?)?;
+        let mut h = [0u8; 25];
+        z.read_exact(&mut h)?;
+        ensure!(&h[..4] == b"PSNP", "bad snapshot magic");
+        let version = u32::from_le_bytes(h[4..8].try_into()?);
+        ensure!(version == 1 || version == 2, "snapshot version {version}");
+        Ok((version, u64::from_le_bytes(h[8..16].try_into()?), u64::from_le_bytes(h[16..24].try_into()?)))
+    }
+
     pub fn read_snapshot(path: &std::path::Path, p: &Params) -> Result<(State, u64)> {
-        let f = std::fs::File::open(path)?;
-        let mut z = zstd::Decoder::new(f)?;
-        let mut all = vec![];
-        z.read_to_end(&mut all)?;
-        ensure!(&all[0..4] == b"PSNP", "bad snapshot magic");
-        let ver = u32::from_le_bytes(all[4..8].try_into()?);
-        ensure!(ver == 1, "snapshot version {ver}");
-        let cfg_hash = u64::from_le_bytes(all[8..16].try_into()?);
-        let epoch = u64::from_le_bytes(all[16..24].try_into()?);
-        let mirrored = all[24] != 0;
-        let mut pos = 25;
-        let mut get = || -> Result<Vec<u8>> {
-            let n = u64::from_le_bytes(all[pos..pos + 8].try_into()?) as usize;
-            pos += 8;
-            let v = all[pos..pos + n].to_vec();
-            pos += n;
-            Ok(v)
+        let mut z = zstd::Decoder::new(std::fs::File::open(path)?)?;
+        let mut h = [0u8; 25];
+        z.read_exact(&mut h)?;
+        ensure!(&h[..4] == b"PSNP", "bad snapshot magic");
+        let version = u32::from_le_bytes(h[4..8].try_into()?);
+        ensure!(version == 1 || version == 2, "snapshot version {version}");
+        let cfg_hash = u64::from_le_bytes(h[8..16].try_into()?);
+        let epoch = u64::from_le_bytes(h[16..24].try_into()?);
+        ensure!(h[24] <= 1, "invalid mirror flag");
+        // Require exact array lengths. Stream variable blocks instead of
+        // reserving the file's declared length before checking its contents.
+        let mut get = |limit: usize, exact: bool| -> Result<Vec<u8>> {
+            let mut nb = [0; 8];
+            z.read_exact(&mut nb)?;
+            let n = usize::try_from(u64::from_le_bytes(nb))?;
+            ensure!(n <= limit && (!exact || n == limit), "snapshot block length {n}, expected {}{limit}", if exact { "" } else { "at most " });
+            let mut data = Vec::with_capacity(if exact { n } else { n.min(65536) });
+            z.by_ref().take(n as u64).read_to_end(&mut data)?;
+            ensure!(data.len() == n, "truncated snapshot block");
+            Ok(data)
         };
-        let r32 = |b: Vec<u8>| -> Vec<u32> { b.chunks(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect() };
+        let r32 = |b: Vec<u8>| -> Result<Vec<u32>> {
+            ensure!(b.len() % 4 == 0, "unaligned snapshot words");
+            Ok(b.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect())
+        };
         let mut st = State::empty(p);
         st.epoch = epoch;
-        st.mirrored = mirrored;
-        st.tapes = get()?;
-        st.hdr = r32(get()?);
-        st.fields = r32(get()?);
-        st.site = r32(get()?);
-        ensure!(st.tapes.len() == p.geom.n * p.lmax && st.fields.len() == p.geom.n * p.nf, "snapshot does not match config geometry");
-        let vb = get()?;
-        for ch in vb.chunks(24) {
-            st.vents.push(Vent {
+        st.mirrored = h[24] != 0;
+        st.tapes = get(st.tapes.len(), true)?;
+        st.hdr = r32(get(st.hdr.len() * 4, true)?)?;
+        st.fields = r32(get(st.fields.len() * 4, true)?)?;
+        st.site = r32(get(st.site.len() * 4, true)?)?;
+        for c in 0..st.n {
+            ensure!(st.len(c) <= st.lmax, "snapshot tape length at cell {c}");
+            ensure!((st.orient(c) as usize) < crate::geom::N_ORIENT, "snapshot orientation at cell {c}");
+            ensure!(st.wall(c) <= WALL_ABSORB, "snapshot wall at cell {c}");
+            ensure!(!st.occupied(c) || st.wall(c) == 0, "snapshot occupant inside wall at cell {c}");
+        }
+        let vb = get(usize::MAX, false)?;
+        ensure!(vb.len() % 24 == 0, "unaligned vent records");
+        for ch in vb.chunks_exact(24) {
+            let v = Vent {
                 id: u32::from_le_bytes(ch[0..4].try_into()?),
                 pos: u32::from_le_bytes(ch[4..8].try_into()?),
                 age: u64::from_le_bytes(ch[8..16].try_into()?),
                 lifetime: u64::from_le_bytes(ch[16..24].try_into()?),
-            });
+            };
+            ensure!((v.pos as usize) < st.n, "snapshot vent outside world");
+            st.vents.push(v);
         }
-        let lb = get()?;
+        let lb = get(48, true)?;
         let li = |i: usize| i64::from_le_bytes(lb[i * 8..i * 8 + 8].try_into().unwrap());
         st.ledger.energy_prev = li(0);
         st.ledger.matter_expected = [li(1), li(2), li(3)];
         st.ledger.atoms_expected = li(4);
-        st.next_vent = li(5) as u32;
+        st.next_vent = u32::try_from(li(5))?;
+        if version >= 2 {
+            (st.ledger, st.tally) = serde_json::from_slice(&get(65536, false)?)?;
+            st.light = r32(get(st.n * 4, true)?)?;
+        } else {
+            // V1 did not save pending accounting. Rebase legacy snapshots to
+            // their arrays instead of carrying an unusable partial baseline.
+            st.reset_ledger(p);
+        }
+        let mut extra = [0];
+        ensure!(z.read(&mut extra)? == 0, "trailing snapshot data");
         Ok((st, cfg_hash))
     }
 }
