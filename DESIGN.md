@@ -213,7 +213,10 @@ changes: own program first with fixed facing, resumed execution, protected bonds
 period (`copy_rest` 100, `copy_absorb` 0.2). The old seed's copy loop never ends, which under resumed
 execution means one child per cell, so M17 is seeded with a new 20-byte ancestor (`runs/seed-m17.jsonl`):
 it resets its heads, turns at random, allocates a child of its own length, copies itself with a counter
-on the stack and starts over. `tests/lifecycle.rs` checks it for three isolated generations.
+on the stack and starts over. `tests/lifecycle.rs` checks it for three isolated generations. M17 also lowers the
+step budget from 1,024 to 256: with resumed execution the budget limits a cell's work per epoch, not the
+length of a genome it can copy. On the GPU each colour pass waits for its longest slice, and the ~2% of
+cells that ran the full 1,024 steps set the pace (9 epochs/s; 15 at 256).
 
 `runs/live-m1.toml` to `live-m3.toml` are the earlier steps.
 
