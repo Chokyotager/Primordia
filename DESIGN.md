@@ -16,7 +16,17 @@ the viewers and the web feed run on an observer thread from asynchronous state s
 deterministic), with the state uploaded and downloaded every epoch. `--cpu` runs the CPU golden model,
 which implements every phase. `gpu/tests/parity.rs` checks both GPU modes bit for bit against it,
 including the pipelined/asynchronous path. `PRIMORDIA_PROFILE=1 primordia bench` breaks GPU time down
-by phase.
+per kernel with GPU timestamps (where the adapter supports them; otherwise by synchronised phase), and
+reports the GPU span of an epoch. `bench` counts epochs still in flight, so compare runs over the same
+epoch window, and preferably with `run` over a fixed resumed window.
+
+Throughput notes (M17, 501², RTX 3050, step budget 256, a day-3 morning window: 20.7 epochs/s). The
+interpreter is ~75% of GPU time and is compute-bound by divergence: at midday 92% of cells run a slice
+averaging ~120 steps (~25 M steps per epoch), so warps execute many different instruction paths. The flux
+scratch arrays (`jf`, `bo`, `outs`) are field-major; cell-major they made transport 3.3× slower (22 →
+6.7 ms per epoch). Tried without gain and removed: compacting each colour's live cells before dispatch
+(and running 1–8 per warp), range-first decoding, a one-word tape cache, costs in workgroup memory, and
+workgroup sizes 32/128. A parallel CPU interpreter would manage ~36 M steps/s per core (the GPU does ~730 M).
 
 | World (RTX 5070) | interpreter on GPU only | resident | resident + pipelined + kernel work |
 | --- | --- | --- | --- |

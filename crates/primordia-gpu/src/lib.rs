@@ -78,6 +78,16 @@ struct Slot {
     epoch: u64,
 }
 
+/// PRIMORDIA_PROFILE=1: GPU timestamps around every compute pass.
+struct Stamps {
+    set: wgpu::QuerySet,
+    resolve: wgpu::Buffer,
+    read: wgpu::Buffer,
+    labels: std::cell::RefCell<Vec<&'static str>>,
+    period_ns: f32,
+}
+const STAMP_PASSES: usize = 1024;
+
 struct Pipes {
     snap: wgpu::ComputePipeline,
     exec: wgpu::ComputePipeline,
@@ -107,6 +117,7 @@ pub struct GpuExec {
     copies_done: VecDeque<StateCopy>,
     /// PRIMORDIA_PROFILE=1: flush and time each phase group (slow; for profiling only)
     profile: Option<std::collections::BTreeMap<&'static str, f64>>,
+    stamps: Option<Stamps>,
     pub adapter: String,
     /// Accumulated time (s): upload, kernels, download.
     pub timing: [f64; 3],
@@ -185,7 +196,7 @@ impl GpuExec {
         anyhow::ensure!(limits.max_storage_buffers_per_shader_stage >= 22, "adapter supports only {} storage buffers per stage", limits.max_storage_buffers_per_shader_stage);
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("primordia"),
-            required_features: wgpu::Features::empty(),
+            required_features: if std::env::var("PRIMORDIA_PROFILE").is_ok() { adapter.features() & wgpu::Features::TIMESTAMP_QUERY } else { wgpu::Features::empty() },
             required_limits: limits,
             experimental_features: wgpu::ExperimentalFeatures::disabled(),
             memory_hints: wgpu::MemoryHints::Performance,
@@ -217,6 +228,17 @@ impl GpuExec {
         let phys_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("phys"), entries: &pentries });
         let ppl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[Some(&phys_layout)], immediate_size: 0 });
         let phys = PHYS_KERNELS.iter().map(|k| (*k, mk(&pmodule, &ppl, k))).collect();
+        let stamps = device.features().contains(wgpu::Features::TIMESTAMP_QUERY).then(|| {
+                let n = (STAMP_PASSES * 2) as u32;
+                let buf = |label, usage| device.create_buffer(&wgpu::BufferDescriptor { label: Some(label), size: n as u64 * 8, usage, mapped_at_creation: false });
+                Stamps {
+                    set: device.create_query_set(&wgpu::QuerySetDescriptor { label: Some("stamps"), ty: wgpu::QueryType::Timestamp, count: n }),
+                    resolve: buf("stamps resolve", wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC),
+                    read: buf("stamps read", wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST),
+                    labels: Default::default(),
+                    period_ns: queue.get_timestamp_period(),
+                }
+            });
         let mut g = GpuExec {
             device,
             queue,
@@ -237,6 +259,7 @@ impl GpuExec {
             done: VecDeque::new(),
             copies_done: VecDeque::new(),
             profile: std::env::var("PRIMORDIA_PROFILE").ok().map(|_| Default::default()),
+            stamps,
             adapter: format!("{} ({:?}, {})", info.name, info.backend, info.driver),
             timing: [0.0; 3],
         };
@@ -382,20 +405,65 @@ impl GpuExec {
         if groups > 65535 { (65535, groups.div_ceil(65535)) } else { (groups, 1) }
     }
 
-    fn dispatch(&self, enc: &mut wgpu::CommandEncoder, pipe: &wgpu::ComputePipeline, bind: &wgpu::BindGroup, threads: u32) {
+    /// Profiling: timestamps for the next compute pass, charged to `label`.
+    fn stamp(&self, label: &'static str) -> Option<wgpu::ComputePassTimestampWrites<'_>> {
+        let s = self.stamps.as_ref()?;
+        let mut l = s.labels.borrow_mut();
+        if l.len() >= STAMP_PASSES {
+            return None;
+        }
+        let i = l.len() as u32;
+        l.push(label);
+        Some(wgpu::ComputePassTimestampWrites { query_set: &s.set, beginning_of_pass_write_index: Some(2 * i), end_of_pass_write_index: Some(2 * i + 1) })
+    }
+
+    /// Profiling: resolve this epoch's pass timestamps (call before the final submit).
+    fn stamps_resolve(&self, enc: &mut wgpu::CommandEncoder) {
+        if let Some(s) = &self.stamps {
+            let n = s.labels.borrow().len() as u32;
+            if n > 0 {
+                enc.resolve_query_set(&s.set, 0..2 * n, &s.resolve, 0);
+                enc.copy_buffer_to_buffer(&s.resolve, 0, &s.read, 0, n as u64 * 16);
+            }
+        }
+    }
+
+    /// Profiling: wait for the resolved timestamps and add them to the profile.
+    fn stamps_collect(&mut self) {
+        let Some(s) = &self.stamps else { return };
+        let labels = std::mem::take(&mut *s.labels.borrow_mut());
+        if labels.is_empty() {
+            return;
+        }
+        let slice = s.read.slice(0..labels.len() as u64 * 16);
+        slice.map_async(wgpu::MapMode::Read, |r| r.expect("map stamps"));
+        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+        let t: Vec<u64> = bytemuck::cast_slice(&slice.get_mapped_range().expect("stamps")).to_vec();
+        s.read.unmap();
+        let period = s.period_ns as f64 * 1e-9;
+        let prof = self.profile.as_mut().unwrap();
+        for (i, l) in labels.iter().enumerate() {
+            *prof.entry(l).or_default() += t[2 * i + 1].saturating_sub(t[2 * i]) as f64 * period;
+        }
+        // first pass start to last pass end: kernels plus the gaps between passes
+        let span = t[2 * labels.len() - 1].saturating_sub(t[0]) as f64 * period;
+        *prof.entry("(gpu span per epoch, us)").or_default() += span * 1e6;
+    }
+
+    fn dispatch(&self, enc: &mut wgpu::CommandEncoder, pipe: &wgpu::ComputePipeline, bind: &wgpu::BindGroup, threads: u32, label: &'static str) {
         let (x, y) = Self::groups(threads);
-        let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
+        let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: self.stamp(label) });
         pass.set_pipeline(pipe);
         pass.set_bind_group(0, bind, &[]);
         pass.dispatch_workgroups(x, y, 1);
     }
-    fn phys(&self, enc: &mut wgpu::CommandEncoder, k: &str, threads: u32) {
+    fn phys(&self, enc: &mut wgpu::CommandEncoder, k: &'static str, threads: u32) {
         let b = self.bufs.as_ref().unwrap();
-        self.dispatch(enc, &self.pipes.phys[k], &b.phys_bind, threads);
+        self.dispatch(enc, &self.pipes.phys[k], &b.phys_bind, threads, k);
     }
-    fn phys1(&self, enc: &mut wgpu::CommandEncoder, k: &str) {
+    fn phys1(&self, enc: &mut wgpu::CommandEncoder, k: &'static str) {
         let b = self.bufs.as_ref().unwrap();
-        let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
+        let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: self.stamp(k) });
         pass.set_pipeline(&self.pipes.phys[k]);
         pass.set_bind_group(0, &b.phys_bind, &[]);
         pass.dispatch_workgroups(1, 1, 1);
@@ -439,8 +507,8 @@ impl GpuExec {
             q.write_buffer(&b.pairs, 0, bytemuck::cast_slice(&pairs));
             w[pi::NPAIRS] = (pairs.len() / 2) as u32;
             q.write_buffer(&b.params, 0, bytemuck::cast_slice(&w));
-            self.dispatch(enc, &self.pipes.snap, &b.exec_bind, p.geom.n as u32);
-            self.dispatch(enc, &self.pipes.exec, &b.exec_bind, w[pi::NPAIRS]);
+            self.dispatch(enc, &self.pipes.snap, &b.exec_bind, p.geom.n as u32, "exec: flag snapshot");
+            self.dispatch(enc, &self.pipes.exec, &b.exec_bind, w[pi::NPAIRS], "exec: interpreter");
         } else {
             let order = exec::color_order(p, epoch, mirrored);
             let mut all = Vec::with_capacity(pi::LEN * order.len());
@@ -451,13 +519,13 @@ impl GpuExec {
             q.write_buffer(&b.params_all, 0, bytemuck::cast_slice(&all));
             for i in 0..order.len() {
                 enc.copy_buffer_to_buffer(&b.params_all, i as u64 * blk, &b.params, 0, blk);
-                self.dispatch(enc, &self.pipes.snap, &b.exec_bind, p.geom.n as u32);
-                self.dispatch(enc, &self.pipes.exec, &b.exec_bind, p.geom.cells_per_color() as u32);
+                self.dispatch(enc, &self.pipes.snap, &b.exec_bind, p.geom.n as u32, "exec: flag snapshot");
+                self.dispatch(enc, &self.pipes.exec, &b.exec_bind, p.geom.cells_per_color() as u32, "exec: interpreter");
             }
         }
     }
 
-    fn gate(&self, enc: &mut wgpu::CommandEncoder, k: &str) {
+    fn gate(&self, enc: &mut wgpu::CommandEncoder, k: &'static str) {
         self.phys1(enc, k);
         let b = self.bufs.as_ref().unwrap();
         enc.copy_buffer_to_buffer(&b.iargs_w, 0, &b.iargs, 0, 64);
@@ -465,7 +533,9 @@ impl GpuExec {
 
     /// Profiling: submit what is encoded so far, wait, and charge the time to `name`.
     fn lap(&mut self, enc: &mut wgpu::CommandEncoder, name: &'static str, t: &mut Instant) {
-        if self.profile.is_none() {
+        // with GPU timestamps the per-kernel times are exact; synchronising
+        // here would only add idle gaps to the epoch
+        if self.profile.is_none() || self.stamps.is_some() {
             return;
         }
         let done = std::mem::replace(enc, self.device.create_command_encoder(&Default::default()));
@@ -479,9 +549,9 @@ impl GpuExec {
         self.profile.as_ref().map(|m| m.iter().map(|(k, v)| (*k, *v)).collect())
     }
 
-    fn phys_indirect(&self, enc: &mut wgpu::CommandEncoder, k: &str, at: u64) {
+    fn phys_indirect(&self, enc: &mut wgpu::CommandEncoder, k: &'static str, at: u64) {
         let b = self.bufs.as_ref().unwrap();
-        let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
+        let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: self.stamp(k) });
         pass.set_pipeline(&self.pipes.phys[k]);
         pass.set_bind_group(0, &b.phys_bind, &[]);
         pass.dispatch_workgroups_indirect(&b.iargs, at);
@@ -655,9 +725,20 @@ impl ExecBackend for GpuExec {
     }
     fn timing(&self) -> Option<[f64; 3]> {
         if let Some(r) = self.profile_report() {
-            let tot: f64 = r.iter().map(|x| x.1).sum();
-            for (k, v) in r {
-                eprintln!("   profile {k:<36} {:5.1}%  {:.1} s", 100.0 * v / tot, v);
+            // "(…)" entries are counters, "N …" entries are synchronised phase
+            // laps (wall time), the rest are GPU timestamps per kernel
+            let epochs = r.iter().find(|x| x.0 == "(epochs)").map(|x| x.1).unwrap_or(1.0).max(1.0);
+            for (k, v) in r.iter().filter(|x| x.0.starts_with('(')) {
+                eprintln!("   profile {k:<36} {v:.0}");
+            }
+            for (k, v) in r.iter().filter(|x| x.0.starts_with(|c: char| c.is_ascii_digit())) {
+                eprintln!("   profile {k:<36} {:7.2} ms/epoch (wall, synchronised)", 1000.0 * v / epochs);
+            }
+            let mut ks: Vec<_> = r.iter().filter(|x| !x.0.starts_with('(') && !x.0.starts_with(|c: char| c.is_ascii_digit())).collect();
+            ks.sort_by(|a, b| b.1.total_cmp(&a.1));
+            let tot: f64 = ks.iter().map(|x| x.1).sum();
+            for (k, v) in ks {
+                eprintln!("   gpu     {k:<36} {:7.2} ms/epoch  {:5.1}%", 1000.0 * v / epochs, 100.0 * v / tot);
             }
         }
         Some(self.timing)
@@ -812,7 +893,9 @@ impl ExecBackend for GpuExec {
         let tsz = (ts::N * 2 * 4) as u64;
         enc.copy_buffer_to_buffer(&b.tally, 0, &b.res[si].buf, 0, tsz);
         enc.copy_buffer_to_buffer(&b.births, 0, &b.res[si].buf, tsz, n as u64 * 6 * 4);
+        self.stamps_resolve(&mut enc);
         let sub = self.queue.submit([enc.finish()]);
+        self.stamps_collect();
         let b = self.bufs.as_mut().unwrap();
         let slot = &mut b.res[si];
         slot.epoch = epoch;

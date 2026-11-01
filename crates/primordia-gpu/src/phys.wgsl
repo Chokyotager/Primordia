@@ -334,7 +334,10 @@ fn setqv(c: u32, k: u32, v: u32) {
 fn dith(w: vec4<u32>, slot: u32) -> u32 {
     return (w[slot / 2u] >> (16u * (slot % 2u))) & 0xFFFFu;
 }
-fn ji(c: u32, a: u32, k: u32) -> u32 { return (c * 3u + a) * 8u + k; }
+// Flux scratch is field-major (index ~ k * n + c): a workgroup's threads touch
+// consecutive words, which the cell-major layout spread 32-96 bytes apart.
+fn ji(c: u32, a: u32, k: u32) -> u32 { return (k * 3u + a) * Q[Q_N] + c; }
+fn bi(c: u32, k: u32) -> u32 { return k * Q[Q_N] + c; }
 
 @compute @workgroup_size(64)
 fn k_flux_a(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -344,7 +347,7 @@ fn k_flux_a(@builtin(global_invocation_id) gid: vec3<u32>) {
     let D = dims();
     for (var k = 0u; k < n; k = k + 1u) {
         for (var a = 0u; a < 3u; a = a + 1u) { jf[ji(c, a, k)] = 0; }
-        bo[c * 8u + k] = 0u;
+        bo[bi(c, k)] = 0u;
     }
     if (wall(c) != 0u) { return; }
     let ph = ctl[C_PHASE];
@@ -387,7 +390,7 @@ fn k_flux_a(@builtin(global_invocation_id) gid: vec3<u32>) {
             for (var k = 0u; k < n; k = k + 1u) {
                 if (cf(k, CF_HASOUT) != 0u) {
                     let x = flux_j(cf(k, CF_KAPPA), qv(c, k), cf(k, CF_OUT), dith(w, cf(k, CF_SLOT)));
-                    if (x > 0) { bo[c * 8u + k] = bo[c * 8u + k] + u32(x); }
+                    if (x > 0) { bo[bi(c, k)] = bo[bi(c, k)] + u32(x); }
                 }
             }
         }
@@ -401,7 +404,7 @@ fn k_flux_b(@builtin(global_invocation_id) gid: vec3<u32>) {
     let n = nfld();
     let D = dims();
     for (var k = 0u; k < n; k = k + 1u) {
-        var o = bo[c * 8u + k];
+        var o = bo[bi(c, k)];
         for (var a = 0u; a < D; a = a + 1u) {
             let x = jf[ji(c, a, k)];
             if (x > 0) { o = sat_add(o, u32(x)); }
@@ -411,7 +414,7 @@ fn k_flux_b(@builtin(global_invocation_id) gid: vec3<u32>) {
                 if (y < 0) { o = sat_add(o, u32(-y)); }
             }
         }
-        outs[c * 8u + k] = o;
+        outs[bi(c, k)] = o;
     }
 }
 
@@ -426,13 +429,13 @@ fn k_flux_c(@builtin(global_invocation_id) gid: vec3<u32>) {
         for (var a = 0u; a < D; a = a + 1u) {
             let x = jf[ji(c, a, k)];
             if (x > 0) {
-                jf[ji(c, a, k)] = i32(flux_lim(u32(x), qc, outs[c * 8u + k]));
+                jf[ji(c, a, k)] = i32(flux_lim(u32(x), qc, outs[bi(c, k)]));
             } else if (x < 0) {
                 let t = nb_raw(c, 2u * a);
-                jf[ji(c, a, k)] = -i32(flux_lim(u32(-x), qv(t, k), outs[t * 8u + k]));
+                jf[ji(c, a, k)] = -i32(flux_lim(u32(-x), qv(t, k), outs[bi(t, k)]));
             }
         }
-        bo[c * 8u + k] = flux_lim(bo[c * 8u + k], qc, outs[c * 8u + k]);
+        bo[bi(c, k)] = flux_lim(bo[bi(c, k)], qc, outs[bi(c, k)]);
     }
 }
 
@@ -440,7 +443,7 @@ fn flux_d_cell(c: u32) {
     let n = nfld();
     let D = dims();
     for (var k = 0u; k < n; k = k + 1u) {
-        let b = bo[c * 8u + k];
+        let b = bo[bi(c, k)];
         var q = qv(c, k) - b;
         for (var a = 0u; a < D; a = a + 1u) {
             q = q - u32(jf[ji(c, a, k)]);
