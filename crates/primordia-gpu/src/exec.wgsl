@@ -179,6 +179,11 @@ var<private> lp: u32;
 var<private> pt: u32;
 // set by every op that can change a tape length or the faced partner
 var<private> dirty: bool;
+// individual.resume: where the executing individual is (MOVE swaps cells)
+// and the IP to continue from next slice (valid when saved).
+var<private> home: u32;
+var<private> save_ip: i32;
+var<private> saved: bool;
 
 fn rnd() -> u32 {
     let r = philox(P[P_SEED_LO], P[P_SEED_HI], vec4<u32>(canon_id, g_epoch, (PHASE_EXEC << 24u), draw)).x;
@@ -248,6 +253,12 @@ fn flip_frame(v: u32, draw: u32) -> u32 {
 
 fn shield_ok(t: u32) -> bool {
     if (has(F_SLEEP_SHIELD) && t != me && (hdr[t * HDR + H_SLEEP] > 0u || (flags(t) & FL_SLEEPING) != 0u)) { return false; }
+    // bonds.protect: past its construction window a cell's tape is closed to
+    // its bonded neighbours (they still share energy and shield it)
+    if (has(F_BOND_PROTECT) && t != me && g_dims > 0u && !fixed_mode) {
+        let d = facing() ^ 1u;
+        if ((bonds(t) & (1u << d)) != 0u && g_epoch - H(t, H_BIRTH) >= P[P_CONSTRUCT_WINDOW]) { return false; }
+    }
     if (!has(F_SHIELD) || t == me) { return true; }
     var key = 6u;
     var dir_to_me = NONE;
@@ -324,6 +335,7 @@ fn write_byte(addr: u32, v_in: u32, ipu: u32, total: u32) -> bool {
     let t = r0.x;
     let off = r0.y;
     if (!shield_ok(t)) { return false; }
+    if (t != me) { reproduced(); }
     var mode = 0u;
     if (P[P_PDEL] != 0u) {
         let r = rnd();
@@ -385,7 +397,14 @@ fn write_byte(addr: u32, v_in: u32, ipu: u32, total: u32) -> bool {
     return true;
 }
 
+// energy.copy_rest: a write into another cell, ALLOC or DIVIDE starts (or
+// restarts) the executor's period of reduced absorption
+fn reproduced() {
+    if (P[P_COPY_REST] > 0u) { hdr[me * HDR + H_REST] = P[P_COPY_REST]; }
+}
+
 fn new_child(t: u32, len: u32, energy: u32) {
+    reproduced();
     let lin = philox(P[P_SEED_LO], P[P_SEED_HI], vec4<u32>(canon(t), g_epoch, (PHASE_LINEAGE << 24u), 0u)).x | 1u;
     var fl = FL_OCC | FL_EXEC | FL_NEWBORN | (flags(me) & ORIENT_MASK);
     if (has(F_ENERGY) && energy == 0u) { fl = fl | FL_HALT; }
@@ -401,6 +420,7 @@ fn new_child(t: u32, len: u32, energy: u32) {
     hdr[b + H_PARENT] = parent;
     hdr[b + H_DEPTH] = depth;
     hdr[b + H_ZERO] = 0u;
+    for (var w = H_CTX; w < HDR; w = w + 1u) { hdr[b + w] = 0u; }
 }
 
 fn swap_cells(a: u32, b: u32) {
@@ -442,6 +462,9 @@ fn pay(cost: u32) -> bool {
         spent = spent + g_e;
         g_e = 0u;
         hdr[me * HDR + H_FLAGS] = hdr[me * HDR + H_FLAGS] | FL_HALT;
+        // out of energy before this instruction: retry it next slice
+        saved = true;
+        save_ip = ip;
         return false;
     }
     g_e = g_e - cost;
@@ -664,6 +687,9 @@ fn step() -> i32 {
             e_flush();
             swap_cells(me, tgt);
             g_e = H(me, H_E);
+            home = tgt;
+            saved = true;
+            save_ip = i32(ipu) + 1;
             return END;
         }
         return 1;
@@ -917,6 +943,8 @@ fn step() -> i32 {
         let n = pop(); if (g_err) { return END; }
         if (n > 0 && !fixed_len) {
             hdr[me * HDR + H_SLEEP] = u32(min(n, 255)) * P[P_SLEEP_SCALE];
+            saved = true;
+            save_ip = i32(ipu) + 1;
             return END;
         }
     }
@@ -934,6 +962,8 @@ fn step() -> i32 {
     }
     if (has(F_ENERGY) && g_e == 0u) {
         hdr[me * HDR + H_FLAGS] = hdr[me * HDR + H_FLAGS] | FL_HALT;
+        saved = true;
+        save_ip = i32(ipu) + next;
         return END;
     }
     return next;
@@ -1011,6 +1041,9 @@ fn exec_slice(c: u32, fp: u32) {
     fixed_mode = false;
     fixed_partner = NONE;
     for (var i = 0u; i < 7u; i = i + 1u) { shield[i] = 0u; }
+    home = c;
+    saved = false;
+    save_ip = 0;
     if (g_dims >= 1u && has(F_RANDOM_FACING)) {
         let r = rnd();
         var o = OR_VALID[g_dims * 24u + r % OR_NVALID[g_dims]];
@@ -1030,22 +1063,59 @@ fn exec_slice(c: u32, fp: u32) {
     lens();
     dirty = false;
     if (partner_first) { h1 = i32(lp); } else { h1 = i32(ls); }
+    if (has(F_RESUME) && (flags(c) & FL_CTX) != 0u) {
+        let x = H(c, H_CTX);
+        ip = bitcast<i32>(x << 16u) >> 16u;
+        sp = min(x >> 16u, 16u);
+        h0 = bitcast<i32>(H(c, H_H0));
+        h1 = bitcast<i32>(H(c, H_H1));
+        for (var i = 0u; i < sp; i = i + 1u) {
+            let w = H(c, H_STK + i / 2u);
+            if ((i & 1u) == 0u) { stk[i] = bitcast<i32>(w << 16u) >> 16u; } else { stk[i] = bitcast<i32>(w) >> 16u; }
+        }
+    }
     var steps = 0u;
+    var ended = false;
     let budget = P[P_BUDGET];
     g_e = H(c, H_E);
     loop {
         if (steps >= budget) { break; }
         steps = steps + 1u;
         let d = step();
-        if (d == END) { break; }
+        if (d == END) { ended = true; break; }
         ip = ip + d;
     }
     e_flush();
+    if (has(F_RESUME)) {
+        if (!ended) { saved = true; save_ip = ip; }
+        save_context();
+    }
     if (spent > 0u) {
         site[c * SITE + S_SPENT] = site[c * SITE + S_SPENT] + spent;
         let heat = mulshr16(spent, P[P_HEAT]);
         let ti = fidx(c, 1u);
         fields[ti] = sat_add(fields[ti], heat);
+    }
+}
+
+// individual.resume: keep the slice's IP, heads and stack for the next slice
+// (unreduced, see exec::save_context), or mark it to restart
+fn save_context() {
+    let b = home * HDR;
+    if (saved) {
+        hdr[b + H_CTX] = (bitcast<u32>(save_ip) & 0xFFFFu) | (sp << 16u);
+        hdr[b + H_H0] = bitcast<u32>(h0);
+        hdr[b + H_H1] = bitcast<u32>(h1);
+        for (var k = 0u; k < STK_WORDS; k = k + 1u) {
+            var lo = 0u;
+            var hi = 0u;
+            if (2u * k < sp) { lo = bitcast<u32>(stk[2u * k]) & 0xFFFFu; }
+            if (2u * k + 1u < sp) { hi = bitcast<u32>(stk[2u * k + 1u]) & 0xFFFFu; }
+            hdr[b + H_STK + k] = lo | (hi << 16u);
+        }
+        hdr[b + H_FLAGS] = hdr[b + H_FLAGS] | FL_CTX;
+    } else {
+        hdr[b + H_FLAGS] = hdr[b + H_FLAGS] & ~FL_CTX;
     }
 }
 

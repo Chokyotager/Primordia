@@ -458,7 +458,7 @@ impl State {
         let f = std::fs::File::create(path)?;
         let mut z = zstd::Encoder::new(f, 3)?;
         z.write_all(b"PSNP")?;
-        z.write_all(&2u32.to_le_bytes())?;
+        z.write_all(&3u32.to_le_bytes())?;
         z.write_all(&config_hash.to_le_bytes())?;
         z.write_all(&self.epoch.to_le_bytes())?;
         z.write_all(&[self.mirrored as u8])?;
@@ -499,7 +499,7 @@ impl State {
         z.read_exact(&mut h)?;
         ensure!(&h[..4] == b"PSNP", "bad snapshot magic");
         let version = u32::from_le_bytes(h[4..8].try_into()?);
-        ensure!(version == 1 || version == 2, "snapshot version {version}");
+        ensure!((1..=3).contains(&version), "snapshot version {version}");
         Ok((version, u64::from_le_bytes(h[8..16].try_into()?), u64::from_le_bytes(h[16..24].try_into()?)))
     }
 
@@ -509,7 +509,7 @@ impl State {
         z.read_exact(&mut h)?;
         ensure!(&h[..4] == b"PSNP", "bad snapshot magic");
         let version = u32::from_le_bytes(h[4..8].try_into()?);
-        ensure!(version == 1 || version == 2, "snapshot version {version}");
+        ensure!((1..=3).contains(&version), "snapshot version {version}");
         let cfg_hash = u64::from_le_bytes(h[8..16].try_into()?);
         let epoch = u64::from_le_bytes(h[16..24].try_into()?);
         ensure!(h[24] <= 1, "invalid mirror flag");
@@ -533,7 +533,15 @@ impl State {
         st.epoch = epoch;
         st.mirrored = h[24] != 0;
         st.tapes = get(st.tapes.len(), true)?;
-        st.hdr = r32(get(st.hdr.len() * 4, true)?)?;
+        if version >= 3 {
+            st.hdr = r32(get(st.hdr.len() * 4, true)?)?;
+        } else {
+            // Versions 1 and 2 stored 9 header words; the extension starts empty.
+            let old = r32(get(st.n * HDR_V2 * 4, true)?)?;
+            for (c, row) in old.chunks_exact(HDR_V2).enumerate() {
+                st.hdr[c * HDR..c * HDR + HDR_V2].copy_from_slice(row);
+            }
+        }
         st.fields = r32(get(st.fields.len() * 4, true)?)?;
         st.site = r32(get(st.site.len() * 4, true)?)?;
         for c in 0..st.n {

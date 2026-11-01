@@ -578,7 +578,7 @@ fn bisect(cfg: &Config, p: &Params, a: State, b: State) -> Result<()> {
         let check = |a: &Sim, b: &Sim, phase: &str| -> Option<String> {
             a.st.mirror(p).first_diff(&b.st).map(|(c, what)| {
                 let g = &p.geom;
-                format!("first divergence at epoch {e}, phase {phase}: cell {c} ({:?}) {what}\n  A[M(c)] hdr {:?}\n  B[c]    hdr {:?}", g.coords(c), &a.st.hdr[g.mirror_cell(c) * 9..g.mirror_cell(c) * 9 + 9], &b.st.hdr[c * 9..c * 9 + 9])
+                format!("first divergence at epoch {e}, phase {phase}: cell {c} ({:?}) {what}\n  A[M(c)] hdr {:?}\n  B[c]    hdr {:?}", g.coords(c), &a.st.hdr[g.mirror_cell(c) * primordia_core::params::HDR..(g.mirror_cell(c) + 1) * primordia_core::params::HDR], &b.st.hdr[c * primordia_core::params::HDR..(c + 1) * primordia_core::params::HDR])
             })
         };
         macro_rules! ph {

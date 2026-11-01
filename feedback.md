@@ -35,6 +35,12 @@ semantics can still introduce handedness effects beyond the corrected mutation k
 Only versioned seed templates were corrected; existing experiment output directories were not rewritten.
 The audit's original validation record is retained at the end of this file.
 
+**Follow-up (M17):** the lifecycle findings in sections 1–5 are now available as optional rules, all off
+by default and on in `runs/live-m17.toml`: own program first with fixed facing (section 1, existing
+settings), `individual.resume` (section 2), `bonds.protect` (section 4) and `energy.copy_rest` /
+`copy_absorb` as a germ-soma trade-off (section 5). Section 3's prerequisite is covered by a new
+resume-aware ancestor (`runs/seed-m17.jsonl`) with an isolated three-generation test. See DESIGN.md.
+
 ### Implementation validation
 
 `RAYON_NUM_THREADS=4 cargo test --offline --release --workspace -- --nocapture --test-threads=1`

@@ -66,6 +66,10 @@ struct Cpu<'a> {
     partner_first: bool,
     fixed: Option<Option<usize>>,
     shield: [u8; 7],
+    /// Where the executing individual is (it moves when MOVE swaps cells).
+    home: usize,
+    /// individual.resume: IP to continue from next slice; None = start afresh.
+    save: Option<i32>,
 }
 
 enum Flow {
@@ -153,6 +157,14 @@ impl<'a> Cpu<'a> {
         if p.sleep_shield && t != self.me && (st.h(t, H_SLEEP) > 0 || st.flags(t) & FL_SLEEPING != 0) {
             return false;
         }
+        // bonds.protect: past its construction window a cell's tape is closed to
+        // its bonded neighbours (they still share energy and shield it)
+        if p.bond_protect && t != self.me && p.geom.dims > 0 && self.fixed.is_none() {
+            let d = opposite(self.facing(st));
+            if st.bonds(t) & (1 << d) != 0 && (st.epoch as u32).wrapping_sub(st.h(t, H_BIRTH)) >= p.construct_window {
+                return false;
+            }
+        }
         if !p.shield_on || t == self.me {
             return true;
         }
@@ -238,6 +250,9 @@ impl<'a> Cpu<'a> {
         if !self.shield_ok(st, t) {
             return false;
         }
+        if t != self.me {
+            self.reproduced(st);
+        }
         // copy errors: 0 none, 1 insert, 2 delete
         let mut mode = 0;
         if p.p_del != 0 {
@@ -295,7 +310,16 @@ impl<'a> Cpu<'a> {
         true
     }
 
+    /// energy.copy_rest: a write into another cell, ALLOC or DIVIDE starts
+    /// (or restarts) the executor's period of reduced absorption.
+    fn reproduced(&self, st: &mut State) {
+        if self.p.copy_rest > 0 {
+            st.hdr[self.me * HDR + H_REST] = self.p.copy_rest;
+        }
+    }
+
     fn new_child(&self, st: &mut State, t: usize, len: usize, energy: u32, epoch: u64) {
+        self.reproduced(st);
         let p = self.p;
         let me = self.me;
         let lin = Rng::new(p.seed, epoch, phase::LINEAGE).u32(p.geom.canon(t, self.mirrored), 0, 0) | 1;
@@ -315,6 +339,7 @@ impl<'a> Cpu<'a> {
         h[H_PARENT] = parent;
         h[H_DEPTH] = depth;
         h[H_ZERO] = 0;
+        h[H_CTX..].iter_mut().for_each(|x| *x = 0);
     }
 
     /// Swap the individuals at a and b (header row and tape).
@@ -382,6 +407,8 @@ impl<'a> Cpu<'a> {
             self.spent = self.spent.wrapping_add(*e);
             *e = 0;
             st.hdr[self.me * HDR + H_FLAGS] |= FL_HALT;
+            // out of energy before this instruction: retry it next slice
+            self.save = Some(self.ip);
             return false;
         }
         *e -= cost;
@@ -615,6 +642,8 @@ impl<'a> Cpu<'a> {
                 }
                 if let Some(t) = target {
                     Self::swap_cells(st, me, t);
+                    self.home = t;
+                    self.save = Some(ip as i32 + 1);
                     return Flow::End;
                 }
                 return Flow::Next(1);
@@ -714,10 +743,10 @@ impl<'a> Cpu<'a> {
                 let v = self.read(st, rem(self.h0), ls, lp, pt);
                 self.write(st, rem(self.h1), v, ip, total, ls, lp, pt);
             }
-            op::H0INC => self.h0 += 1,
-            op::H0DEC => self.h0 -= 1,
-            op::H1INC => self.h1 += 1,
-            op::H1DEC => self.h1 -= 1,
+            op::H0INC => self.h0 = self.h0.wrapping_add(1),
+            op::H0DEC => self.h0 = self.h0.wrapping_sub(1),
+            op::H1INC => self.h1 = self.h1.wrapping_add(1),
+            op::H1DEC => self.h1 = self.h1.wrapping_sub(1),
             op::SETH0 => self.h0 = ip as i32 + pop!(),
             op::SETH1 => self.h1 = ip as i32 + pop!(),
             op::GETH0 => push!(self.h0 - ip as i32),
@@ -839,6 +868,7 @@ impl<'a> Cpu<'a> {
                 let n = pop!();
                 if n > 0 && !p.pair_concat {
                     *st.hm(me, H_SLEEP) = n.min(255) as u32 * p.sleep_scale;
+                    self.save = Some(ip as i32 + 1);
                     return Flow::End;
                 }
             }
@@ -849,6 +879,7 @@ impl<'a> Cpu<'a> {
         }
         if p.energy_on && st.h(me, H_E) == 0 {
             st.hdr[me * HDR + H_FLAGS] |= FL_HALT;
+            self.save = Some(ip as i32 + next);
             return Flow::End;
         }
         Flow::Next(next)
@@ -928,6 +959,8 @@ pub fn exec_slice(st: &mut State, p: &Params, snap: &[u32], c: usize, fixed_part
         partner_first: false,
         fixed: None,
         shield: [0; 7],
+        home: c,
+        save: None,
     };
     let dims = p.geom.dims;
     if dims >= 1 && p.random_facing {
@@ -951,19 +984,60 @@ pub fn exec_slice(st: &mut State, p: &Params, snap: &[u32], c: usize, fixed_part
         let (ls, lp, _) = cpu.lens(st);
         cpu.h1 = if cpu.partner_first { lp as i32 } else { ls as i32 };
     }
+    if p.resume && st.flags(c) & FL_CTX != 0 {
+        let h = &st.hdr[c * HDR..(c + 1) * HDR];
+        cpu.ip = (h[H_CTX] & 0xFFFF) as u16 as i16 as i32;
+        cpu.sp = ((h[H_CTX] >> 16) as usize).min(16);
+        cpu.h0 = h[H_H0] as i32;
+        cpu.h1 = h[H_H1] as i32;
+        for i in 0..cpu.sp {
+            cpu.stack[i] = ((h[H_STK + i / 2] >> (16 * (i % 2))) & 0xFFFF) as u16 as i16 as i32;
+        }
+    }
     let mut steps = 0;
+    let mut ended = false;
     while steps < p.budget {
         steps += 1;
         match cpu.step(st, epoch, &mut trace) {
             Flow::Next(d) => cpu.ip += d,
-            Flow::End => break,
+            Flow::End => {
+                ended = true;
+                break;
+            }
         }
+    }
+    if p.resume {
+        if !ended {
+            cpu.save = Some(cpu.ip);
+        }
+        save_context(st, &cpu);
     }
     if cpu.spent > 0 {
         st.site[c * SITE + S_SPENT] = st.site[c * SITE + S_SPENT].wrapping_add(cpu.spent);
         let heat = mulshr16(cpu.spent, p.heat_q16 as u32);
         let ti = c * st.nf + F_T;
         st.fields[ti] = st.fields[ti].saturating_add(heat);
+    }
+}
+
+/// individual.resume: keep the slice's IP, heads and stack for the next
+/// slice, or mark it to restart. The registers are kept as they are, not
+/// reduced: addresses are reduced against the address space when used, and
+/// that changes when the partner does. (|IP| < 2^15 because l_max <= 256.)
+fn save_context(st: &mut State, cpu: &Cpu) {
+    let h = &mut st.hdr[cpu.home * HDR..(cpu.home + 1) * HDR];
+    match cpu.save {
+        Some(ip) => {
+            h[H_CTX] = ip as i16 as u16 as u32 | (cpu.sp as u32) << 16;
+            h[H_H0] = cpu.h0 as u32;
+            h[H_H1] = cpu.h1 as u32;
+            for k in 0..STK_WORDS {
+                let v = |i: usize| if i < cpu.sp { cpu.stack[i] as u16 as u32 } else { 0 };
+                h[H_STK + k] = v(2 * k) | v(2 * k + 1) << 16;
+            }
+            h[H_FLAGS] |= FL_CTX;
+        }
+        None => h[H_FLAGS] &= !FL_CTX,
     }
 }
 

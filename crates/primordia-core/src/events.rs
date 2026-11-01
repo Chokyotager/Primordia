@@ -101,6 +101,7 @@ pub fn place_genome(st: &mut State, p: &Params, c: usize, genome: &[u8], energy:
     h[H_E] = e;
     h[H_LINEAGE] = lin;
     h[H_BIRTH] = epoch as u32;
+    h[H_CTX..].iter_mut().for_each(|x| *x = 0);
     st.tally.energy_source += e as i64;
 }
 

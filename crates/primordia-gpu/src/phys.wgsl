@@ -664,6 +664,11 @@ fn absorb_cell(c: u32) {
     if (Q[Q_DORM_ABSORB] != 65536u && dormant_past_grace(c)) {
         a = mulshr16(a, Q[Q_DORM_ABSORB]);
     }
+    // energy.copy_rest: a cell that reproduced recently absorbs less
+    if (H(c, H_REST) > 0u) {
+        a = mulshr16(a, Q[Q_COPY_ABSORB]);
+        setH(c, H_REST, H(c, H_REST) - 1u);
+    }
     let de = mulshr16(a, F(c, 0u));
     setF(c, 0u, F(c, 0u) - de);
     setH(c, H_E, sat_add(H(c, H_E), de));

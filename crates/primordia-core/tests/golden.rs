@@ -391,6 +391,36 @@ fn t7_twin_mutual_and_birth_bonds() {
     }
 }
 
+/// The mirror twin stays exact with resumed execution, protected bonds and
+/// the reproduction rest period on (saved contexts are frame-independent).
+#[test]
+fn t7_twin_lifecycle_mechanisms() {
+    for dims in [2u32, 3] {
+        let mut cfg = full_cfg(dims);
+        cfg.individual.resume = true;
+        cfg.individual.step_budget = 48;
+        cfg.bonds.protect = true;
+        cfg.bonds.construct_window = 12;
+        cfg.bonds.birth_bond = 0.5;
+        cfg.energy.copy_rest = 10;
+        cfg.energy.copy_absorb = 0.3;
+        cfg.validate().unwrap();
+        let mut a = Sim::new(cfg.clone(), Box::new(CpuExec)).unwrap();
+        seed_programs(&mut a);
+        let mst = a.st.mirror(&a.p);
+        let mut b = Sim::from_state(cfg.clone(), Params::new(&cfg), mst, Box::new(CpuExec)).unwrap();
+        for e in 0..80 {
+            a.step();
+            b.step();
+            if let Some(d) = a.st.mirror(&a.p).first_diff(&b.st) {
+                panic!("dims {dims}: twin diverged at epoch {e}: {:?}", d);
+            }
+        }
+        let ctx = (0..a.st.n).filter(|&c| a.st.flags(c) & FL_CTX != 0).count();
+        assert!(ctx > 0, "dims {dims}: some contexts were saved");
+    }
+}
+
 /// energy.vents.stagger: the initial vents start at distinct random ages
 /// below their lifetime (identically in the mirror twin); off, all start at 0.
 #[test]

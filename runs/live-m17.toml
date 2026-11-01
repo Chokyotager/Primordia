@@ -1,0 +1,117 @@
+# Live world M17: M16's world with the four lifecycle changes from the
+# post-audit review (feedback.md, sections 1-5), all new rules:
+# - individual.pair_order = self_first, random_initial_facing = false: a cell
+#   runs its own program and keeps facing the same neighbour (M16 ran its
+#   neighbour's code in about half its slices and re-rolled its facing).
+# - individual.resume: a slice continues where the last one stopped (IP,
+#   heads and stack persist), so a copy longer than one slice's energy can
+#   finish. M16-fix collapsed to ~16-byte copiers by day 12.
+# - bonds.protect: past a 256-epoch construction window a cell's tape is
+#   closed to its bonded neighbours (bonds still share energy and shield).
+# - energy.copy_rest / copy_absorb: for 100 epochs after a reproductive act
+#   (a write into another cell, ALLOC or DIVIDE) a cell keeps only 20% of its
+#   automatic absorption: a germ-soma trade-off that lets bonded absorbers
+#   feed copiers.
+# Seeded with a resume-aware ancestor that turns, allocates a child of its
+# own length and copies itself with a counter: --events runs/seed-m17.jsonl
+preset = "primordia-2d-sun"
+seed = 2
+epochs = 1000000000
+
+[world]
+size = [501, 501]
+
+[individual]
+l_max = 256
+step_budget = 1024  # a 256-byte copy takes ~1000 steps
+starve_after = 800
+max_age = 20000  # 10 days
+sleep_scale = 4  # PUSH31 SLEEP = 124 epochs
+sleep_shield = false
+sleep_absorb = 0.0
+sleep_upkeep = 0.5
+pair_order = "self_first"
+random_initial_facing = false
+resume = true
+
+[energy]
+share_beta = 0.125
+copy_rest = 100
+copy_absorb = 0.2
+
+[energy.sun]
+i0 = 150
+moon = 0.04
+
+[energy.upkeep]
+base = 3.5
+per_byte = 0.06
+
+[energy.vents]
+enabled = true
+count = 6
+rate = 200000  # 500x the default; heat stays 400
+lifetime = 200000  # 100 days
+spawn_rate = 4e-5  # with the longer lifetime, keeps ~8 vents
+stagger = true  # founding vents start at random ages
+floor_only = false
+drift = 0.01
+
+[shielding]
+s_bond = 0.4
+
+[bonds]
+mutual = true
+birth_bond = 0.5
+kin_only = true  # like-with-like adhesion
+protect = true
+construct_window = 256
+
+[mutation]
+background = 1e-4
+
+[chemistry]
+init = [400, 400, 200, 0]  # X1, X2, X3, X4 per hand: 10x the default store
+n_cat = 16  # events per CAT at full folding (4 by default)
+
+[[chemistry.reactions]]
+r = ["X1", "X2"]
+p = ["X3"]
+energy = 12
+catalyzable = true
+kind = "mass"
+rate = 1e-6
+activation = 0.5
+
+[[chemistry.reactions]]  # light recharges the store: 10x the default
+r = ["X3"]
+p = ["X1", "X2"]
+energy = 0
+catalyzable = false
+kind = "photolysis"
+rate = 2e-2
+activation = 0.0
+
+[[chemistry.reactions]]
+r = ["X4"]
+p = ["X3"]
+energy = 20
+catalyzable = true
+kind = "mass"
+rate = 1e-5
+activation = 0.5
+
+[[chemistry.reactions]]
+r = ["X3"]
+p = ["X1", "X2"]
+energy = -12
+catalyzable = false
+kind = "mass"
+rate = 1e-4
+activation = 0.6
+
+[decay]
+rate = 5e-5
+
+[telemetry]
+snapshot_every = 11000  # alternates midday / dawn

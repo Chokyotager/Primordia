@@ -9,7 +9,7 @@ use crate::isa;
 pub const NONE: u32 = 0xFFFF_FFFF;
 
 /// Header words per cell.
-pub const HDR: usize = 9;
+pub const HDR: usize = 21;
 pub const H_LEN: usize = 0;
 pub const H_FLAGS: usize = 1;
 pub const H_E: usize = 2;
@@ -19,6 +19,18 @@ pub const H_BIRTH: usize = 5;
 pub const H_PARENT: usize = 6;
 pub const H_DEPTH: usize = 7;
 pub const H_ZERO: usize = 8;
+/// Saved execution context (individual.resume): IP (low 16 bits) and stack
+/// depth (high 16), the two heads, and the 16-entry stack as packed i16 pairs.
+/// Valid only while FL_CTX is set.
+pub const H_CTX: usize = 9;
+pub const H_H0: usize = 10;
+pub const H_H1: usize = 11;
+pub const H_STK: usize = 12;
+pub const STK_WORDS: usize = 8;
+/// Epochs of reduced absorption left after reproducing (energy.copy_rest).
+pub const H_REST: usize = 20;
+/// Header words before the resume/rest extension (snapshot versions 1 and 2).
+pub const HDR_V2: usize = 9;
 
 pub const FL_OCC: u32 = 1;
 pub const FL_HALT: u32 = 2;
@@ -26,6 +38,8 @@ pub const FL_EXEC: u32 = 4;
 pub const FL_NEWBORN: u32 = 8;
 /// Slept at the start of this epoch; remains protected after the counter reaches zero.
 pub const FL_SLEEPING: u32 = 16;
+/// The saved execution context in H_CTX..H_STK is valid (individual.resume).
+pub const FL_CTX: u32 = 32;
 pub const ORIENT_SHIFT: u32 = 8;
 pub const ORIENT_MASK: u32 = 0xFF << 8;
 pub const BOND_SHIFT: u32 = 16;
@@ -70,6 +84,9 @@ pub struct Params {
     pub pair_concat: bool,
     pub pair_random: bool,
     pub random_facing: bool,
+    /// individual.resume: a slice continues from the context saved at the end
+    /// of the previous one (spatial worlds only).
+    pub resume: bool,
     pub dead_after: u32,
     pub starve_after: u32,
     pub max_age: u32,
@@ -166,6 +183,15 @@ pub struct Params {
     pub bond_kin: bool,
     /// Q32 probability that a newborn stays bonded to its parent.
     pub birth_bond_q32: u32,
+    /// bonds.protect: bonded neighbours may write into (or digest) a cell only
+    /// during its first `construct_window` epochs.
+    pub bond_protect: bool,
+    pub construct_window: u32,
+    /// energy.copy_rest / copy_absorb: after a reproductive act (a write into
+    /// another cell, ALLOC or DIVIDE) a cell keeps this fraction (Q16) of its
+    /// automatic absorption for that many epochs. copy_rest 0 = off.
+    pub copy_rest: u32,
+    pub copy_absorb_q16: u32,
     pub max_body: u32,
 
     pub arr: Vec<Vec<u32>>,
@@ -270,6 +296,7 @@ impl Params {
             pair_concat,
             pair_random: c.individual.pair_order == PairOrder::Random,
             random_facing: c.individual.random_initial_facing,
+            resume: c.individual.resume && c.world.dims > 0 && !pair_concat,
             dead_after: c.individual.dead_after,
             starve_after: if energy_on { c.individual.starve_after } else { 0 },
             max_age: c.individual.max_age,
@@ -352,6 +379,10 @@ impl Params {
             bond_mutual: c.bonds.enabled && c.bonds.mutual && !pair_concat,
             bond_kin: c.bonds.enabled && c.bonds.kin_only && !pair_concat,
             birth_bond_q32: if c.bonds.enabled && !pair_concat { q32u(c.bonds.birth_bond) } else { 0 },
+            bond_protect: c.bonds.enabled && c.bonds.protect && !pair_concat,
+            construct_window: c.bonds.construct_window,
+            copy_rest: if energy_on { c.energy.copy_rest } else { 0 },
+            copy_absorb_q16: to_q16(c.energy.copy_absorb) as u32,
             max_body: c.bonds.max_body_move,
             arr,
             arr_mut,

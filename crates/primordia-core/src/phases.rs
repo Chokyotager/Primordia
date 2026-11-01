@@ -715,6 +715,11 @@ pub fn absorb_upkeep(st: &mut State, p: &Params) {
             if p.dormant_absorb_q16 != 1 << 16 && p.dormant_past_grace(h[H_FLAGS], h[H_ZERO]) {
                 a = mulshr16(a, p.dormant_absorb_q16);
             }
+            // energy.copy_rest: a cell that reproduced recently absorbs less
+            if h[H_REST] > 0 {
+                a = mulshr16(a, p.copy_absorb_q16);
+                h[H_REST] -= 1;
+            }
             let de = mulshr16(a, f[F_F]);
             f[F_F] -= de;
             h[H_E] = sat_add(h[H_E], de);

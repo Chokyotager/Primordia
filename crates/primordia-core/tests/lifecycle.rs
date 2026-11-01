@@ -1,0 +1,287 @@
+//! Lifecycle mechanisms: individual.resume (execution continues across
+//! slices), bonds.protect (tapes closed to bonded neighbours after a
+//! construction window) and energy.copy_rest / copy_absorb (germ-soma
+//! trade-off). All default off; the GPU parity and twin tests cover them on.
+use primordia_core::config::PairOrder;
+use primordia_core::isa::op;
+use primordia_core::{Config, CpuExec, Params, Sim, State, exec, phases};
+use primordia_core::params::*;
+
+/// The hand-written ancestor for resume worlds (`runs/seed-m17.jsonl`): reset
+/// the heads, TUMBLE, ALLOC a child of its own length, copy itself with a
+/// stack counter, start over. Achiral, so its mirror image is itself.
+const ANCESTOR: [u8; 20] = [
+    0x42, op::NEG, op::SETH0, // h0 = 0
+    op::LEN, 0x46, op::SUB, op::SETH1, // h1 = len (start of the partner)
+    op::TUMBLE, op::LEN, op::ALLOC, op::LEN, // child; counter = len
+    op::CPY, op::H0INC, op::H1INC, op::DEC, op::DUP, op::SKIPZ, 0xC5, // copy loop
+    op::DROP, 0xD2, // back to the start
+];
+
+fn cfg() -> Config {
+    let mut c = Config::preset("primordia-2d-sun").unwrap();
+    c.world.size = vec![9, 9];
+    c.world.init_occupancy = 0.0;
+    c.individual.random_initial_facing = false;
+    c.individual.pair_order = PairOrder::SelfFirst;
+    c.individual.step_budget = 1024;
+    c.mutation.enabled = false;
+    c.decay.enabled = false;
+    c.energy.sun.enabled = false;
+    c.energy.vents.enabled = false;
+    c.energy.upkeep.base = 0.0;
+    c.energy.upkeep.per_byte = 0.0;
+    c.energy.absorb_alpha = 0.0;
+    c.shielding.enabled = false;
+    c.matter.enabled = false;
+    c.bonds.birth_bond = 0.0;
+    c
+}
+fn put(s: &mut State, p: &Params, at: usize, g: &[u8], len: usize) {
+    let base = at * s.lmax;
+    s.tapes[base..base + s.lmax].iter_mut().for_each(|x| *x = 0);
+    s.tapes[base..base + g.len()].copy_from_slice(g);
+    *s.hm(at, H_LEN) = len as u32;
+    *s.hm(at, H_FLAGS) = FL_OCC | (p.orient.valid[2][0] << ORIENT_SHIFT);
+    *s.hm(at, H_E) = 10_000;
+}
+fn facing_cell(s: &State, p: &Params, at: usize) -> usize {
+    exec::nb(s, p, at, p.orient.f[s.orient(at) as usize]).unwrap()
+}
+/// One slice for `at` with `energy` to spend (flags reset as at an epoch start).
+fn slice(s: &mut State, p: &Params, at: usize, energy: u32) {
+    *s.hm(at, H_E) = energy;
+    *s.hm(at, H_FLAGS) &= !(FL_EXEC | FL_HALT | FL_SLEEPING);
+    let flags = exec::flag_snapshot(s);
+    exec::exec_slice(s, p, &flags, at, None, None);
+}
+fn nonzero(s: &State, c: usize) -> usize {
+    s.tapes[c * s.lmax..(c + 1) * s.lmax].iter().filter(|&&b| b != 0).count()
+}
+
+/// The audit's probe: a 64-byte copier with 256 energy per slice copies 51
+/// bytes. Restarting, it recopies the same prefix forever; resuming, it
+/// finishes in the second slice.
+#[test]
+fn resume_finishes_a_copy_that_needs_several_slices() {
+    let mut genome = vec![op::CPY, op::H0INC, op::H1INC, 0xC2];
+    genome.resize(64, 0x70);
+    for resume in [false, true] {
+        let mut c = cfg();
+        c.individual.resume = resume;
+        let p = Params::new(&c);
+        let mut s = State::init(&c, &p);
+        let a = p.geom.index([4, 4, 0]);
+        put(&mut s, &p, a, &genome, 64);
+        let b = facing_cell(&s, &p, a);
+        put(&mut s, &p, b, &[], 64);
+        let mut copied = vec![];
+        for _ in 0..3 {
+            slice(&mut s, &p, a, 256);
+            copied.push(nonzero(&s, b));
+        }
+        if resume {
+            assert!(copied[0] < 64 && copied[1] == 64, "resume {copied:?}");
+            assert_eq!(&s.tapes[b * s.lmax..b * s.lmax + 64], &genome[..]);
+        } else {
+            assert!(copied[0] < 64 && copied.iter().all(|&k| k == copied[0]), "restart {copied:?}");
+        }
+    }
+}
+
+/// The saved context includes the stack (the ancestor's loop counter), and a
+/// slice that ends on HALT, a stack fault or SLEEP saves accordingly.
+#[test]
+fn resume_keeps_the_stack_and_restarts_after_halt_or_faults() {
+    let mut c = cfg();
+    c.individual.resume = true;
+    c.individual.step_budget = 7; // slices end mid-loop
+    let p = Params::new(&c);
+    let mut s = State::init(&c, &p);
+    let a = p.geom.index([4, 4, 0]);
+    put(&mut s, &p, a, &ANCESTOR, ANCESTOR.len());
+    for _ in 0..40 {
+        slice(&mut s, &p, a, 10_000);
+    }
+    let kids: Vec<usize> = (0..s.n).filter(|&x| x != a && s.tape(x) == ANCESTOR).collect();
+    assert!(!kids.is_empty(), "a complete child despite 7-step slices");
+    // without resume the same budget never gets past the setup
+    let mut c2 = c.clone();
+    c2.individual.resume = false;
+    let p2 = Params::new(&c2);
+    let mut s2 = State::init(&c2, &p2);
+    put(&mut s2, &p2, a, &ANCESTOR, ANCESTOR.len());
+    for _ in 0..40 {
+        slice(&mut s2, &p2, a, 10_000);
+    }
+    assert!((0..s2.n).all(|x| x == a || s2.tape(x) != ANCESTOR));
+
+    for (prog, ctx, ip) in [
+        (vec![0x41, op::HALT, 0x45], false, 0),
+        (vec![op::DROP, 0x45], false, 0),
+        (vec![0x41, op::SLEEP, 0x45, 0x46], true, 2),
+    ] {
+        let mut s = State::init(&c, &p);
+        put(&mut s, &p, a, &prog, prog.len());
+        slice(&mut s, &p, a, 10_000);
+        assert_eq!(s.flags(a) & FL_CTX != 0, ctx, "{prog:x?}");
+        if ctx {
+            assert_eq!(s.h(a, H_CTX) & 0xFFFF, ip);
+        }
+    }
+}
+
+/// Parent -> child -> grandchild under the live mechanisms, each child
+/// isolated before it reproduces, with a little energy per epoch.
+#[test]
+fn ancestor_reproduces_for_three_generations_in_isolation() {
+    let mut c = cfg();
+    c.world.size = vec![15, 15];
+    c.individual.resume = true;
+    c.bonds.protect = true;
+    c.bonds.construct_window = 64;
+    c.bonds.birth_bond = 0.5;
+    c.energy.copy_rest = 50;
+    c.energy.copy_absorb = 0.25;
+    c.energy.init_f = 4000;
+    c.energy.absorb_alpha = 0.05;
+    c.energy.wake_energy = 40;
+    c.energy.dissipation = 0.0;
+    c.validate().unwrap();
+    let p = Params::new(&c);
+    let at = p.geom.index([7, 7, 0]);
+    let mut sim = Sim::new(c.clone(), Box::new(CpuExec)).unwrap();
+    put(&mut sim.st, &p, at, &ANCESTOR, ANCESTOR.len());
+    *sim.st.hm(at, H_E) = 300;
+    sim.st.reset_ledger(&p);
+    for generation in 0..3 {
+        let mut child = None;
+        for _ in 0..400 {
+            sim.step();
+            child = (0..sim.st.n).find(|&x| x != at && sim.st.tape(x) == ANCESTOR);
+            if child.is_some() {
+                break;
+            }
+        }
+        let child = child.unwrap_or_else(|| panic!("generation {generation}: no complete child"));
+        assert!(sim.st.h(at, H_REST) > 0, "the parent is in its rest period");
+        assert_eq!(sim.st.ledger.violations, 0);
+        let mut isolated = Sim::new(c.clone(), Box::new(CpuExec)).unwrap();
+        isolated.st.epoch = sim.st.epoch;
+        let l = sim.st.lmax;
+        isolated.st.tapes[at * l..(at + 1) * l].copy_from_slice(&sim.st.tapes[child * l..(child + 1) * l]);
+        isolated.st.hdr[at * HDR..(at + 1) * HDR].copy_from_slice(&sim.st.hdr[child * HDR..(child + 1) * HDR]);
+        isolated.st.hdr[at * HDR + H_FLAGS] &= !BOND_MASK;
+        *isolated.st.hm(at, H_E) = 300;
+        isolated.st.reset_ledger(&p);
+        sim = isolated;
+    }
+}
+
+/// bonds.protect: a bonded neighbour writes into a young cell but not into
+/// one past its construction window; an unbonded writer is unaffected.
+#[test]
+fn bonded_writes_need_the_construction_window() {
+    let copier = [op::CPY, op::H0INC, op::H1INC, 0xC2];
+    for (bonded, age, writes) in [(true, 10, true), (true, 300, false), (false, 300, true)] {
+        let mut c = cfg();
+        c.bonds.protect = true;
+        c.bonds.construct_window = 256;
+        let p = Params::new(&c);
+        let mut s = State::init(&c, &p);
+        s.epoch = 1000;
+        let a = p.geom.index([4, 4, 0]);
+        put(&mut s, &p, a, &copier, 4);
+        let b = facing_cell(&s, &p, a);
+        put(&mut s, &p, b, &[], 4);
+        *s.hm(b, H_BIRTH) = 1000 - age;
+        if bonded {
+            let d = p.orient.f[s.orient(a) as usize];
+            *s.hm(a, H_FLAGS) |= 1 << (BOND_SHIFT + d);
+            *s.hm(b, H_FLAGS) |= 1 << (BOND_SHIFT + (d ^ 1));
+        }
+        slice(&mut s, &p, a, 100);
+        assert_eq!(nonzero(&s, b) > 0, writes, "bonded {bonded} age {age}");
+    }
+}
+
+/// energy.copy_rest: writing into a neighbour starts a period in which the
+/// writer absorbs copy_absorb of the free energy a non-copier absorbs.
+#[test]
+fn reproduction_reduces_absorption_for_the_rest_period() {
+    let mut c = cfg();
+    c.energy.copy_rest = 3;
+    c.energy.copy_absorb = 0.25;
+    c.energy.absorb_alpha = 0.5;
+    let p = Params::new(&c);
+    let mut s = State::init(&c, &p);
+    let (a, z) = (p.geom.index([2, 2, 0]), p.geom.index([6, 6, 0]));
+    put(&mut s, &p, a, &[op::CPY, op::HALT], 2);
+    put(&mut s, &p, z, &[op::HALT], 2);
+    let b = facing_cell(&s, &p, a);
+    put(&mut s, &p, b, &[], 2);
+    slice(&mut s, &p, a, 100);
+    slice(&mut s, &p, z, 100);
+    assert_eq!((s.h(a, H_REST), s.h(z, H_REST)), (3, 0));
+    // compare with the writer's own absorption once the period is over
+    // (its neighbour shades it, so an isolated cell is not the baseline)
+    let mut gains = vec![];
+    for _ in 0..5 {
+        *s.fm(a, F_F) = 40_000;
+        *s.hm(a, H_E) = 1000;
+        phases::absorb_upkeep(&mut s, &p);
+        gains.push((s.h(a, H_E) - 1000) as f64);
+    }
+    assert_eq!(gains[3], gains[4]);
+    for (i, g) in gains.iter().enumerate() {
+        let want = if i < 3 { 0.25 } else { 1.0 };
+        assert!((g / gains[4] - want).abs() < 0.01, "epoch {i}: {gains:?}");
+    }
+    assert_eq!(s.h(a, H_REST), 0);
+}
+
+/// Options added later serialize only when set, so existing configurations
+/// (and the hashes their snapshots record) are unchanged; version 3 snapshots
+/// keep the saved contexts.
+#[test]
+fn new_options_keep_old_hashes_and_snapshots_keep_contexts() {
+    let base = Config::preset("primordia-2d-sun").unwrap().to_toml();
+    for key in ["resume", "protect", "construct_window", "copy_rest", "copy_absorb"] {
+        assert!(!base.contains(key), "{key} serialized at its default");
+    }
+    let mut c = cfg();
+    c.individual.resume = true;
+    c.energy.copy_rest = 9;
+    let t = c.to_toml();
+    assert!(t.contains("resume = true") && t.contains("copy_rest = 9"));
+    let p = Params::new(&c);
+    let mut s = State::init(&c, &p);
+    let a = p.geom.index([4, 4, 0]);
+    put(&mut s, &p, a, &ANCESTOR, ANCESTOR.len());
+    let mut c7 = c.clone();
+    c7.individual.step_budget = 7;
+    let p7 = Params::new(&c7);
+    slice(&mut s, &p7, a, 10_000);
+    assert!(s.flags(a) & FL_CTX != 0 && s.h(a, H_REST) == 0);
+    s.hdr[a * HDR + H_REST] = 5;
+    let path = std::env::temp_dir().join(format!("primordia-{}-v3.psnap", std::process::id()));
+    s.write_snapshot(&path, 7).unwrap();
+    assert_eq!(State::snapshot_header(&path).unwrap().0, 3);
+    let (back, _) = State::read_snapshot(&path, &p).unwrap();
+    assert_eq!(back.hdr, s.hdr);
+    std::fs::remove_file(path).unwrap();
+}
+
+/// The M17 seed events carry exactly the ancestor tested above.
+#[test]
+fn m17_seed_events_carry_the_tested_ancestor() {
+    let seeds = include_str!("../../../runs/seed-m17.jsonl");
+    for line in seeds.lines().filter(|l| !l.trim().is_empty()) {
+        let ev: primordia_core::events::Event = serde_json::from_str(line).unwrap();
+        let g = primordia_core::isa::parse_hex_genome(ev.params["genome"].as_str().unwrap()).unwrap();
+        assert_eq!(g, ANCESTOR);
+    }
+    let c = Config::from_file(std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../runs/live-m17.toml"))).unwrap();
+    assert!(c.individual.resume && c.bonds.protect && c.energy.copy_rest > 0);
+    assert_eq!((c.individual.pair_order, c.individual.random_initial_facing), (PairOrder::SelfFirst, false));
+}

@@ -249,9 +249,12 @@ fn legacy_snapshots_rebase_accounting_and_bad_array_lengths_fail() {
     st.ledger.energy_prev = -1; st.ledger.violations = 123;
     let path = tmp("legacy.psnap"); st.write_snapshot(&path, 42).unwrap();
     let mut raw = zstd::decode_all(std::fs::File::open(&path).unwrap()).unwrap();
-    let mut pos = 25;
-    for _ in 0..6 { let n = u64::from_le_bytes(raw[pos..pos + 8].try_into().unwrap()) as usize; pos += 8 + n; }
-    raw.truncate(pos); raw[4..8].copy_from_slice(&1u32.to_le_bytes());
+    // Rebuild a version 1 file: its first six blocks, with 9-word headers.
+    let (mut pos, mut blocks) = (25, vec![]);
+    for _ in 0..6 { let n = u64::from_le_bytes(raw[pos..pos + 8].try_into().unwrap()) as usize; blocks.push(raw[pos + 8..pos + 8 + n].to_vec()); pos += 8 + n; }
+    blocks[1] = blocks[1].chunks_exact(HDR * 4).flat_map(|row| row[..HDR_V2 * 4].to_vec()).collect();
+    raw.truncate(25); raw[4..8].copy_from_slice(&1u32.to_le_bytes());
+    for b in blocks { raw.extend_from_slice(&(b.len() as u64).to_le_bytes()); raw.extend_from_slice(&b); }
     std::fs::write(&path, zstd::encode_all(&raw[..], 1).unwrap()).unwrap();
     let (loaded, hash) = State::read_snapshot(&path, &p).unwrap();
     assert_eq!(hash, 42); assert_eq!(loaded.hash(), st.hash()); assert_eq!(loaded.ledger.energy_prev, st.energy_total());

@@ -89,6 +89,12 @@ pub struct IndividualCfg {
     pub dormant_absorb: f64,
     /// Tape decay multiplier once dormant past the grace period (1 = none).
     pub dormant_rot: f64,
+    /// A slice continues where the previous one stopped (IP, heads and stack
+    /// are kept in the header) instead of restarting at the beginning. HALT,
+    /// stack faults and an empty address space start the next slice afresh.
+    /// Spatial worlds only; ignored in 0D and pair-concatenation modes.
+    #[serde(skip_serializing_if = "is_false")]
+    pub resume: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -163,6 +169,13 @@ pub struct EnergyCfg {
     pub init_e: u32,
     /// Halted cells wake only once they hold this much energy.
     pub wake_energy: u32,
+    /// Germ-soma trade-off: for `copy_rest` epochs after a reproductive act
+    /// (a write into another cell, ALLOC or DIVIDE) a cell keeps only
+    /// `copy_absorb` of its automatic absorption. 0 = off.
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    pub copy_rest: u32,
+    #[serde(skip_serializing_if = "is_one")]
+    pub copy_absorb: f64,
     pub sense_energy_scale: u32,
     pub sense_free_scale: u32,
     pub sun: SunCfg,
@@ -312,6 +325,14 @@ pub struct ShieldCfg {
     pub light_cover: f64,
 }
 
+// Options added after configuration hashes were recorded are omitted from the
+// serialized form at their defaults, so existing configurations (and the
+// snapshots that record their hashes) keep their hashes.
+fn is_false(v: &bool) -> bool { !*v }
+fn is_zero_u32(v: &u32) -> bool { *v == 0 }
+fn is_one(v: &f64) -> bool { *v == 1.0 }
+fn is_default_window(v: &u32) -> bool { *v == 256 }
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct BondCfg {
@@ -332,6 +353,13 @@ pub struct BondCfg {
     /// are kin (`exec::tapes_kin`), as adhesion molecules that stick only to
     /// their own kind. Birth bonds are exempt.
     pub kin_only: bool,
+    /// Bonds share energy and shield from outsiders, but a bonded neighbour
+    /// may write into (or digest) a cell only during the cell's first
+    /// `construct_window` epochs after birth (parental construction).
+    #[serde(skip_serializing_if = "is_false")]
+    pub protect: bool,
+    #[serde(skip_serializing_if = "is_default_window")]
+    pub construct_window: u32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -447,6 +475,7 @@ impl Default for IndividualCfg {
             dormant_grace: 0,
             dormant_absorb: 1.0,
             dormant_rot: 1.0,
+            resume: false,
         }
     }
 }
@@ -500,6 +529,8 @@ impl Default for EnergyCfg {
             init_f: 500,
             init_e: 600,
             wake_energy: 256,
+            copy_rest: 0,
+            copy_absorb: 1.0,
             sense_energy_scale: 16,
             sense_free_scale: 16,
             sun: SunCfg::default(),
@@ -574,7 +605,7 @@ impl Default for ShieldCfg {
 }
 impl Default for BondCfg {
     fn default() -> Self {
-        BondCfg { enabled: true, gamma: 4.0, break_rate: 1e-4, break_activation: 0.5, max_body_move: 4096, vote_threshold: 0.5, mutual: false, birth_bond: 0.0, kin_only: false }
+        BondCfg { enabled: true, gamma: 4.0, break_rate: 1e-4, break_activation: 0.5, max_body_move: 4096, vote_threshold: 0.5, mutual: false, birth_bond: 0.0, kin_only: false, protect: false, construct_window: 256 }
     }
 }
 impl Default for CopyErr {
@@ -850,6 +881,7 @@ impl Config {
             ("mutation.copy.sub", self.mutation.copy.sub),
             ("mutation.copy.ins", self.mutation.copy.ins),
             ("mutation.copy.del", self.mutation.copy.del),
+            ("energy.copy_absorb", self.energy.copy_absorb),
         ] {
             ensure!((0.0..=1.0).contains(&value), "{name} must be in 0..=1");
         }

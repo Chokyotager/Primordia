@@ -45,19 +45,21 @@ uses the corrected rules; replay historical hashes with the commit recorded in t
 
 ### The live world
 
-The current long-running experiment is a 501² world with day and night, seeded with a minimal replicator
-and its mirror image:
+The current long-running experiment is a 501² world with day and night, seeded with a hand-written
+ancestor that turns, allocates a child of its own length and copies itself:
 
 ```
-./target/release/primordia run runs/live-m16.toml --events runs/seed-501.jsonl --autorun --web 0.0.0.0:8765
+./target/release/primordia run runs/live-m17.toml --events runs/seed-m17.jsonl --autorun --web 0.0.0.0:8765
 ```
 
 It adds moonlight, a 10-day lifespan, longer sleeps, sleepers that absorb no light and pay half
 the normal upkeep, stronger bond shielding and energy sharing, strong, long-lived vents that act as
 night-time oases, mutual and like-with-like adhesion, birth bonds, less damage to longer genomes, and a
-larger chemical store to the spec's rules
-(see [DESIGN.md](DESIGN.md#rules-added-beyond-the-spec)), to find out whether cells and bodies learn to
-survive the night.
+larger chemical store to the spec's rules. M17 also has cells run their own program and keep their
+facing, resume execution where the last slice stopped, close a cell's tape to its bonded neighbours after
+construction, and make cells that just reproduced absorb less, so that absorbers can feed copiers
+(see [DESIGN.md](DESIGN.md#rules-added-beyond-the-spec)). The question is whether cells and bodies learn to
+survive the night and divide their labour.
 
 ## Viewers
 

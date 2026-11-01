@@ -91,8 +91,8 @@ fn check(c: Config, epochs: u32, seeded: bool, resident: bool) -> Sim {
             panic!(
                 "dims {dims} resident {resident}: GPU != CPU at epoch {e}: {:?}\n cpu hdr {:?}\n gpu hdr {:?}\n cpu f {:?}\n gpu f {:?}",
                 d,
-                &a.st.hdr[c * 9..c * 9 + 9],
-                &b.st.hdr[c * 9..c * 9 + 9],
+                &a.st.hdr[c * primordia_core::params::HDR..(c + 1) * primordia_core::params::HDR],
+                &b.st.hdr[c * primordia_core::params::HDR..(c + 1) * primordia_core::params::HDR],
                 &a.st.fields[c * a.st.nf..(c + 1) * a.st.nf],
                 &b.st.fields[c * b.st.nf..(c + 1) * b.st.nf]
             );
@@ -398,4 +398,37 @@ fn birth_log_can_hold_every_newborn_in_an_epoch() {
     a.step(); b.step(); b.sync(); let births = b.take_births();
     assert_eq!(births.len(), 16_500); assert_eq!(births, a.take_births());
     assert_eq!(a.st.hash(), b.st.hash()); assert!(b.rejected.is_empty());
+}
+
+/// individual.resume (saved IP/heads/stack across slices, including after
+/// MOVE and SLEEP), bonds.protect and energy.copy_rest: identical on both
+/// backends, with random and fixed pair order / facing.
+#[test]
+fn lifecycle_mechanisms_match_cpu() {
+    use primordia_core::config::PairOrder;
+    for (dims, fixed) in [(2, true), (2, false), (3, true)] {
+        let mut c = cfg(dims);
+        c.individual.resume = true;
+        c.individual.step_budget = 48; // slices end mid-program
+        c.individual.sleep_scale = 4;
+        if fixed {
+            c.individual.pair_order = PairOrder::SelfFirst;
+            c.individual.random_initial_facing = false;
+        }
+        c.bonds.protect = true;
+        c.bonds.construct_window = 12;
+        c.bonds.mutual = true;
+        c.bonds.birth_bond = 0.5;
+        c.energy.copy_rest = 10;
+        c.energy.copy_absorb = 0.3;
+        c.validate().unwrap();
+        for resident in [false, true] {
+            let a = check(c.clone(), 80, true, resident);
+            let st = &a.st;
+            let ctx = (0..st.n).filter(|&i| st.flags(i) & primordia_core::params::FL_CTX != 0).count();
+            let rest = (0..st.n).filter(|&i| st.h(i, primordia_core::params::H_REST) > 0).count();
+            eprintln!("lifecycle dims {dims} fixed {fixed} resident {resident}: {ctx} saved contexts, {rest} resting");
+            assert!(ctx > 0 && rest > 0);
+        }
+    }
 }

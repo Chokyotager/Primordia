@@ -83,6 +83,9 @@ GPU utilisation during a full run with viewer, telemetry and web feed: 95–98%.
 * Transport plans size to the configured fields. Vent uploads aggregate positions without losing
   duplicate sources. Birth buffers hold one record per site, the maximum number of newborns
   that can be present at the epoch's birth-recording phase.
+* Cell headers are 21 words: the original 9, the resume context (`H_CTX`, `H_H0`, `H_H1`, 8 stack words)
+  and the reproduction rest counter (`H_REST`). Version 3 `.psnap` files store all 21; versions 1 and 2
+  load with the extension empty.
 * Snapshots carry their own effective configuration and accounting to the observer. Version 2
   `.psnap` files preserve pending tallies, residuals, violation history, and light, and a sibling
   `.toml` saves the effective configuration. Version 1 remains readable; its missing accounting
@@ -126,6 +129,14 @@ by golden and parity tests. They came out of the long live runs, in this order:
 | `individual.dormant_idle` | the dormancy counter behind `starve_after` counts only epochs in which a halted cell did not execute | a copier that runs until it is out of energy ends every slice halted, so busy, well-fed cells counted as starving |
 | `individual.dormant_grace`, `dormant_absorb`, `dormant_rot` | once dormant for the grace period, a cell keeps only this fraction of its light absorption and its tape decays this many times faster | a dormant cell paid nothing, kept absorbing and woke every ~85 epochs even by moonlight, so dormancy was a free way to sit out the night; now only a bonded neighbour's shared energy can rescue it |
 | `shielding.light_cover` | how much face cover (bonds, occupied neighbours) reduces light absorption; radiation, decay and write shielding keep the full cover | in 2D the sun is overhead, yet every bond cost a cell a quarter of its light, which taxed bodies |
+| `individual.resume` | a slice continues where the previous one stopped: the IP, both heads and the 16-entry stack are kept in the cell's header (unreduced, so addresses follow the current partner). `HALT`, a stack fault or an empty address space start the next slice afresh; running out of energy retries the instruction, `SLEEP` and a move continue after it. Spatial worlds only | every slice restarted at IP 0, so a copy that needed more than one slice's energy recopied the same prefix forever and genomes could not outgrow one slice (the audit's 64-byte probe stalled at 51 bytes; M16 under the corrected code collapsed to ~16-byte copiers by day 12) |
+| `bonds.protect`, `bonds.construct_window` | a bonded neighbour may write into or digest a cell only during the cell's first `construct_window` epochs (default 256); after that bonds still share energy and shield the cell from outsiders | a bond let any bonded copier overwrite its partner without shielding, so bodies protected copiers better than the specialists inside them |
+| `energy.copy_rest`, `energy.copy_absorb` | for `copy_rest` epochs after a reproductive act (a permitted write into another cell, `ALLOC` or `DIVIDE`) a cell keeps only `copy_absorb` of its automatic absorption | every cell absorbed light and vent energy whatever it did, so a lone copier could do everything a specialist could. This germ-soma trade-off lets bonded absorbers that do not copy feed a copier through energy sharing |
+
+The last three are new in M17 and default off (`copy_rest` 0). Options added after configuration hashes
+were recorded are left out of the serialized configuration at their defaults, so older configurations and
+the hashes in their snapshots are unchanged. `individual.pair_order` and `individual.random_initial_facing`
+are the spec's own settings; M17 is the first live world to use `self_first` and fixed facing.
 
 `runs/live-m4.toml` uses the first six (starve 800, moon 0.02, lifespan 6,000, sleep ×16, shield on, sleepers
 absorb nothing). `runs/live-m5.toml` is M4 with `shielding.s_bond` 0.4 and `energy.share_beta` 0.125; `runs/live-m6.toml` adds
@@ -192,6 +203,17 @@ bonded neighbours were less related than unbonded ones (21% vs 24% kin). Mutual 
 that do not run `BOND`. The chemical store stayed unused; its ceiling (~1,000 energy per site per day) was
 too small against copying speed. `runs/live-m16.toml` adds like-with-like adhesion (`bonds.kin_only`) and a
 10× larger store (`chemistry.init` 400/400/200, ~24,000 energy per site).
+
+After the post-audit correctness fixes, M16 was rerun from the same seed (`runs/live-m16-s2-fix`, 53 days).
+Handedness stayed within ±0.02 (the old run drifted to +0.05 in 6 days), but programs shrank from ~55 bytes
+on day 6 to ~16 bytes by day 12 and stayed there: a daily cycle between ~168k cells at dawn and a full world
+by noon (night survival ~67%), bodies of a few hundred cells, and falling program diversity. The audit's
+lifecycle findings (`feedback.md`, sections 1–5) predicted this. `runs/live-m17.toml` adds all four
+changes: own program first with fixed facing, resumed execution, protected bonds and the reproduction rest
+period (`copy_rest` 100, `copy_absorb` 0.2). The old seed's copy loop never ends, which under resumed
+execution means one child per cell, so M17 is seeded with a new 20-byte ancestor (`runs/seed-m17.jsonl`):
+it resets its heads, turns at random, allocates a child of its own length, copies itself with a counter
+on the stack and starts over. `tests/lifecycle.rs` checks it for three isolated generations.
 
 `runs/live-m1.toml` to `live-m3.toml` are the earlier steps.
 

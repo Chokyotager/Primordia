@@ -45,6 +45,8 @@ pub mod pi {
     pub const NPAIRS: usize = 34;
     pub const SLEEP_SCALE: usize = 35;
     pub const BIRTH_BOND: usize = 36;
+    pub const CONSTRUCT_WINDOW: usize = 37;
+    pub const COPY_REST: usize = 38;
     pub const COSTS: usize = 64;
     pub const PWRITE: usize = 320;
     pub const CAT: usize = 384;
@@ -69,6 +71,8 @@ pub mod flag {
     pub const SLEEP_SHIELD: u32 = 4096;
     pub const BOND_MUTUAL: u32 = 8192;
     pub const BOND_KIN: u32 = 16384;
+    pub const RESUME: u32 = 32768;
+    pub const BOND_PROTECT: u32 = 65536;
 }
 
 /// Static (per-config) part of the parameter buffer. EPOCH, MIRRORED, COLOR
@@ -103,6 +107,8 @@ pub fn param_words(p: &Params) -> Vec<u32> {
         (p.sleep_shield, flag::SLEEP_SHIELD),
         (p.bond_mutual, flag::BOND_MUTUAL),
         (p.bond_kin, flag::BOND_KIN),
+        (p.resume, flag::RESUME),
+        (p.bond_protect, flag::BOND_PROTECT),
     ] {
         if on {
             f |= b;
@@ -125,6 +131,8 @@ pub fn param_words(p: &Params) -> Vec<u32> {
     w[pi::F_SCALE] = p.f_scale;
     w[pi::SLEEP_SCALE] = p.sleep_scale;
     w[pi::BIRTH_BOND] = p.birth_bond_q32;
+    w[pi::CONSTRUCT_WINDOW] = p.construct_window;
+    w[pi::COPY_REST] = p.copy_rest;
     w[pi::SIG_EMIT] = p.sig_emit;
     let ncat = p.cat.len().min(pi::MAX_CAT);
     w[pi::NCAT] = if p.chem_on { ncat as u32 } else { 0 };
@@ -169,6 +177,12 @@ pub fn constants() -> String {
         ("H_PARENT", H_PARENT),
         ("H_DEPTH", H_DEPTH),
         ("H_ZERO", H_ZERO),
+        ("H_CTX", H_CTX),
+        ("H_H0", H_H0),
+        ("H_H1", H_H1),
+        ("H_STK", H_STK),
+        ("STK_WORDS", STK_WORDS),
+        ("H_REST", H_REST),
         ("S_SPENT", S_SPENT),
         ("S_VOTE", S_VOTE),
         ("S_WALL", S_WALL),
@@ -182,6 +196,7 @@ pub fn constants() -> String {
         ("FL_EXEC", FL_EXEC),
         ("FL_NEWBORN", FL_NEWBORN),
         ("FL_SLEEPING", FL_SLEEPING),
+        ("FL_CTX", FL_CTX),
         ("ORIENT_SHIFT", ORIENT_SHIFT),
         ("ORIENT_MASK", ORIENT_MASK),
         ("BOND_SHIFT", BOND_SHIFT),
@@ -231,6 +246,8 @@ pub fn constants() -> String {
         ("P_NPAIRS", pi::NPAIRS),
         ("P_SLEEP_SCALE", pi::SLEEP_SCALE),
         ("P_BIRTH_BOND", pi::BIRTH_BOND),
+        ("P_CONSTRUCT_WINDOW", pi::CONSTRUCT_WINDOW),
+        ("P_COPY_REST", pi::COPY_REST),
         ("P_COSTS", pi::COSTS),
         ("P_PWRITE", pi::PWRITE),
         ("P_CAT", pi::CAT),
@@ -254,6 +271,8 @@ pub fn constants() -> String {
         ("F_SLEEP_SHIELD", flag::SLEEP_SHIELD),
         ("F_BOND_MUTUAL", flag::BOND_MUTUAL),
         ("F_BOND_KIN", flag::BOND_KIN),
+        ("F_RESUME", flag::RESUME),
+        ("F_BOND_PROTECT", flag::BOND_PROTECT),
     ] {
         s += &format!("const {n}: u32 = {v}u;\n");
     }
@@ -350,7 +369,8 @@ pub mod qi {
     pub const DORM_ROT: usize = SLEEP_ABSORB + 5;
     pub const LIGHT_COVER: usize = SLEEP_ABSORB + 6;
     pub const SLEEP_UPKEEP: usize = SLEEP_ABSORB + 7;
-    pub const LEN: usize = SLEEP_ABSORB + 8;
+    pub const COPY_ABSORB: usize = SLEEP_ABSORB + 8;
+    pub const LEN: usize = SLEEP_ABSORB + 9;
 }
 
 pub mod qf {
@@ -456,6 +476,7 @@ pub fn phys_words(p: &Params) -> Vec<u32> {
     w[qi::STARVE] = p.starve_after;
     w[qi::MAX_AGE] = p.max_age;
     w[qi::SLEEP_ABSORB] = p.sleep_absorb_q16;
+    w[qi::COPY_ABSORB] = p.copy_absorb_q16;
     w[qi::DORM_COUNT] = p.dormancy_counted() as u32;
     w[qi::DORM_IDLE] = p.dormant_idle as u32;
     w[qi::DORM_GRACE] = p.dormant_grace;
@@ -550,6 +571,7 @@ pub fn phys_constants() -> String {
         ("Q_STARVE", qi::STARVE),
         ("Q_MAX_AGE", qi::MAX_AGE),
         ("Q_SLEEP_ABSORB", qi::SLEEP_ABSORB),
+        ("Q_COPY_ABSORB", qi::COPY_ABSORB),
         ("Q_DORM_COUNT", qi::DORM_COUNT),
         ("Q_DORM_IDLE", qi::DORM_IDLE),
         ("Q_DORM_GRACE", qi::DORM_GRACE),
