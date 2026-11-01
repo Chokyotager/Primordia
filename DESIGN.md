@@ -20,7 +20,7 @@ per kernel with GPU timestamps (where the adapter supports them; otherwise by sy
 reports the GPU span of an epoch. `bench` counts epochs still in flight, so compare runs over the same
 epoch window, and preferably with `run` over a fixed resumed window.
 
-Throughput notes (M17, 501², RTX 3050, step budget 256, a day-3 morning window: 20.7 epochs/s). The
+Throughput notes (M17, 501², RTX 3050, a day-3 morning window: 20.7 epochs/s at step budget 256). The
 interpreter is ~75% of GPU time and is compute-bound by divergence: at midday 92% of cells run a slice
 averaging ~120 steps (~25 M steps per epoch), so warps execute many different instruction paths. The flux
 scratch arrays (`jf`, `bo`, `outs`) are field-major; cell-major they made transport 3.3× slower (22 →
@@ -224,9 +224,9 @@ period (`copy_rest` 100, `copy_absorb` 0.2). The old seed's copy loop never ends
 execution means one child per cell, so M17 is seeded with a new 20-byte ancestor (`runs/seed-m17.jsonl`):
 it resets its heads, turns at random, allocates a child of its own length, copies itself with a counter
 on the stack and starts over. `tests/lifecycle.rs` checks it for three isolated generations. M17 also lowers the
-step budget from 1,024 to 256: with resumed execution the budget limits a cell's work per epoch, not the
-length of a genome it can copy. On the GPU each colour pass waits for its longest slice, and the ~2% of
-cells that ran the full 1,024 steps set the pace (9 epochs/s; 15 at 256).
+step budget from 1,024 to 128: with resumed execution the budget limits a cell's work per epoch, not the
+length of a genome it can copy, and the interpreter dominates GPU time (on a day-3 window: 9 epochs/s at
+1,024, 15 at 256 before the transport layout fix, 21 at 256 after it).
 
 `runs/live-m1.toml` to `live-m3.toml` are the earlier steps.
 
