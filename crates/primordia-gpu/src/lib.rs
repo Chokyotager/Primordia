@@ -690,7 +690,7 @@ fn write_ctl(blk: &mut [u32], p: &Params, batch: &[(usize, FluxSpec, usize, u8)]
         let b = 8 + k * 10;
         blk[b] = off as u32;
         blk[b + 1] = spec.kappa as u32;
-        blk[b + 2] = spec.gamma.map(|g| g as u32).unwrap_or(0);
+        blk[b + 2] = spec.gamma.map(|g| g as u32).unwrap_or(NONE);
         blk[b + 3] = spec.bonded_only as u32;
         blk[b + 4] = spec.outside.is_some() as u32;
         blk[b + 5] = spec.outside.unwrap_or(0);

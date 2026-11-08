@@ -853,7 +853,10 @@ pub fn body_types(st: &primordia_core::State, p: &primordia_core::Params, bodies
             if head(c).iter().any(|&x| x != 0) {
                 *prefixes.entry(head(c)).or_default() += 1;
             }
-            *roles.entry(st.tape(c).iter().fold(0, |a, &b| a | bit[b as usize])).or_default() += 1;
+            // nor is it a role
+            if st.tape(c).iter().any(|&x| x != 0) {
+                *roles.entry(st.tape(c).iter().fold(0, |a, &b| a | bit[b as usize])).or_default() += 1;
+            }
             for d in (0..6).step_by(2) {
                 if st.bonds(c) & (1 << d) != 0 {
                     let t = p.nbr[c * 6 + d] as usize;

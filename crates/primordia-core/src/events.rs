@@ -293,7 +293,9 @@ pub fn mirror_region(st: &mut State, p: &Params, lo: [i64; 3], hi: [i64; 3]) -> 
                 nb |= 1 << crate::geom::mirror_dir(d);
             }
         }
-        st.hdr[c * HDR + H_FLAGS] = (fl & !(ORIENT_MASK | BOND_MASK | REQ_MASK)) | (p.orient.mirror[or as usize] << ORIENT_SHIFT) | (nb << BOND_SHIFT) | (nr << REQ_SHIFT);
+        // A saved resume context (stack values read in the old frame) has no
+        // exact mirror image: mirrored cells start their next slice afresh.
+        st.hdr[c * HDR + H_FLAGS] = (fl & !(ORIENT_MASK | BOND_MASK | REQ_MASK | FL_CTX)) | (p.orient.mirror[or as usize] << ORIENT_SHIFT) | (nb << BOND_SHIFT) | (nr << REQ_SHIFT);
     }
     for vent in &mut st.vents {
         if inside(vent.pos as usize) {

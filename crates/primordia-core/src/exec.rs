@@ -250,9 +250,6 @@ impl<'a> Cpu<'a> {
         if !self.shield_ok(st, t) {
             return false;
         }
-        if t != self.me {
-            self.reproduced(st);
-        }
         // copy errors: 0 none, 1 insert, 2 delete
         let mut mode = 0;
         if p.p_del != 0 {
@@ -275,6 +272,9 @@ impl<'a> Cpu<'a> {
             st.tapes.copy_within(base + off + 1..base + tlen, base + off);
             st.tapes[base + tlen - 1] = 0;
             st.hdr[t * HDR + H_LEN] -= 1;
+            if t != self.me {
+                self.reproduced(st);
+            }
             return true;
         }
         if p.stereo_copy && isa::is_chiral(v) {
@@ -302,6 +302,9 @@ impl<'a> Cpu<'a> {
             return false;
         }
         st.tapes[base + off] = v;
+        if t != self.me {
+            self.reproduced(st);
+        }
         if mode == 1 && tlen < lmax && self.take_monomer(st, t, isa::class(v)) {
             st.tapes.copy_within(base + off + 1..base + tlen, base + off + 2);
             st.tapes[base + off + 1] = v;
@@ -518,6 +521,16 @@ impl<'a> Cpu<'a> {
                 }
             };
         }
+        // An op that pops its operand before paying puts it back when the
+        // payment fails, so a resumed slice retries it with the same stack.
+        macro_rules! pay_or_unpop {
+            ($c:expr, $v:expr) => {
+                if !self.pay(st, $c) {
+                    self.push($v);
+                    return Flow::End;
+                }
+            };
+        }
         macro_rules! pop {
             () => {
                 match self.pop() {
@@ -537,9 +550,10 @@ impl<'a> Cpu<'a> {
         // Ops with dynamic cost or that need operands before paying.
         match b {
             op::TAKE_L | 0x2F => {
-                let n = pop!().clamp(0, 255) as u32;
+                let v = pop!();
+                let n = v.clamp(0, 255) as u32;
                 cost += n / 4;
-                pay!(cost);
+                pay_or_unpop!(cost, v);
                 let h = (b & 1) as usize;
                 if p.matter_on {
                     if let Some(t) = nb(st, p, me, self.facing(st)).filter(|_| p.geom.dims > 0) {
@@ -551,12 +565,13 @@ impl<'a> Cpu<'a> {
                 return Flow::Next(1);
             }
             op::ALLOC => {
-                let n = pop!().clamp(0, st.lmax as i32) as usize;
+                let v = pop!();
+                let n = v.clamp(0, st.lmax as i32) as usize;
                 if p.pair_concat || p.geom.dims == 0 {
-                    pay!(cost);
+                    pay_or_unpop!(cost, v);
                     return Flow::Next(1);
                 }
-                pay!(cost + n as u32);
+                pay_or_unpop!(cost + n as u32, v);
                 let d = self.facing(st);
                 if let Some(t) = nb(st, p, me, d) {
                     if !st.occupied(t) {
@@ -572,8 +587,8 @@ impl<'a> Cpu<'a> {
                     return Flow::Next(1);
                 }
                 let s0 = if self.partner_first { lp } else { 0 } as i32;
-                let so = (self.h0 - s0).rem_euclid(ti) as usize;
-                let eo = if self.h1 - s0 == ls as i32 { ls } else { (self.h1 - s0).rem_euclid(ti) as usize };
+                let so = self.h0.wrapping_sub(s0).rem_euclid(ti) as usize;
+                let eo = if self.h1.wrapping_sub(s0) == ls as i32 { ls } else { self.h1.wrapping_sub(s0).rem_euclid(ti) as usize };
                 let ok = so < eo && eo <= ls;
                 let n = if ok { eo - so } else { 0 };
                 pay!(cost + n as u32);
@@ -599,8 +614,9 @@ impl<'a> Cpu<'a> {
                 return Flow::Next(1);
             }
             op::DIGEST => {
-                let n = pop!().clamp(0, ti) as usize;
-                pay!(cost * n as u32);
+                let v = pop!();
+                let n = v.clamp(0, ti) as usize;
+                pay_or_unpop!(cost * n as u32, v);
                 if let Some(pc) = pt {
                     for k in 0..n {
                         let a = rem(self.h1 + k as i32);
@@ -749,8 +765,8 @@ impl<'a> Cpu<'a> {
             op::H1DEC => self.h1 = self.h1.wrapping_sub(1),
             op::SETH0 => self.h0 = ip as i32 + pop!(),
             op::SETH1 => self.h1 = ip as i32 + pop!(),
-            op::GETH0 => push!(self.h0 - ip as i32),
-            op::GETH1 => push!(self.h1 - ip as i32),
+            op::GETH0 => push!(self.h0.wrapping_sub(ip as i32)),
+            op::GETH1 => push!(self.h1.wrapping_sub(ip as i32)),
             op::XH => std::mem::swap(&mut self.h0, &mut self.h1),
             op::LEN => push!(ls as i32),
             op::PLEN => push!(lp as i32),
@@ -986,8 +1002,8 @@ pub fn exec_slice(st: &mut State, p: &Params, snap: &[u32], c: usize, fixed_part
     }
     if p.resume && st.flags(c) & FL_CTX != 0 {
         let h = &st.hdr[c * HDR..(c + 1) * HDR];
-        cpu.ip = (h[H_CTX] & 0xFFFF) as u16 as i16 as i32;
-        cpu.sp = ((h[H_CTX] >> 16) as usize).min(16);
+        cpu.ip = ((h[H_CTX] << 8) as i32) >> 8;
+        cpu.sp = ((h[H_CTX] >> 24) as usize).min(16);
         cpu.h0 = h[H_H0] as i32;
         cpu.h1 = h[H_H1] as i32;
         for i in 0..cpu.sp {
@@ -1023,12 +1039,13 @@ pub fn exec_slice(st: &mut State, p: &Params, snap: &[u32], c: usize, fixed_part
 /// individual.resume: keep the slice's IP, heads and stack for the next
 /// slice, or mark it to restart. The registers are kept as they are, not
 /// reduced: addresses are reduced against the address space when used, and
-/// that changes when the partner does. (|IP| < 2^15 because l_max <= 256.)
+/// that changes when the partner does. The IP is kept in 24 signed bits: it is
+/// below 2 * l_max before a jump of at most +-32,767, so |IP| < 2^16.
 fn save_context(st: &mut State, cpu: &Cpu) {
     let h = &mut st.hdr[cpu.home * HDR..(cpu.home + 1) * HDR];
     match cpu.save {
         Some(ip) => {
-            h[H_CTX] = ip as i16 as u16 as u32 | (cpu.sp as u32) << 16;
+            h[H_CTX] = (ip as u32 & 0xFF_FFFF) | (cpu.sp as u32) << 24;
             h[H_H0] = cpu.h0 as u32;
             h[H_H1] = cpu.h1 as u32;
             for k in 0..STK_WORDS {

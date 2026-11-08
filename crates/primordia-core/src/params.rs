@@ -19,8 +19,9 @@ pub const H_BIRTH: usize = 5;
 pub const H_PARENT: usize = 6;
 pub const H_DEPTH: usize = 7;
 pub const H_ZERO: usize = 8;
-/// Saved execution context (individual.resume): IP (low 16 bits) and stack
-/// depth (high 16), the two heads, and the 16-entry stack as packed i16 pairs.
+/// Saved execution context (individual.resume): IP (low 24 bits, signed) and
+/// stack depth (high 8), the two heads, and the 16-entry stack as packed i16
+/// pairs. (Snapshot version 3 stored the IP in 16 bits and the depth above it.)
 /// Valid only while FL_CTX is set.
 pub const H_CTX: usize = 9;
 pub const H_H0: usize = 10;

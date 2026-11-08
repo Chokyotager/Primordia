@@ -458,7 +458,7 @@ impl State {
         let f = std::fs::File::create(path)?;
         let mut z = zstd::Encoder::new(f, 3)?;
         z.write_all(b"PSNP")?;
-        z.write_all(&3u32.to_le_bytes())?;
+        z.write_all(&4u32.to_le_bytes())?;
         z.write_all(&config_hash.to_le_bytes())?;
         z.write_all(&self.epoch.to_le_bytes())?;
         z.write_all(&[self.mirrored as u8])?;
@@ -499,7 +499,7 @@ impl State {
         z.read_exact(&mut h)?;
         ensure!(&h[..4] == b"PSNP", "bad snapshot magic");
         let version = u32::from_le_bytes(h[4..8].try_into()?);
-        ensure!((1..=3).contains(&version), "snapshot version {version}");
+        ensure!((1..=4).contains(&version), "snapshot version {version}");
         Ok((version, u64::from_le_bytes(h[8..16].try_into()?), u64::from_le_bytes(h[16..24].try_into()?)))
     }
 
@@ -509,7 +509,7 @@ impl State {
         z.read_exact(&mut h)?;
         ensure!(&h[..4] == b"PSNP", "bad snapshot magic");
         let version = u32::from_le_bytes(h[4..8].try_into()?);
-        ensure!((1..=3).contains(&version), "snapshot version {version}");
+        ensure!((1..=4).contains(&version), "snapshot version {version}");
         let cfg_hash = u64::from_le_bytes(h[8..16].try_into()?);
         let epoch = u64::from_le_bytes(h[16..24].try_into()?);
         ensure!(h[24] <= 1, "invalid mirror flag");
@@ -535,6 +535,13 @@ impl State {
         st.tapes = get(st.tapes.len(), true)?;
         if version >= 3 {
             st.hdr = r32(get(st.hdr.len() * 4, true)?)?;
+            if version == 3 {
+                // Version 3 kept the resume IP in 16 bits and the stack depth above it.
+                for h in st.hdr.chunks_exact_mut(HDR).filter(|h| h[H_FLAGS] & FL_CTX != 0) {
+                    let ip = (h[H_CTX] & 0xFFFF) as u16 as i16 as i32;
+                    h[H_CTX] = (ip as u32 & 0xFF_FFFF) | (h[H_CTX] >> 16) << 24;
+                }
+            }
         } else {
             // Versions 1 and 2 stored 9 header words; the extension starts empty.
             let old = r32(get(st.n * HDR_V2 * 4, true)?)?;

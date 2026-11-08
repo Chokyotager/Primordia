@@ -335,7 +335,6 @@ fn write_byte(addr: u32, v_in: u32, ipu: u32, total: u32) -> bool {
     let t = r0.x;
     let off = r0.y;
     if (!shield_ok(t)) { return false; }
-    if (t != me) { reproduced(); }
     var mode = 0u;
     if (P[P_PDEL] != 0u) {
         let r = rnd();
@@ -358,6 +357,7 @@ fn write_byte(addr: u32, v_in: u32, ipu: u32, total: u32) -> bool {
         }
         tset(t, tl - 1u, 0u);
         hdr[t * HDR + H_LEN] = tl - 1u;
+        if (t != me) { reproduced(); }
         return true;
     }
     if (has(F_STEREO_COPY) && is_chiral(v)) {
@@ -382,6 +382,7 @@ fn write_byte(addr: u32, v_in: u32, ipu: u32, total: u32) -> bool {
         return false;
     }
     tset(t, off, v);
+    if (t != me) { reproduced(); }
     if (mode == 1u && tl < g_lmax) {
         if (take_monomer(t, class_of(v))) {
             var i = tl;
@@ -564,10 +565,11 @@ fn step() -> i32 {
 
     // ---- ops with dynamic cost / operands before paying
     if (b == 0x2Eu || b == 0x2Fu) { // TAKE
-        let n = u32(clamp(pop(), 0, 255));
+        let v = pop();
         if (g_err) { return END; }
+        let n = u32(clamp(v, 0, 255));
         cost = cost + n / 4u;
-        if (!pay(cost)) { return END; }
+        if (!pay(cost)) { _ = push(v); return END; }
         let h = b & 1u;
         if (has(F_MATTER) && g_dims > 0u) {
             let t = nbw(me, facing());
@@ -580,13 +582,14 @@ fn step() -> i32 {
         return 1;
     }
     if (b == 0x67u) { // ALLOC
-        let n = u32(clamp(pop(), 0, i32(g_lmax)));
+        let v = pop();
         if (g_err) { return END; }
+        let n = u32(clamp(v, 0, i32(g_lmax)));
         if (fixed_len || g_dims == 0u) {
-            if (!pay(cost)) { return END; }
+            if (!pay(cost)) { _ = push(v); return END; }
             return 1;
         }
-        if (!pay(cost + n)) { return END; }
+        if (!pay(cost + n)) { _ = push(v); return END; }
         let d = facing();
         let t = nbw(me, d);
         if (t != NONE) {
@@ -632,9 +635,10 @@ fn step() -> i32 {
         return 1;
     }
     if (b == 0x69u) { // DIGEST
-        let n = u32(clamp(pop(), 0, ti));
+        let v = pop();
         if (g_err) { return END; }
-        if (!pay(cost * n)) { return END; }
+        let n = u32(clamp(v, 0, ti));
+        if (!pay(cost * n)) { _ = push(v); return END; }
         if (pt != NONE) {
             let pc = pt;
             for (var k = 0u; k < n; k = k + 1u) {
@@ -1065,8 +1069,8 @@ fn exec_slice(c: u32, fp: u32) {
     if (partner_first) { h1 = i32(lp); } else { h1 = i32(ls); }
     if (has(F_RESUME) && (flags(c) & FL_CTX) != 0u) {
         let x = H(c, H_CTX);
-        ip = bitcast<i32>(x << 16u) >> 16u;
-        sp = min(x >> 16u, 16u);
+        ip = bitcast<i32>(x << 8u) >> 8u;
+        sp = min(x >> 24u, 16u);
         h0 = bitcast<i32>(H(c, H_H0));
         h1 = bitcast<i32>(H(c, H_H1));
         for (var i = 0u; i < sp; i = i + 1u) {
@@ -1103,7 +1107,7 @@ fn exec_slice(c: u32, fp: u32) {
 fn save_context() {
     let b = home * HDR;
     if (saved) {
-        hdr[b + H_CTX] = (bitcast<u32>(save_ip) & 0xFFFFu) | (sp << 16u);
+        hdr[b + H_CTX] = (bitcast<u32>(save_ip) & 0xFFFFFFu) | (sp << 24u);
         hdr[b + H_H0] = bitcast<u32>(h0);
         hdr[b + H_H1] = bitcast<u32>(h1);
         for (var k = 0u; k < STK_WORDS; k = k + 1u) {

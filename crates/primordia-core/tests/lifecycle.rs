@@ -266,7 +266,7 @@ fn new_options_keep_old_hashes_and_snapshots_keep_contexts() {
     s.hdr[a * HDR + H_REST] = 5;
     let path = std::env::temp_dir().join(format!("primordia-{}-v3.psnap", std::process::id()));
     s.write_snapshot(&path, 7).unwrap();
-    assert_eq!(State::snapshot_header(&path).unwrap().0, 3);
+    assert_eq!(State::snapshot_header(&path).unwrap().0, 4);
     let (back, _) = State::read_snapshot(&path, &p).unwrap();
     assert_eq!(back.hdr, s.hdr);
     std::fs::remove_file(path).unwrap();
@@ -284,4 +284,131 @@ fn m17_seed_events_carry_the_tested_ancestor() {
     let c = Config::from_file(std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../runs/live-m17.toml"))).unwrap();
     assert!(c.individual.resume && c.bonds.protect && c.energy.copy_rest > 0);
     assert_eq!((c.individual.pair_order, c.individual.random_initial_facing), (PairOrder::SelfFirst, false));
+}
+
+// ---- regressions from the 2026-11 code scan
+
+/// An op that pops its operand before paying (ALLOC here) and runs out of
+/// energy is retried next slice with the same stack, not the value below.
+#[test]
+fn failed_payment_is_retried_with_the_same_operand() {
+    let mut c = cfg();
+    c.individual.resume = true;
+    let p = Params::new(&c);
+    let mut s = State::init(&c, &p);
+    let a = p.geom.index([4, 4, 0]);
+    put(&mut s, &p, a, &[0x49, 0x44, op::ALLOC, op::HALT], 4); // PUSH 9, PUSH 4, ALLOC, HALT
+    let b = facing_cell(&s, &p, a);
+    slice(&mut s, &p, a, 22); // pays both PUSHes, not ALLOC
+    assert!(!s.occupied(b) && s.flags(a) & FL_CTX != 0);
+    assert_eq!(s.h(a, H_CTX) >> 24, 2, "both operands still on the saved stack");
+    slice(&mut s, &p, a, 10_000);
+    assert_eq!((s.occupied(b), s.len(b)), (true, 4));
+}
+
+/// A slice that ends right after a long jump resumes where the same jump
+/// leads within one slice (the saved IP used to be cut to 16 bits).
+#[test]
+fn a_long_jump_resumes_at_the_same_address() {
+    // 7, <<4, +15, <<4, +15, <<4, +15 = 32767; JREL at 10 targets 32777 = 5 (mod 12)
+    let prog = [0x47, op::SHL4, 0x4F, op::ADD, op::SHL4, 0x4F, op::ADD, op::SHL4, 0x4F, op::ADD, op::JREL, 0x70];
+    let first_ip_after = |budget: u32, split: bool| -> u32 {
+        let mut c = cfg();
+        c.individual.resume = true;
+        c.individual.step_budget = budget;
+        let p = Params::new(&c);
+        let mut s = State::init(&c, &p);
+        let a = p.geom.index([4, 4, 0]);
+        put(&mut s, &p, a, &prog, prog.len());
+        if split {
+            slice(&mut s, &p, a, 10_000);
+        }
+        *s.hm(a, H_FLAGS) &= !(FL_EXEC | FL_HALT);
+        let flags = exec::flag_snapshot(&s);
+        let mut tr = vec![];
+        exec::exec_slice(&mut s, &p, &flags, a, None, Some(&mut tr));
+        tr[if split { 0 } else { 11 }].ip
+    };
+    assert_eq!(first_ip_after(12, false), 5);
+    assert_eq!(first_ip_after(11, true), 5);
+}
+
+/// The rest period starts only when a byte is actually written into the
+/// other cell (here a write fails for want of monomers).
+#[test]
+fn a_failed_write_starts_no_rest_period() {
+    let mut c = cfg();
+    c.matter.enabled = true;
+    c.matter.pool_l = 0;
+    c.matter.pool_d = 0;
+    c.matter.pool_a = 0;
+    c.energy.copy_rest = 5;
+    let p = Params::new(&c);
+    let mut s = State::init(&c, &p);
+    let a = p.geom.index([4, 4, 0]);
+    put(&mut s, &p, a, &[op::CPY, op::HALT], 2);
+    let b = facing_cell(&s, &p, a);
+    put(&mut s, &p, b, &[], 2);
+    for x in [a, b] {
+        for cl in 0..3 {
+            *s.fm(x, p.f_pool(cl)) = 0;
+        }
+    }
+    slice(&mut s, &p, a, 100);
+    assert_eq!((nonzero(&s, b), s.h(a, H_REST)), (0, 0));
+}
+
+/// Inside a fully bonded body, chemistry and monomers diffuse gamma times
+/// faster but no faster than the stability bound: a checkerboard decays
+/// (kappa * gamma * faces was 2 here, and the pattern grew to 0 / 2000).
+#[test]
+fn bonded_transport_stays_stable() {
+    let mut c = Config::preset("primordia-2d-sun").unwrap();
+    c.world.size = vec![6, 6];
+    c.world.init_occupancy = 0.0;
+    c.chemistry.kappa_c = 0.125;
+    c.bonds.gamma = 4.0;
+    c.energy.sun.enabled = false;
+    c.energy.vents.enabled = false;
+    c.validate().unwrap();
+    let p = Params::new(&c);
+    let mut s = State::init(&c, &p);
+    let f = p.f_chem(0, 0);
+    for x in 0..s.n {
+        s.hdr[x * HDR + H_FLAGS] = FL_OCC | (0xF << BOND_SHIFT);
+        let q = p.geom.coords(x);
+        s.fields[x * s.nf + f] = if (q[0] + q[1]) % 2 == 0 { 1100 } else { 900 };
+    }
+    let dev = |s: &State| (0..s.n).map(|x| (s.fields[x * s.nf + f] as i64 - 1000).abs()).max().unwrap();
+    let mut last = dev(&s);
+    for _ in 0..8 {
+        phases::transport(&mut s, &p);
+        let d = dev(&s);
+        assert!(d <= last, "deviation grew from {last} to {d}");
+        last = d;
+    }
+    assert!(last < 100);
+}
+
+/// `--set`-style overrides merge a table value into its section, and a live
+/// edit that changes what the ledger measures does not count as a violation.
+#[test]
+fn table_overrides_merge_and_live_edits_rebase_the_ledger() {
+    let base = Config::preset("primordia-2d-sun").unwrap();
+    let mut t = toml::Table::new();
+    t.insert("share_beta".into(), toml::Value::Float(0.05));
+    let c = base.with_override("energy", toml::Value::Table(t)).unwrap();
+    assert_eq!((c.energy.share_beta, c.energy.absorb_alpha), (0.05, base.energy.absorb_alpha));
+
+    let mut c = Config::preset("primordia-2d-sun").unwrap();
+    c.world.size = vec![9, 9];
+    c.world.init_occupancy = 0.5;
+    assert!(c.chemistry.enabled && c.chemistry.species.len() == 4);
+    let mut sim = Sim::new(c, Box::new(CpuExec)).unwrap();
+    sim.push_event(primordia_core::events::Event { epoch: 3, kind: "set".into(), params: serde_json::json!({"key": "chemistry.mass", "value": [2, 2, 4, 4]}) });
+    for _ in 0..6 {
+        sim.step();
+    }
+    assert!(sim.rejected.is_empty(), "{:?}", sim.rejected);
+    assert_eq!(sim.st.ledger.violations, 0);
 }

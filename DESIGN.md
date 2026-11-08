@@ -112,6 +112,28 @@ GPU utilisation during a full run with viewer, telemetry and web feed: 95–98%.
   clusters, and a cluster split gives the old identity to only one descendant. The optional GPU
   takeover experiment synchronizes the state before measuring the final tape population.
 
+**Fixes from the November 2026 code scan** (regression tests in `tests/lifecycle.rs`, telemetry
+`tests/regressions.rs` and GPU parity):
+
+* Resumed execution: an op that pops its operand before paying (`TAKE`, `ALLOC`, `DIGEST`) puts it back
+  when the payment fails, so the retry sees the same stack; the saved IP has 24 signed bits (a long
+  `JREL` could overflow the old 16); snapshot version 4 converts version 3 contexts on load. A region
+  mirror, or switching `individual.resume` off in a live edit, discards saved contexts.
+* `energy.copy_rest` starts only when a byte is actually written into another cell (not on a write that
+  fails for want of monomers).
+* Transport: bonded faces conduct `bonds.gamma` times faster but are capped at the stability bound
+  (κ·faces ≤ ½); with the default γ = 4 and κ_c = 0.05, chemistry and monomers inside bonded bodies used
+  to oscillate between 0 and twice the mean (M17 included). The GPU read γ = 0 as "no γ"; γ is now
+  validated to 0..=1000.
+* Live `set` edits close the ledger interval under the old rules and rebase it on the new ones.
+* `--set` and batch overrides merge table values into their section and are validated once, after all
+  of them. `batch` refuses an output directory that already holds results; the final epoch always
+  reaches telemetry (stale summaries with `snapshot_every = 0`); `branch` keeps the parent's later
+  interventions (not its later `set` events); `bench --snapshot` uses the snapshot's effective config.
+* Telemetry: the replicator assay and executed repertoire run with a budget of 16 steps per tape byte
+  (one slice at a resume world's small budget missed long replicators, M17's ancestor included);
+  sampled measures spread their samples over the whole population; empty newborns are not a role.
+
 The fixes change deterministic trajectories. Continuing a legacy checkpoint uses the corrected rules;
 reproducing a historical run's old hashes requires the source revision in its manifest. The corrected
 seed templates allocate 15 bytes for their 15-byte program. A separate controlled regression proves

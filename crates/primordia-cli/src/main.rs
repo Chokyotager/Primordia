@@ -139,7 +139,7 @@ fn apply_overrides(mut c: Config, seed: Option<u64>, sets: &[String]) -> Result<
     for kv in sets {
         let (k, v) = kv.split_once('=').context("--set key=value")?;
         let val: toml::Value = toml::from_str(&format!("x = {v}")).map(|t: toml::Table| t["x"].clone()).unwrap_or(toml::Value::String(v.to_string()));
-        c = c.with_override(k, val)?;
+        c = c.with_override_unchecked(k, val)?;
     }
     c.validate()?;
     Ok(c)
@@ -332,8 +332,10 @@ fn run_headless_feed(sim: &mut Sim, rd: RunDir, epochs: u64, progress: u64, feed
             obs.send(Msg::Births(b));
         }
         let mut w = obs.want(sim.st.epoch, false, &sim.cfg, sim.config_revision);
-        if sim.st.epoch == start + epochs && sim.cfg.telemetry.snapshot_every > 0 {
-            w.save = true;
+        if sim.st.epoch == start + epochs {
+            // the summary must describe the final state, whatever the cadences
+            w.telemetry = true;
+            w.save |= sim.cfg.telemetry.snapshot_every > 0;
         }
         if w.telemetry || w.sink || w.web || w.save {
             sim.request_snapshot();
@@ -452,7 +454,17 @@ fn main() -> Result<()> {
             let (be, name) = backend(&p, cpu || !cfg.gpu.exec);
             let rd = RunDir::create(&dir, &cfg, &name, Some(&snapshot.display().to_string()))?;
             rd.origin(&st, &cfg, &snapshot)?;
+            let start = st.epoch;
             let mut sim = Sim::from_state(cfg.clone(), p, st, be)?;
+            // Keep the parent's later interventions (seeds, paint, walls...);
+            // its later `set` events are left out so they cannot undo the diff.
+            let mut skipped = 0;
+            for e in optional_events(&parent_dir.join("events.jsonl"))?.into_iter().filter(|e| e.epoch >= start) {
+                if e.kind == "set" { skipped += 1 } else { sim.push_event(e) }
+            }
+            if skipped > 0 {
+                eprintln!("branch: left out {skipped} later `set` event(s) of the parent run");
+            }
             let s = run_headless(&mut sim, rd, epochs.unwrap_or(cfg.epochs), 100)?;
             print_summary(&s);
         }
@@ -613,10 +625,7 @@ fn bisect(cfg: &Config, p: &Params, a: State, b: State) -> Result<()> {
 
 fn bench(epochs: u64, only: Option<&str>, snapshot: Option<&Path>, exec_only: bool) -> Result<()> {
     let snap_cfg = match snapshot {
-        Some(sp) => {
-            let dir = sp.parent().and_then(|d| d.parent()).context("snapshot must live in <run>/snapshots/")?;
-            Some(Config::from_file(&dir.join("config.toml"))?)
-        }
+        Some(sp) => Some(snapshot_config(sp)?),
         None => None,
     };
     let cases: Vec<(&str, Config)> = if let Some(c) = snap_cfg { vec![("snapshot", c)] } else { vec![
@@ -740,6 +749,14 @@ fn batch(sweep: &Path, cpu: bool) -> Result<()> {
             c2
         })).collect();
     }
+    // Refuse before writing anything, so a rerun cannot wipe earlier results.
+    for ci in 0..combos.len() {
+        for &seed in &seeds {
+            let dir = out.join(format!("c{ci}-s{seed}"));
+            ensure!(!dir.exists() || std::fs::read_dir(&dir)?.next().is_none(), "{} already holds a run; choose a new batch output directory", dir.display());
+        }
+    }
+    ensure!(!out.join("summary.csv").exists(), "{} already exists; choose a new batch output directory", out.join("summary.csv").display());
     std::fs::create_dir_all(&out)?;
     let mut csv = std::fs::File::create(out.join("summary.csv"))?;
     writeln!(csv, "combo,seed,epoch,occupied,mean_len,hoe,ee_code,ee_chem,ee_mono,first_replicator,replicators,t_b,winning_hand,species,bodies,organisms,ledger_violations,seconds")?;

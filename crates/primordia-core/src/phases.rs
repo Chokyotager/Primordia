@@ -271,8 +271,12 @@ pub fn flux_batch(vals: &mut [u32], stride: usize, fl: &[(usize, FluxSpec, usize
                 if spec.kappa == 0 || (spec.bonded_only && !bonded) {
                     continue;
                 }
+                // Bonded faces conduct gamma times faster, capped at the explicit
+                // scheme's stability bound (kk * faces <= 1/2): validation keeps
+                // kappa itself within it, but kappa * gamma (default 4) was not,
+                // and fields inside bodies oscillated instead of diffusing.
                 let kk = match spec.gamma {
-                    Some(gm) if bonded => (spec.kappa * gm) >> 16,
+                    Some(gm) if bonded => ((spec.kappa * gm) >> 16).min(32768 / p.geom.faces() as i64),
                     _ => spec.kappa,
                 } as u32;
                 let mut r = dith(&w, *slot);

@@ -432,3 +432,16 @@ fn lifecycle_mechanisms_match_cpu() {
         }
     }
 }
+
+/// bonds.gamma 0 (impermeable bonded faces) and a gamma large enough to hit
+/// the stability cap: the GPU used to read gamma 0 as "no gamma" (= 1).
+#[test]
+fn bonded_gamma_extremes_match_cpu() {
+    for gamma in [0.0, 50.0] {
+        let mut c = cfg(2);
+        c.bonds.gamma = gamma;
+        c.bonds.birth_bond = 0.5;
+        c.validate().unwrap();
+        check(c, 40, true, true);
+    }
+}

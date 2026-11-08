@@ -78,3 +78,34 @@ fn a_cluster_split_has_only_one_heir_to_the_old_identity() {
     let (_, after) = tracker.observe(&st, &p); let kin: Vec<_> = after.iter().filter(|c| c.kind == Kind::Kin).collect();
     assert_eq!(kin.len(), 2); assert_ne!(kin[0].id, kin[1].id); assert_eq!(kin.iter().filter(|c| c.id == id).count(), 1);
 }
+
+/// With resumed execution and a small step budget (M17: 128), the assay's
+/// one slice still has room for the seeded 20-byte ancestor to copy itself.
+#[test]
+fn the_assay_sees_replicators_in_resume_worlds() {
+    let cfg = Config::from_file(std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../runs/live-m17.toml"))).unwrap();
+    assert!(cfg.individual.resume && cfg.individual.step_budget <= 128);
+    let ancestor = isa::parse_hex_genome("42 0a 17 1c 46 08 18 6a 1c 67 1c 12 13 15 06 01 0d c5 02 d2").unwrap();
+    let r = analysis::assay_genome(&cfg, &ancestor, 1);
+    assert!(r.replicator, "identity {}", r.identity);
+}
+
+/// Unwritten newborns (empty tapes) in a body are neither a cell type nor a role.
+#[test]
+fn empty_newborns_are_not_a_role() {
+    let mut c = Config::preset("primordia-2d-sun").unwrap();
+    c.world.size = vec![30, 30]; c.world.init_occupancy = 0.0;
+    let p = Params::new(&c); let mut st = State::init(&c, &p);
+    let copier = [0x12u8, 0x13, 0x15, 0xC2, 0x40, 0x41, 0x42, 0x43];
+    for x in 0..15usize {
+        let cell = x + 30 * 5;
+        let mut fl = FL_OCC;
+        if x > 0 { fl |= 1 << (BOND_SHIFT + 1); }
+        if x < 14 { fl |= 1 << BOND_SHIFT; }
+        st.hdr[cell * HDR + H_FLAGS] = fl; st.hdr[cell * HDR + H_LEN] = 8;
+        if x < 10 { st.tapes[cell * st.lmax..cell * st.lmax + 8].copy_from_slice(&copier); }
+    }
+    let bodies = primordia_core::phases::components(&st, &p);
+    let bt = primordia_telemetry::body_types(&st, &p, &bodies);
+    assert_eq!((bt.bodies, bt.types_max, bt.roles_max), (1, 1, 1));
+}

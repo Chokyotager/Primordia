@@ -368,7 +368,8 @@ fn k_flux_a(@builtin(global_invocation_id) gid: vec3<u32>) {
             let kappa = cf(k, CF_KAPPA);
             if (kappa == 0u || (cf(k, CF_BONDED) != 0u && !bonded)) { continue; }
             var kk = kappa;
-            if (cf(k, CF_GAMMA) != 0u && bonded) { kk = mulshr16(kappa, cf(k, CF_GAMMA)); }
+            // bonded faces: gamma times faster, capped at the stability bound (see phases::flux)
+            if (cf(k, CF_GAMMA) != NONE && bonded) { kk = min(mulshr16(kappa, cf(k, CF_GAMMA)), 32768u / (2u * D)); }
             var r = dith(w, cf(k, CF_SLOT));
             if (flip) { r = 0xFFFFu - r; }
             jf[ji(c, a, k)] = flux_j(kk, qv(c, k), qv(t, k), r);

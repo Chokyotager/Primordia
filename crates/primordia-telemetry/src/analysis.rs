@@ -15,6 +15,15 @@ use std::io::Write;
 
 /// (Shannon entropy of bytes H0, brotli bits/byte, high-order entropy = H0 - bpb)
 /// over the concatenated tapes of up to `max` occupied cells (evenly sampled).
+/// Up to `k` items spread evenly over `v` (a float stride: an integer stride
+/// followed by `take(k)` kept only the first part of the list, i.e. low rows).
+fn spread<T: Copy>(v: &[T], k: usize) -> Vec<T> {
+    if v.len() <= k {
+        return v.to_vec();
+    }
+    (0..k).map(|i| v[i * v.len() / k]).collect()
+}
+
 pub fn high_order_entropy(st: &State, max: usize) -> (f64, f64, f64) {
     let occ: Vec<usize> = (0..st.n).filter(|&c| st.occupied(c) && st.len(c) > 0).collect();
     if occ.is_empty() {
@@ -69,8 +78,7 @@ pub fn conserved_information(st: &State) -> (f64, f64, usize) {
     }
     let mut res = vec![];
     for m in fam.values().filter(|m| m.len() >= 20) {
-        let step = (m.len() / 200).max(1);
-        let s: Vec<&[u8]> = m.iter().step_by(step).take(200).map(|&c| st.tape(c)).collect();
+        let s: Vec<&[u8]> = spread(m, 200).into_iter().map(|c| st.tape(c)).collect();
         let n = s.len() as f64;
         let hmax = n.min(256.0).log2();
         let lmax = s.iter().map(|t| t.len()).max().unwrap_or(0);
@@ -125,8 +133,7 @@ pub fn executed_repertoire(cfg: &Config, st: &State, samples: usize, tracked: &[
         return (f64::NAN, f64::NAN);
     }
     let p = sandbox_params(cfg, cfg.individual.l_max as usize);
-    let step = (occ.len() / samples).max(1);
-    let picks: Vec<usize> = occ.iter().step_by(step).take(samples).copied().collect();
+    let picks: Vec<usize> = spread(&occ, samples);
     let behaviour: Vec<u8> = tracked.iter().copied().filter(|&b| b != 0x12 && b != 0x0D).collect();
     let r: Vec<(usize, usize)> = picks
         .par_iter()
@@ -177,7 +184,10 @@ fn sandbox_params(cfg: &Config, len: usize) -> Params {
     c.world.size = vec![2];
     c.individual.l_max = (cfg.individual.l_max).max(((len + 3) / 4 * 4) as u32);
     c.individual.l_init = 0;
-    c.individual.step_budget = cfg.individual.step_budget;
+    // A fixed generous budget (16 steps per byte of the longest tape): with
+    // individual.resume a world's budget limits work per epoch, not genome
+    // length, so one slice at the world's budget missed long replicators.
+    c.individual.step_budget = cfg.individual.step_budget.max(16 * c.individual.l_max);
     c.individual.pair_order = PairOrder::SelfFirst;
     c.mutation.enabled = false;
     c.seed = 1;

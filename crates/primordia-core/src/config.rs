@@ -832,20 +832,47 @@ impl Config {
     }
     /// Apply a dotted-key override, e.g. ("energy.absorb_alpha", 0.1).
     pub fn with_override(&self, key: &str, value: toml::Value) -> Result<Config> {
+        let c = self.with_override_unchecked(key, value)?;
+        c.validate()?;
+        Ok(c)
+    }
+    /// As `with_override`, without validating: for applying several related
+    /// overrides (e.g. l_max and l_init) before validating once. A table value
+    /// is merged into the existing table (`energy = {share_beta = 0.1}` changes
+    /// one key) instead of replacing the whole section with defaults.
+    pub fn with_override_unchecked(&self, key: &str, value: toml::Value) -> Result<Config> {
+        fn merge(dst: &mut toml::Value, src: toml::Value) {
+            match (dst, src) {
+                (toml::Value::Table(d), toml::Value::Table(s)) => {
+                    for (k, v) in s {
+                        match d.get_mut(&k) {
+                            Some(x) => merge(x, v),
+                            None => {
+                                d.insert(k, v);
+                            }
+                        }
+                    }
+                }
+                (d, s) => *d = s,
+            }
+        }
         let mut v = toml::Value::try_from(self)?;
         let mut cur = &mut v;
         let parts: Vec<&str> = key.split('.').collect();
         for (i, p) in parts.iter().enumerate() {
             let t = cur.as_table_mut().context("not a table")?;
             if i + 1 == parts.len() {
-                t.insert(p.to_string(), value.clone());
+                match t.get_mut(*p) {
+                    Some(x) => merge(x, value.clone()),
+                    None => {
+                        t.insert(p.to_string(), value.clone());
+                    }
+                }
                 break;
             }
             cur = t.entry(p.to_string()).or_insert(toml::Value::Table(Default::default()));
         }
-        let c: Config = v.try_into()?;
-        c.validate()?;
-        Ok(c)
+        Ok(v.try_into()?)
     }
     pub fn n_species(&self) -> usize {
         if self.chemistry.enabled { self.chemistry.species.len() } else { 0 }
@@ -894,6 +921,7 @@ impl Config {
         ] { ensure!(value.is_finite() && value >= 0.0, "{name} must be finite and nonnegative"); }
         ensure!(self.energy.sense_energy_scale > 0 && self.energy.sense_free_scale > 0, "sense scales must be positive");
         ensure!(self.temperature.t_ref.is_finite() && self.temperature.t_ref > 0.0, "temperature.t_ref must be positive");
+        ensure!(self.bonds.gamma.is_finite() && (0.0..=1000.0).contains(&self.bonds.gamma), "bonds.gamma must be in 0..=1000");
         let w = &self.world;
         ensure!(w.dims <= 3, "dims must be 0..=3");
         let axes = if w.dims == 0 { 1 } else { w.dims as usize };

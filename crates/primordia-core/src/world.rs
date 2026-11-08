@@ -443,6 +443,16 @@ impl Sim {
         // Consume old copies before reconfiguration can replace GPU buffers.
         let snapshots = self.take_snapshots(true);
         self.snaps.extend(snapshots);
+        // Close the accounting interval under the old rules and rebase it on
+        // the new ones (an edit can change what the ledger measures, e.g.
+        // chemical masses or matter on/off), as checkpoint_state does.
+        phases::ledger_check(&mut self.st, &self.p);
+        self.st.tally = Default::default();
+        self.st.reset_ledger(&np);
+        // Contexts saved while resume was on must not be picked up later.
+        if self.p.resume && !np.resume {
+            self.st.hdr.chunks_exact_mut(crate::params::HDR).for_each(|h| h[crate::params::H_FLAGS] &= !crate::params::FL_CTX);
+        }
         self.backend.reconfigure(&np);
         self.cfg = new;
         self.config_revision += 1;
