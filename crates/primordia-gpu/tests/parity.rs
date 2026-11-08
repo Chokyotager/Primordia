@@ -460,3 +460,21 @@ fn private_tapes_match_cpu() {
         check(c.clone(), 60, true, resident);
     }
 }
+
+/// individual.max_age_spread: lifespans spread over max_age +- spread, from
+/// the lineage ID; identical on both backends, and the founding cohort dies
+/// over a range of epochs instead of all at once.
+#[test]
+fn spread_lifespans_match_cpu() {
+    let mut c = cfg(2);
+    c.individual.max_age = 50;
+    c.individual.max_age_spread = 0.4; // 30..70
+    c.validate().unwrap();
+    for resident in [false, true] {
+        let a = check(c.clone(), 80, true, resident);
+        let st = &a.st;
+        let old: Vec<u32> = (0..st.n).filter(|&i| st.occupied(i) && st.h(i, primordia_core::params::H_BIRTH) == 0).map(|i| st.epoch as u32).collect();
+        // at epoch 80 some founders (lifespan up to 70) are gone, and none older than 70 remain
+        assert!(old.is_empty(), "{} founders outlived the longest lifespan", old.len());
+    }
+}

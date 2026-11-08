@@ -150,6 +150,7 @@ by golden and parity tests. They came out of the long live runs, in this order:
 | `individual.starve_after` | a cell dormant (zero energy) for this many epochs without a break dies | dormant cells never died, so the world filled up and turnover stopped |
 | `energy.sun.moon` | night-time light never falls below this fraction of full sun | with dark nights, sleeping only slowed a cell's decline; weak moonlight (0.02) lets a sleeping cell break even while awake cells still starve |
 | `individual.max_age` | a cell dies once it is this many epochs old | keeps turnover going if cells learn to survive the night |
+| `individual.max_age_spread` | each individual's lifespan is max_age × (1 ± spread), uniform, fixed at birth from its lineage ID (no extra state) | M18 filled its world within 400 epochs, and that cohort died together every 20,000 epochs: a 30% population crash followed by recolonisation by a few lineages, a sawtooth in high-order entropy |
 | `individual.sleep_scale` | `SLEEP n` lasts min(n, 255) × scale epochs | at most 31 epochs per call, so covering a 1,000-epoch night took dozens of calls |
 | `individual.sleep_shield` | neighbours cannot write to or digest a sleeping cell's tape (reads are allowed) | sleepers survived the night but waking neighbours copied over their programs, so sleeping could not be inherited |
 | `individual.sleep_absorb` | a sleeping cell keeps this fraction of its light absorption | with protection alone, constant short daytime naps took over (97% of cells asleep) and replaced bonded bodies; a sleeper with no income pays for sleeping by day but hardly at night |
@@ -256,7 +257,9 @@ M17 ran 995k epochs without whole-genome heredity (see the `shielding.private` r
 10⁻⁵, hand flips 10⁻⁶, decay 5 × 10⁻⁶; copy errors unchanged) and starts from an empty world seeded with
 M17's `ALLOC` ancestor (a random soup could not be overwritten and held its sites for its 10-day
 lifespan). In a 3-day trial the ancestor filled the world within 400 epochs and 76–78% of cells survived
-each night. It runs at ~45 epochs/s on the RTX 3050 in its first days. (Without NVIDIA's Vulkan driver, `wgpu` silently
+each night. It runs at ~45 epochs/s on the RTX 3050 in its first days. Its first 54,000 epochs (kept as
+`runs/live-m18-s2-fixedage`) showed the fixed lifespan's synchronised die-offs, so M18 restarted with
+lifespans spread ±25% (`individual.max_age_spread`). (Without NVIDIA's Vulkan driver, `wgpu` silently
 falls back to llvmpipe, Mesa's CPU renderer: identical results, ~8 epochs/s. The run manifest's
 `gpu_adapter` shows which device ran.)
 

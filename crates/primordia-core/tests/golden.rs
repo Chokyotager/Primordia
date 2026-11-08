@@ -400,6 +400,8 @@ fn t7_twin_lifecycle_mechanisms() {
         cfg.individual.resume = true;
         cfg.individual.step_budget = 48;
         cfg.shielding.private = dims == 3;
+        cfg.individual.max_age = 40;
+        cfg.individual.max_age_spread = 0.5;
         cfg.bonds.protect = true;
         cfg.bonds.construct_window = 12;
         cfg.bonds.birth_bond = 0.5;

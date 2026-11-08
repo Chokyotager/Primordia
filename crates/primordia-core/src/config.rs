@@ -67,6 +67,11 @@ pub struct IndividualCfg {
     pub starve_after: u32,
     /// A cell dies of old age this many epochs after its birth; 0 = never.
     pub max_age: u32,
+    /// Spread of the lifespan: each individual lives max_age x (1 +- spread),
+    /// fixed at birth (drawn from its lineage ID), so a cohort born together
+    /// does not die together. 0 = everyone lives exactly max_age.
+    #[serde(skip_serializing_if = "is_zero_f64")]
+    pub max_age_spread: f64,
     /// `SLEEP n` sleeps for min(n, 255) x this many epochs (1 = as in the spec).
     pub sleep_scale: u32,
     /// A sleeping cell's tape cannot be written or digested by neighbours
@@ -336,6 +341,7 @@ pub struct ShieldCfg {
 fn is_false(v: &bool) -> bool { !*v }
 fn is_zero_u32(v: &u32) -> bool { *v == 0 }
 fn is_one(v: &f64) -> bool { *v == 1.0 }
+fn is_zero_f64(v: &f64) -> bool { *v == 0.0 }
 fn is_default_window(v: &u32) -> bool { *v == 256 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -472,6 +478,7 @@ impl Default for IndividualCfg {
             dead_after: 64,
             starve_after: 0,
             max_age: 0,
+            max_age_spread: 0.0,
             sleep_scale: 1,
             sleep_shield: false,
             sleep_absorb: 1.0,
@@ -926,6 +933,7 @@ impl Config {
         ] { ensure!(value.is_finite() && value >= 0.0, "{name} must be finite and nonnegative"); }
         ensure!(self.energy.sense_energy_scale > 0 && self.energy.sense_free_scale > 0, "sense scales must be positive");
         ensure!(self.temperature.t_ref.is_finite() && self.temperature.t_ref > 0.0, "temperature.t_ref must be positive");
+        ensure!((0.0..1.0).contains(&self.individual.max_age_spread), "individual.max_age_spread must be in 0..1");
         ensure!(self.bonds.gamma.is_finite() && (0.0..=1000.0).contains(&self.bonds.gamma), "bonds.gamma must be in 0..=1000");
         let w = &self.world;
         ensure!(w.dims <= 3, "dims must be 0..=3");

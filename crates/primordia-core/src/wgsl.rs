@@ -373,7 +373,8 @@ pub mod qi {
     pub const LIGHT_COVER: usize = SLEEP_ABSORB + 6;
     pub const SLEEP_UPKEEP: usize = SLEEP_ABSORB + 7;
     pub const COPY_ABSORB: usize = SLEEP_ABSORB + 8;
-    pub const LEN: usize = SLEEP_ABSORB + 9;
+    pub const AGE_SPAN: usize = SLEEP_ABSORB + 9;
+    pub const LEN: usize = SLEEP_ABSORB + 10;
 }
 
 pub mod qf {
@@ -480,6 +481,7 @@ pub fn phys_words(p: &Params) -> Vec<u32> {
     w[qi::MAX_AGE] = p.max_age;
     w[qi::SLEEP_ABSORB] = p.sleep_absorb_q16;
     w[qi::COPY_ABSORB] = p.copy_absorb_q16;
+    w[qi::AGE_SPAN] = p.age_span;
     w[qi::DORM_COUNT] = p.dormancy_counted() as u32;
     w[qi::DORM_IDLE] = p.dormant_idle as u32;
     w[qi::DORM_GRACE] = p.dormant_grace;
@@ -575,6 +577,7 @@ pub fn phys_constants() -> String {
         ("Q_MAX_AGE", qi::MAX_AGE),
         ("Q_SLEEP_ABSORB", qi::SLEEP_ABSORB),
         ("Q_COPY_ABSORB", qi::COPY_ABSORB),
+        ("Q_AGE_SPAN", qi::AGE_SPAN),
         ("Q_DORM_COUNT", qi::DORM_COUNT),
         ("Q_DORM_IDLE", qi::DORM_IDLE),
         ("Q_DORM_GRACE", qi::DORM_GRACE),

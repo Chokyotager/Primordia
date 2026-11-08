@@ -1121,9 +1121,9 @@ pub fn mutate_decay(st: &mut State, p: &Params, map: Option<&Vec<u32>>) {
 
 /// The cell's dying counter has reached its limit: `dead_after` for an
 /// all-empty tape, otherwise `starve_after` (if starvation is on); or it is
-/// older than `max_age`.
+/// older than its lifespan (`max_age`, spread by `max_age_spread`).
 pub fn dying(st: &State, p: &Params, c: usize) -> bool {
-    if p.max_age > 0 && (st.epoch as u32).wrapping_sub(st.h(c, H_BIRTH)) >= p.max_age {
+    if p.max_age > 0 && (st.epoch as u32).wrapping_sub(st.h(c, H_BIRTH)) >= p.lifespan(st.h(c, H_LINEAGE)) {
         return true;
     }
     let z = st.h(c, H_ZERO);

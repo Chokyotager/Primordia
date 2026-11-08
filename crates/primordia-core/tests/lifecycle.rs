@@ -246,7 +246,7 @@ fn reproduction_reduces_absorption_for_the_rest_period() {
 #[test]
 fn new_options_keep_old_hashes_and_snapshots_keep_contexts() {
     let base = Config::preset("primordia-2d-sun").unwrap().to_toml();
-    for key in ["resume", "protect", "construct_window", "copy_rest", "copy_absorb", "private"] {
+    for key in ["resume", "protect", "construct_window", "copy_rest", "copy_absorb", "private", "max_age_spread"] {
         assert!(!base.contains(key), "{key} serialized at its default");
     }
     let mut c = cfg();
@@ -444,4 +444,23 @@ fn private_tapes_are_written_only_while_under_construction() {
     put(&mut s, &p, a, &[0x45, 0x43, op::SETH1, op::WR, op::HALT, 0, 0, 0], 8); // PUSH5, PUSH3, SETH1 (h1 = 2+3), WR 5 at 5
     slice(&mut s, &p, a, 100);
     assert_eq!(s.tape(a)[5], 5);
+}
+
+/// individual.max_age_spread: lifespans are uniform over max_age +- spread,
+/// fixed per individual, so a cohort born together dies over a range.
+#[test]
+fn lifespans_spread_around_max_age() {
+    let mut c = cfg();
+    c.individual.max_age = 20_000;
+    c.individual.max_age_spread = 0.25;
+    let p = Params::new(&c);
+    assert_eq!(p.age_span, 5_000);
+    let lives: Vec<u32> = (0..10_000u32).map(|i| p.lifespan(primordia_core::rng::Rng::new(9, 0, 0).u32(i, 0, 0) | 1)).collect();
+    assert!(lives.iter().all(|&l| (15_000..=25_000).contains(&l)));
+    let (lo, hi) = (*lives.iter().min().unwrap(), *lives.iter().max().unwrap());
+    assert!(lo < 15_100 && hi > 24_900, "range {lo}..{hi}");
+    let mean = lives.iter().map(|&l| l as f64).sum::<f64>() / lives.len() as f64;
+    assert!((mean - 20_000.0).abs() < 150.0, "mean {mean}");
+    c.individual.max_age_spread = 0.0;
+    assert_eq!(Params::new(&c).lifespan(12345), 20_000);
 }

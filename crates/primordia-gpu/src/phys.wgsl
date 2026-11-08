@@ -1231,7 +1231,10 @@ fn dead_cell(c: u32) {
         }
     }
     let z = H(c, H_ZERO);
-    let old = Q[Q_MAX_AGE] > 0u && Q[Q_EPOCH] - H(c, H_BIRTH) >= Q[Q_MAX_AGE];
+    // lifespan: max_age +- AGE_SPAN, fixed by the lineage ID (Params::lifespan)
+    var life = Q[Q_MAX_AGE];
+    if (Q[Q_AGE_SPAN] > 0u) { life = Q[Q_MAX_AGE] - Q[Q_AGE_SPAN] + (H(c, H_LINEAGE) >> 1u) % (2u * Q[Q_AGE_SPAN] + 1u); }
+    let old = Q[Q_MAX_AGE] > 0u && Q[Q_EPOCH] - H(c, H_BIRTH) >= life;
     if (!old) {
         if (allzero) {
             if (z < Q[Q_DEAD_AFTER]) { return; }

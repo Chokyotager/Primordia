@@ -91,6 +91,8 @@ pub struct Params {
     pub dead_after: u32,
     pub starve_after: u32,
     pub max_age: u32,
+    /// Half-width of the lifespan range: lifespans run max_age +- age_span.
+    pub age_span: u32,
     pub sleep_scale: u32,
     pub sleep_shield: bool,
     /// Q16 fraction of absorption kept while asleep (65536 = all).
@@ -222,6 +224,17 @@ fn q16s(x: f64) -> i64 {
 }
 
 impl Params {
+    /// Lifespan of an individual (max_age > 0): max_age +- age_span, fixed at
+    /// birth by its lineage ID (random, odd), uniform over the range.
+    pub fn lifespan(&self, lineage: u32) -> u32 {
+        if self.age_span == 0 {
+            return self.max_age;
+        }
+        self.max_age - self.age_span + (lineage >> 1) % (2 * self.age_span + 1)
+    }
+}
+
+impl Params {
     pub fn new(c: &Config) -> Params {
         let geom = Geometry::new(c.world.dims, &c.world.size, &c.world.boundary);
         let k = c.n_species();
@@ -303,6 +316,7 @@ impl Params {
             dead_after: c.individual.dead_after,
             starve_after: if energy_on { c.individual.starve_after } else { 0 },
             max_age: c.individual.max_age,
+            age_span: (c.individual.max_age as f64 * c.individual.max_age_spread).round() as u32,
             sleep_scale: c.individual.sleep_scale,
             sleep_shield: c.individual.sleep_shield && !pair_concat,
             sleep_absorb_q16: to_q16(c.individual.sleep_absorb) as u32,
