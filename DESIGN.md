@@ -256,7 +256,9 @@ M17 ran 995k epochs without whole-genome heredity (see the `shielding.private` r
 10⁻⁵, hand flips 10⁻⁶, decay 5 × 10⁻⁶; copy errors unchanged) and starts from an empty world seeded with
 M17's `ALLOC` ancestor (a random soup could not be overwritten and held its sites for its 10-day
 lifespan). In a 3-day trial the ancestor filled the world within 400 epochs and 76–78% of cells survived
-each night. With every cell running its copy loop the world runs at ~7.5 epochs/s on the RTX 3050.
+each night. It runs at ~45 epochs/s on the RTX 3050 in its first days. (Without NVIDIA's Vulkan driver, `wgpu` silently
+falls back to llvmpipe, Mesa's CPU renderer: identical results, ~8 epochs/s. The run manifest's
+`gpu_adapter` shows which device ran.)
 
 `runs/live-m1.toml` to `live-m3.toml` are the earlier steps.
 
