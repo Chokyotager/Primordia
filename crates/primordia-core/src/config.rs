@@ -323,6 +323,11 @@ pub struct ShieldCfg {
     /// reduces light absorption: 1 = as in the spec, 0 = neighbours do not
     /// shade. Radiation, decay and write shielding keep the full cover.
     pub light_cover: f64,
+    /// Genome privacy: another cell may write into (or digest) a cell's tape
+    /// only during the cell's first `bonds.construct_window` epochs, while its
+    /// parent builds it; after that only the cell itself writes its tape.
+    #[serde(skip_serializing_if = "is_false")]
+    pub private: bool,
 }
 
 // Options added after configuration hashes were recorded are omitted from the
@@ -600,7 +605,7 @@ impl Default for ChiralCfg {
 }
 impl Default for ShieldCfg {
     fn default() -> Self {
-        ShieldCfg { enabled: true, s_bond: 0.25, s_occupied: 0.10, w_occupied: 0.5, granularity: Granularity::Slice, light_cover: 1.0 }
+        ShieldCfg { enabled: true, s_bond: 0.25, s_occupied: 0.10, w_occupied: 0.5, granularity: Granularity::Slice, light_cover: 1.0, private: false }
     }
 }
 impl Default for BondCfg {

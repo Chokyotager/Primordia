@@ -157,6 +157,11 @@ impl<'a> Cpu<'a> {
         if p.sleep_shield && t != self.me && (st.h(t, H_SLEEP) > 0 || st.flags(t) & FL_SLEEPING != 0) {
             return false;
         }
+        // shielding.private: past its construction window a cell's tape is closed
+        // to every other cell
+        if p.private_tape && t != self.me && (st.epoch as u32).wrapping_sub(st.h(t, H_BIRTH)) >= p.construct_window {
+            return false;
+        }
         // bonds.protect: past its construction window a cell's tape is closed to
         // its bonded neighbours (they still share energy and shield it)
         if p.bond_protect && t != self.me && p.geom.dims > 0 && self.fixed.is_none() {

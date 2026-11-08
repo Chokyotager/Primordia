@@ -399,6 +399,7 @@ fn t7_twin_lifecycle_mechanisms() {
         let mut cfg = full_cfg(dims);
         cfg.individual.resume = true;
         cfg.individual.step_budget = 48;
+        cfg.shielding.private = dims == 3;
         cfg.bonds.protect = true;
         cfg.bonds.construct_window = 12;
         cfg.bonds.birth_bond = 0.5;

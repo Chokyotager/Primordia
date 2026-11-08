@@ -246,7 +246,7 @@ fn reproduction_reduces_absorption_for_the_rest_period() {
 #[test]
 fn new_options_keep_old_hashes_and_snapshots_keep_contexts() {
     let base = Config::preset("primordia-2d-sun").unwrap().to_toml();
-    for key in ["resume", "protect", "construct_window", "copy_rest", "copy_absorb"] {
+    for key in ["resume", "protect", "construct_window", "copy_rest", "copy_absorb", "private"] {
         assert!(!base.contains(key), "{key} serialized at its default");
     }
     let mut c = cfg();
@@ -411,4 +411,37 @@ fn table_overrides_merge_and_live_edits_rebase_the_ledger() {
     }
     assert!(sim.rejected.is_empty(), "{:?}", sim.rejected);
     assert_eq!(sim.st.ledger.violations, 0);
+}
+
+/// shielding.private: any neighbour may write into a cell under construction,
+/// none into an older one; the cell still writes its own tape.
+#[test]
+fn private_tapes_are_written_only_while_under_construction() {
+    let copier = [op::CPY, op::H0INC, op::H1INC, 0xC2];
+    for (age, writes) in [(10, true), (300, false)] {
+        let mut c = cfg();
+        c.shielding.private = true;
+        c.bonds.construct_window = 256;
+        let p = Params::new(&c);
+        let mut s = State::init(&c, &p);
+        s.epoch = 1000;
+        let a = p.geom.index([4, 4, 0]);
+        put(&mut s, &p, a, &copier, 4);
+        *s.hm(a, H_BIRTH) = 0; // the writer is old: its own tape stays writable
+        let b = facing_cell(&s, &p, a);
+        put(&mut s, &p, b, &[], 4);
+        *s.hm(b, H_BIRTH) = 1000 - age;
+        slice(&mut s, &p, a, 100);
+        assert_eq!(nonzero(&s, b) > 0, writes, "age {age}");
+    }
+    // self-writes: WR into the cell's own tape is never blocked
+    let mut c = cfg();
+    c.shielding.private = true;
+    let p = Params::new(&c);
+    let mut s = State::init(&c, &p);
+    s.epoch = 1000;
+    let a = p.geom.index([4, 4, 0]);
+    put(&mut s, &p, a, &[0x45, 0x43, op::SETH1, op::WR, op::HALT, 0, 0, 0], 8); // PUSH5, PUSH3, SETH1 (h1 = 2+3), WR 5 at 5
+    slice(&mut s, &p, a, 100);
+    assert_eq!(s.tape(a)[5], 5);
 }

@@ -164,6 +164,7 @@ by golden and parity tests. They came out of the long live runs, in this order:
 | `individual.resume` | a slice continues where the previous one stopped: the IP, both heads and the 16-entry stack are kept in the cell's header (unreduced, so addresses follow the current partner). `HALT`, a stack fault or an empty address space start the next slice afresh; running out of energy retries the instruction, `SLEEP` and a move continue after it. Spatial worlds only | every slice restarted at IP 0, so a copy that needed more than one slice's energy recopied the same prefix forever and genomes could not outgrow one slice (the audit's 64-byte probe stalled at 51 bytes; M16 under the corrected code collapsed to ~16-byte copiers by day 12) |
 | `bonds.protect`, `bonds.construct_window` | a bonded neighbour may write into or digest a cell only during the cell's first `construct_window` epochs (default 256); after that bonds still share energy and shield the cell from outsiders | a bond let any bonded copier overwrite its partner without shielding, so bodies protected copiers better than the specialists inside them |
 | `energy.copy_rest`, `energy.copy_absorb` | for `copy_rest` epochs after a reproductive act (a permitted write into another cell, `ALLOC` or `DIVIDE`) a cell keeps only `copy_absorb` of its automatic absorption | every cell absorbed light and vent energy whatever it did, so a lone copier could do everything a specialist could. This germ-soma trade-off lets bonded absorbers that do not copy feed a copier through energy sharing |
+| `shielding.private` | another cell may write into (or digest) a tape only during its first `bonds.construct_window` epochs, while its parent builds it; after that only the cell writes its own tape | M17 (995k epochs) had no heredity of whole genomes: 191k of 193k cells had unique tapes, and a neighbour-spraying loop without `ALLOC` filled 82% of cells; overwriting plus damage erased genomes faster than selection acted |
 
 The last three are new in M17 and default off (`copy_rest` 0). Options added after configuration hashes
 were recorded are left out of the serialized configuration at their defaults, so older configurations and
@@ -249,6 +250,13 @@ on the stack and starts over. `tests/lifecycle.rs` checks it for three isolated 
 step budget from 1,024 to 128: with resumed execution the budget limits a cell's work per epoch, not the
 length of a genome it can copy, and the interpreter dominates GPU time (on a day-3 window: 9 epochs/s at
 1,024, 15 at 256 before the transport layout fix, 21 at 256 after it).
+
+M17 ran 995k epochs without whole-genome heredity (see the `shielding.private` row above).
+`runs/live-m18.toml` adds genome privacy, cuts ambient damage tenfold (background mutation and radiation
+10⁻⁵, hand flips 10⁻⁶, decay 5 × 10⁻⁶; copy errors unchanged) and starts from an empty world seeded with
+M17's `ALLOC` ancestor (a random soup could not be overwritten and held its sites for its 10-day
+lifespan). In a 3-day trial the ancestor filled the world within 400 epochs and 76–78% of cells survived
+each night. With every cell running its copy loop the world runs at ~7.5 epochs/s on the RTX 3050.
 
 `runs/live-m1.toml` to `live-m3.toml` are the earlier steps.
 

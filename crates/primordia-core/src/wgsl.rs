@@ -73,6 +73,7 @@ pub mod flag {
     pub const BOND_KIN: u32 = 16384;
     pub const RESUME: u32 = 32768;
     pub const BOND_PROTECT: u32 = 65536;
+    pub const PRIVATE: u32 = 131072;
 }
 
 /// Static (per-config) part of the parameter buffer. EPOCH, MIRRORED, COLOR
@@ -109,6 +110,7 @@ pub fn param_words(p: &Params) -> Vec<u32> {
         (p.bond_kin, flag::BOND_KIN),
         (p.resume, flag::RESUME),
         (p.bond_protect, flag::BOND_PROTECT),
+        (p.private_tape, flag::PRIVATE),
     ] {
         if on {
             f |= b;
@@ -273,6 +275,7 @@ pub fn constants() -> String {
         ("F_BOND_KIN", flag::BOND_KIN),
         ("F_RESUME", flag::RESUME),
         ("F_BOND_PROTECT", flag::BOND_PROTECT),
+        ("F_PRIVATE", flag::PRIVATE),
     ] {
         s += &format!("const {n}: u32 = {v}u;\n");
     }

@@ -253,6 +253,9 @@ fn flip_frame(v: u32, draw: u32) -> u32 {
 
 fn shield_ok(t: u32) -> bool {
     if (has(F_SLEEP_SHIELD) && t != me && (hdr[t * HDR + H_SLEEP] > 0u || (flags(t) & FL_SLEEPING) != 0u)) { return false; }
+    // shielding.private: past its construction window a cell's tape is closed
+    // to every other cell
+    if (has(F_PRIVATE) && t != me && g_epoch - H(t, H_BIRTH) >= P[P_CONSTRUCT_WINDOW]) { return false; }
     // bonds.protect: past its construction window a cell's tape is closed to
     // its bonded neighbours (they still share energy and shield it)
     if (has(F_BOND_PROTECT) && t != me && g_dims > 0u && !fixed_mode) {

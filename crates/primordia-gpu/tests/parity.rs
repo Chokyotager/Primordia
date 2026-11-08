@@ -445,3 +445,18 @@ fn bonded_gamma_extremes_match_cpu() {
         check(c, 40, true, true);
     }
 }
+
+/// shielding.private (foreign writes only into cells under construction) with
+/// resumed execution: identical on both backends.
+#[test]
+fn private_tapes_match_cpu() {
+    let mut c = cfg(2);
+    c.shielding.private = true;
+    c.bonds.construct_window = 12;
+    c.individual.resume = true;
+    c.individual.step_budget = 48;
+    c.validate().unwrap();
+    for resident in [false, true] {
+        check(c.clone(), 60, true, resident);
+    }
+}
