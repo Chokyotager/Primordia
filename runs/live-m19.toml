@@ -8,6 +8,9 @@
 #   and occupied neighbours make a cell harder to eat), as does bonds.protect.
 # M18 (150k epochs) filled its world with ~240k cells that could only die of
 # old age; tape length plateaued near 74 bytes and bodies stayed tiny.
+# - bonds.construct_window 2000 (M18: 256): in the first M19 run children were
+#   ~37% built when the window closed and privacy locked them half-finished
+#   (two-thirds of cells under half full, 231k of 245k tapes unique).
 # Seeded with M17's ALLOC ancestor: --events runs/seed-m17.jsonl
 preset = "primordia-2d-sun"
 seed = 2
@@ -64,7 +67,7 @@ mutual = true
 birth_bond = 0.5
 kin_only = true  # like-with-like adhesion
 protect = true
-construct_window = 256
+construct_window = 2000  # one day: at 256 parents rarely finished a child before privacy locked it
 
 [mutation]
 background = 1e-5

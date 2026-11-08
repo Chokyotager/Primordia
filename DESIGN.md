@@ -262,7 +262,11 @@ each night. It runs at ~45 epochs/s on the RTX 3050 in its first days. Its first
 `runs/live-m18-s2-fixedage`) showed the fixed lifespan's synchronised die-offs, so M18 restarted with
 lifespans spread ±25% (`individual.max_age_spread`). After 166k epochs (83 days) M18 held ~242k cells at dawn, tape length had
 levelled off near 74 bytes and the largest bodies had 13–42 cells. `runs/live-m19.toml` is M18 with
-predation (`shielding.predation`). (Without NVIDIA's Vulkan driver, `wgpu` silently
+predation (`shielding.predation`). Its first run (79k epochs, kept as `runs/live-m19-s2-cw256`) showed that both M18 and
+M19 had mostly half-built genomes: parents copy slowly (the reproduction rest period starves them), and
+children were ~37% filled when the 256-epoch construction window closed and privacy locked them. Two
+thirds of cells were under half full, 231k of 245k tapes were unique, and the only bonds were birth
+bonds between parent and child (bodies of at most 12). M19 restarted with a 2,000-epoch window. (Without NVIDIA's Vulkan driver, `wgpu` silently
 falls back to llvmpipe, Mesa's CPU renderer: identical results, ~8 epochs/s. The run manifest's
 `gpu_adapter` shows which device ran.)
 
