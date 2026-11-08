@@ -152,14 +152,15 @@ impl<'a> Cpu<'a> {
     }
 
     /// Soft geometric shielding for a write into foreign cell `t`.
-    fn shield_ok(&mut self, st: &State, t: usize) -> bool {
+    /// `digest`: the access is DIGEST (which shielding.predation lets past privacy).
+    fn shield_ok(&mut self, st: &State, t: usize, digest: bool) -> bool {
         let p = self.p;
         if p.sleep_shield && t != self.me && (st.h(t, H_SLEEP) > 0 || st.flags(t) & FL_SLEEPING != 0) {
             return false;
         }
         // shielding.private: past its construction window a cell's tape is closed
         // to every other cell
-        if p.private_tape && t != self.me && (st.epoch as u32).wrapping_sub(st.h(t, H_BIRTH)) >= p.construct_window {
+        if p.private_tape && !(digest && p.predation) && t != self.me && (st.epoch as u32).wrapping_sub(st.h(t, H_BIRTH)) >= p.construct_window {
             return false;
         }
         // bonds.protect: past its construction window a cell's tape is closed to
@@ -252,7 +253,7 @@ impl<'a> Cpu<'a> {
     fn write(&mut self, st: &mut State, addr: usize, mut v: u8, ip: usize, total: usize, ls: usize, lp: usize, pt: Option<usize>) -> bool {
         let p = self.p;
         let (t, off) = self.resolve(addr, ls, lp, pt);
-        if !self.shield_ok(st, t) {
+        if !self.shield_ok(st, t, false) {
             return false;
         }
         // copy errors: 0 none, 1 insert, 2 delete
@@ -622,14 +623,28 @@ impl<'a> Cpu<'a> {
                 let v = pop!();
                 let n = v.clamp(0, ti) as usize;
                 pay_or_unpop!(cost * n as u32, v);
-                if let Some(pc) = pt {
+                if let Some(pc) = pt.filter(|&pc| p.predation && (st.epoch as u32).wrapping_sub(st.h(pc, H_BIRTH)) >= p.construct_window) {
+                    // shielding.predation: an established (private) cell is
+                    // eaten whole or not at all; it dies at the end of the epoch
+                    let len = st.len(pc);
+                    if len > 0 && n >= len && self.shield_ok(st, pc, true) {
+                        for o in 0..len {
+                            let byte = st.tapes[pc * st.lmax + o];
+                            if byte != 0 {
+                                st.tapes[pc * st.lmax + o] = 0;
+                                self.release(st, me, byte);
+                            }
+                        }
+                        st.hdr[pc * HDR + H_ZERO] = p.dead_after.saturating_sub(1);
+                    }
+                } else if let Some(pc) = pt {
                     for k in 0..n {
                         let a = rem(self.h1 + k as i32);
                         let (c, o) = self.resolve(a, ls, lp, pt);
                         if c != pc {
                             continue;
                         }
-                        if !self.shield_ok(st, pc) {
+                        if !self.shield_ok(st, pc, true) {
                             break;
                         }
                         let byte = st.tapes[c * st.lmax + o];

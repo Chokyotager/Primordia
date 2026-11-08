@@ -333,6 +333,12 @@ pub struct ShieldCfg {
     /// parent builds it; after that only the cell itself writes its tape.
     #[serde(skip_serializing_if = "is_false")]
     pub private: bool,
+    /// With `private`: DIGEST may still eat an established cell, but only
+    /// whole (n at least its tape length): the tape is erased, the eater gains
+    /// its monomers and the cell dies at the end of the epoch. Writes stay
+    /// blocked, so genomes are inherited or destroyed whole, never mixed.
+    #[serde(skip_serializing_if = "is_false")]
+    pub predation: bool,
 }
 
 // Options added after configuration hashes were recorded are omitted from the
@@ -612,7 +618,7 @@ impl Default for ChiralCfg {
 }
 impl Default for ShieldCfg {
     fn default() -> Self {
-        ShieldCfg { enabled: true, s_bond: 0.25, s_occupied: 0.10, w_occupied: 0.5, granularity: Granularity::Slice, light_cover: 1.0, private: false }
+        ShieldCfg { enabled: true, s_bond: 0.25, s_occupied: 0.10, w_occupied: 0.5, granularity: Granularity::Slice, light_cover: 1.0, private: false, predation: false }
     }
 }
 impl Default for BondCfg {

@@ -30,17 +30,19 @@ fn cfg(dims: u32) -> Config {
 }
 
 fn seed(sim: &mut Sim) {
-    let progs: [&[u8]; 5] = [
+    let progs: [&[u8]; 6] = [
         &[op::BOND, 0x26, op::MOVE, 0x60, 0x43, op::SHARE, 0x41, 0x2C, 0x40, 0x2D, op::CPY, op::H0INC, op::H1INC, 0xC2],
         &[0x45, op::ALLOC, op::CPY, op::H0INC, op::H1INC, 0xC2],
         &[0x2A, 0x27, op::BOND, 0x60, 0x2B, 0x20, 0x60, op::TUMBLE, 0x60, 0x22, 0x24, 0x25],
         &[0x41, 0x30, 0x41, 0x32, 0x40, 0x34, 0x44, 0x2E, 0x43, op::DIGEST, 0x41, op::SETH0, 0x45, op::SETH1, op::DIVIDE],
         &[op::RAND, op::WR, op::H1INC, op::RD, op::SLEEP, op::ENRG, op::TEMP, op::FREE, op::POOL, 0x28, 0x29, op::SENSE, op::GROW, op::SHRINK, op::LEN, op::PLEN, 0xC8],
+        // predator: DIGEST 496 bytes of a random neighbour, forever
+        &[0x5F, op::SHL4, op::TUMBLE, op::DIGEST, 0xC3],
     ];
     let l = sim.st.lmax;
     for c in 0..sim.st.n {
         if sim.st.occupied(c) && c % 2 == 0 {
-            let pr = progs[(c / 2) % 5];
+            let pr = progs[(c / 2) % progs.len()];
             sim.st.tapes[c * l..c * l + pr.len()].copy_from_slice(pr);
         }
     }
@@ -450,14 +452,18 @@ fn bonded_gamma_extremes_match_cpu() {
 /// resumed execution: identical on both backends.
 #[test]
 fn private_tapes_match_cpu() {
+    for predation in [false, true] {
     let mut c = cfg(2);
     c.shielding.private = true;
+    c.shielding.predation = predation;
     c.bonds.construct_window = 12;
     c.individual.resume = true;
     c.individual.step_budget = 48;
     c.validate().unwrap();
     for resident in [false, true] {
-        check(c.clone(), 60, true, resident);
+        let a = check(c.clone(), 60, true, resident);
+        eprintln!("private, predation {predation}, resident {resident}: {} deaths in the last epoch", a.st.tally.deaths);
+    }
     }
 }
 
@@ -473,7 +479,7 @@ fn spread_lifespans_match_cpu() {
     for resident in [false, true] {
         let a = check(c.clone(), 80, true, resident);
         let st = &a.st;
-        let old: Vec<u32> = (0..st.n).filter(|&i| st.occupied(i) && st.h(i, primordia_core::params::H_BIRTH) == 0).map(|i| st.epoch as u32).collect();
+        let old: Vec<u32> = (0..st.n).filter(|&i| st.occupied(i) && st.h(i, primordia_core::params::H_BIRTH) == 0).map(|_| st.epoch as u32).collect();
         // at epoch 80 some founders (lifespan up to 70) are gone, and none older than 70 remain
         assert!(old.is_empty(), "{} founders outlived the longest lifespan", old.len());
     }

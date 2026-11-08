@@ -47,6 +47,7 @@ pub mod pi {
     pub const BIRTH_BOND: usize = 36;
     pub const CONSTRUCT_WINDOW: usize = 37;
     pub const COPY_REST: usize = 38;
+    pub const DEAD_AFTER: usize = 39;
     pub const COSTS: usize = 64;
     pub const PWRITE: usize = 320;
     pub const CAT: usize = 384;
@@ -74,6 +75,7 @@ pub mod flag {
     pub const RESUME: u32 = 32768;
     pub const BOND_PROTECT: u32 = 65536;
     pub const PRIVATE: u32 = 131072;
+    pub const PREDATION: u32 = 262144;
 }
 
 /// Static (per-config) part of the parameter buffer. EPOCH, MIRRORED, COLOR
@@ -111,6 +113,7 @@ pub fn param_words(p: &Params) -> Vec<u32> {
         (p.resume, flag::RESUME),
         (p.bond_protect, flag::BOND_PROTECT),
         (p.private_tape, flag::PRIVATE),
+        (p.predation, flag::PREDATION),
     ] {
         if on {
             f |= b;
@@ -135,6 +138,7 @@ pub fn param_words(p: &Params) -> Vec<u32> {
     w[pi::BIRTH_BOND] = p.birth_bond_q32;
     w[pi::CONSTRUCT_WINDOW] = p.construct_window;
     w[pi::COPY_REST] = p.copy_rest;
+    w[pi::DEAD_AFTER] = p.dead_after;
     w[pi::SIG_EMIT] = p.sig_emit;
     let ncat = p.cat.len().min(pi::MAX_CAT);
     w[pi::NCAT] = if p.chem_on { ncat as u32 } else { 0 };
@@ -250,6 +254,7 @@ pub fn constants() -> String {
         ("P_BIRTH_BOND", pi::BIRTH_BOND),
         ("P_CONSTRUCT_WINDOW", pi::CONSTRUCT_WINDOW),
         ("P_COPY_REST", pi::COPY_REST),
+        ("P_DEAD_AFTER", pi::DEAD_AFTER),
         ("P_COSTS", pi::COSTS),
         ("P_PWRITE", pi::PWRITE),
         ("P_CAT", pi::CAT),
@@ -276,6 +281,7 @@ pub fn constants() -> String {
         ("F_RESUME", flag::RESUME),
         ("F_BOND_PROTECT", flag::BOND_PROTECT),
         ("F_PRIVATE", flag::PRIVATE),
+        ("F_PREDATION", flag::PREDATION),
     ] {
         s += &format!("const {n}: u32 = {v}u;\n");
     }

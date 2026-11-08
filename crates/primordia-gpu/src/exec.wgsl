@@ -251,11 +251,12 @@ fn flip_frame(v: u32, draw: u32) -> u32 {
     return v ^ (1u << bit);
 }
 
-fn shield_ok(t: u32) -> bool {
+// digest: the access is DIGEST (which shielding.predation lets past privacy)
+fn shield_ok(t: u32, digest: bool) -> bool {
     if (has(F_SLEEP_SHIELD) && t != me && (hdr[t * HDR + H_SLEEP] > 0u || (flags(t) & FL_SLEEPING) != 0u)) { return false; }
     // shielding.private: past its construction window a cell's tape is closed
     // to every other cell
-    if (has(F_PRIVATE) && t != me && g_epoch - H(t, H_BIRTH) >= P[P_CONSTRUCT_WINDOW]) { return false; }
+    if (has(F_PRIVATE) && !(digest && has(F_PREDATION)) && t != me && g_epoch - H(t, H_BIRTH) >= P[P_CONSTRUCT_WINDOW]) { return false; }
     // bonds.protect: past its construction window a cell's tape is closed to
     // its bonded neighbours (they still share energy and shield it)
     if (has(F_BOND_PROTECT) && t != me && g_dims > 0u && !fixed_mode) {
@@ -337,7 +338,7 @@ fn write_byte(addr: u32, v_in: u32, ipu: u32, total: u32) -> bool {
     let r0 = resolve(addr);
     let t = r0.x;
     let off = r0.y;
-    if (!shield_ok(t)) { return false; }
+    if (!shield_ok(t, false)) { return false; }
     var mode = 0u;
     if (P[P_PDEL] != 0u) {
         let r = rnd();
@@ -642,13 +643,28 @@ fn step() -> i32 {
         if (g_err) { return END; }
         let n = u32(clamp(v, 0, ti));
         if (!pay(cost * n)) { _ = push(v); return END; }
-        if (pt != NONE) {
+        if (pt != NONE && has(F_PREDATION) && g_epoch - H(pt, H_BIRTH) >= P[P_CONSTRUCT_WINDOW]) {
+            // shielding.predation: an established (private) cell is eaten
+            // whole or not at all; it dies at the end of the epoch
+            let pc = pt;
+            let len = tlen(pc);
+            if (len > 0u && n >= len && shield_ok(pc, true)) {
+                for (var o = 0u; o < len; o = o + 1u) {
+                    let byte = tb(pc, o);
+                    if (byte != 0u) {
+                        tset(pc, o, 0u);
+                        release(me, byte);
+                    }
+                }
+                hdr[pc * HDR + H_ZERO] = max(P[P_DEAD_AFTER], 1u) - 1u;
+            }
+        } else if (pt != NONE) {
             let pc = pt;
             for (var k = 0u; k < n; k = k + 1u) {
                 let a = u32(rem_i(h1 + i32(k), ti));
                 let r = resolve(a);
                 if (r.x != pc) { continue; }
-                if (!shield_ok(pc)) { break; }
+                if (!shield_ok(pc, true)) { break; }
                 let byte = tb(r.x, r.y);
                 if (byte != 0u) {
                     tset(r.x, r.y, 0u);

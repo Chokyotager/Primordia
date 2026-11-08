@@ -166,6 +166,7 @@ by golden and parity tests. They came out of the long live runs, in this order:
 | `bonds.protect`, `bonds.construct_window` | a bonded neighbour may write into or digest a cell only during the cell's first `construct_window` epochs (default 256); after that bonds still share energy and shield the cell from outsiders | a bond let any bonded copier overwrite its partner without shielding, so bodies protected copiers better than the specialists inside them |
 | `energy.copy_rest`, `energy.copy_absorb` | for `copy_rest` epochs after a reproductive act (a permitted write into another cell, `ALLOC` or `DIVIDE`) a cell keeps only `copy_absorb` of its automatic absorption | every cell absorbed light and vent energy whatever it did, so a lone copier could do everything a specialist could. This germ-soma trade-off lets bonded absorbers that do not copy feed a copier through energy sharing |
 | `shielding.private` | another cell may write into (or digest) a tape only during its first `bonds.construct_window` epochs, while its parent builds it; after that only the cell writes its own tape | M17 (995k epochs) had no heredity of whole genomes: 191k of 193k cells had unique tapes, and a neighbour-spraying loop without `ALLOC` filled 82% of cells; overwriting plus damage erased genomes faster than selection acted |
+| `shielding.predation` | with `private`: `DIGEST` may eat an established cell, but only whole (n at least its tape length): the tape is erased, the eater gains its monomers and the cell dies at the end of the epoch; writes stay blocked and ordinary shielding and `bonds.protect` still apply | M18's full world of protected cells could only turn over through old age; killing (unlike overwriting) keeps genomes inherited or destroyed whole and lets a cell make room for its offspring |
 
 The last three are new in M17 and default off (`copy_rest` 0). Options added after configuration hashes
 were recorded are left out of the serialized configuration at their defaults, so older configurations and
@@ -259,7 +260,9 @@ M17's `ALLOC` ancestor (a random soup could not be overwritten and held its site
 lifespan). In a 3-day trial the ancestor filled the world within 400 epochs and 76–78% of cells survived
 each night. It runs at ~45 epochs/s on the RTX 3050 in its first days. Its first 54,000 epochs (kept as
 `runs/live-m18-s2-fixedage`) showed the fixed lifespan's synchronised die-offs, so M18 restarted with
-lifespans spread ±25% (`individual.max_age_spread`). (Without NVIDIA's Vulkan driver, `wgpu` silently
+lifespans spread ±25% (`individual.max_age_spread`). After 166k epochs (83 days) M18 held ~242k cells at dawn, tape length had
+levelled off near 74 bytes and the largest bodies had 13–42 cells. `runs/live-m19.toml` is M18 with
+predation (`shielding.predation`). (Without NVIDIA's Vulkan driver, `wgpu` silently
 falls back to llvmpipe, Mesa's CPU renderer: identical results, ~8 epochs/s. The run manifest's
 `gpu_adapter` shows which device ran.)
 

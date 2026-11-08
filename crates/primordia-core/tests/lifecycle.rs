@@ -246,7 +246,7 @@ fn reproduction_reduces_absorption_for_the_rest_period() {
 #[test]
 fn new_options_keep_old_hashes_and_snapshots_keep_contexts() {
     let base = Config::preset("primordia-2d-sun").unwrap().to_toml();
-    for key in ["resume", "protect", "construct_window", "copy_rest", "copy_absorb", "private", "max_age_spread"] {
+    for key in ["resume", "protect", "construct_window", "copy_rest", "copy_absorb", "private", "max_age_spread", "predation"] {
         assert!(!base.contains(key), "{key} serialized at its default");
     }
     let mut c = cfg();
@@ -463,4 +463,52 @@ fn lifespans_spread_around_max_age() {
     assert!((mean - 20_000.0).abs() < 150.0, "mean {mean}");
     c.individual.max_age_spread = 0.0;
     assert_eq!(Params::new(&c).lifespan(12345), 20_000);
+}
+
+/// shielding.predation: an established cell can be eaten, but only whole; it
+/// then dies at the end of the epoch. Writes into it stay blocked, and a
+/// newborn is still digested byte by byte.
+#[test]
+fn predators_eat_established_cells_whole() {
+    let attack = |n: u8, age: u32, predation: bool| -> (usize, bool, u32) {
+        let mut c = cfg();
+        c.shielding.private = true;
+        c.shielding.predation = predation;
+        c.matter.enabled = true;
+        let p = Params::new(&c);
+        let mut s = State::init(&c, &p);
+        s.epoch = 1000;
+        let a = p.geom.index([4, 4, 0]);
+        put(&mut s, &p, a, &[0x40 + n, op::DIGEST, op::HALT], 3);
+        *s.hm(a, H_BIRTH) = 0;
+        let b = facing_cell(&s, &p, a);
+        put(&mut s, &p, b, &[0x20, 0x22, 0x24, 0x26, 0x28, 0x2A], 6); // L monomers
+        *s.hm(b, H_BIRTH) = 1000 - age;
+        let pool_before = s.f(a, p.f_pool(0));
+        slice(&mut s, &p, a, 1000);
+        let gained = s.f(a, p.f_pool(0)) - pool_before;
+        let left = nonzero(&s, b);
+        phases::mutate_decay(&mut s, &p, None);
+        assert_eq!(gained as usize, 6 - left);
+        (left, s.occupied(b), gained)
+    };
+    assert_eq!(attack(6, 300, true), (0, false, 6), "eaten whole: dead at the end of the epoch");
+    assert_eq!(attack(5, 300, true), (6, true, 0), "too small a bite: nothing happens");
+    assert_eq!(attack(6, 300, false), (6, true, 0), "privacy without predation");
+    assert_eq!(attack(3, 10, true), (3, true, 3), "a newborn is digested byte by byte");
+
+    // writes into an established cell stay blocked under predation
+    let mut c = cfg();
+    c.shielding.private = true;
+    c.shielding.predation = true;
+    let p = Params::new(&c);
+    let mut s = State::init(&c, &p);
+    s.epoch = 1000;
+    let a = p.geom.index([4, 4, 0]);
+    put(&mut s, &p, a, &[op::CPY, op::H0INC, op::H1INC, 0xC2], 4);
+    *s.hm(a, H_BIRTH) = 0;
+    let b = facing_cell(&s, &p, a);
+    put(&mut s, &p, b, &[], 4);
+    slice(&mut s, &p, a, 100);
+    assert_eq!(nonzero(&s, b), 0);
 }

@@ -191,6 +191,8 @@ pub struct Params {
     pub bond_protect: bool,
     /// shielding.private: foreign writes only into cells within construct_window of birth.
     pub private_tape: bool,
+    /// shielding.predation: established private cells can be digested whole.
+    pub predation: bool,
     pub construct_window: u32,
     /// energy.copy_rest / copy_absorb: after a reproductive act (a write into
     /// another cell, ALLOC or DIVIDE) a cell keeps this fraction (Q16) of its
@@ -398,6 +400,7 @@ impl Params {
             birth_bond_q32: if c.bonds.enabled && !pair_concat { q32u(c.bonds.birth_bond) } else { 0 },
             bond_protect: c.bonds.enabled && c.bonds.protect && !pair_concat,
             private_tape: c.shielding.private,
+            predation: c.shielding.private && c.shielding.predation,
             construct_window: c.bonds.construct_window,
             copy_rest: if energy_on { c.energy.copy_rest } else { 0 },
             copy_absorb_q16: to_q16(c.energy.copy_absorb) as u32,
