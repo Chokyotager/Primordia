@@ -167,6 +167,8 @@ by golden and parity tests. They came out of the long live runs, in this order:
 | `energy.copy_rest`, `energy.copy_absorb` | for `copy_rest` epochs after a reproductive act (a permitted write into another cell, `ALLOC` or `DIVIDE`) a cell keeps only `copy_absorb` of its automatic absorption | every cell absorbed light and vent energy whatever it did, so a lone copier could do everything a specialist could. This germ-soma trade-off lets bonded absorbers that do not copy feed a copier through energy sharing |
 | `shielding.private` | another cell may write into (or digest) a tape only during its first `bonds.construct_window` epochs, while its parent builds it; after that only the cell writes its own tape | M17 (995k epochs) had no heredity of whole genomes: 191k of 193k cells had unique tapes, and a neighbour-spraying loop without `ALLOC` filled 82% of cells; overwriting plus damage erased genomes faster than selection acted |
 | `shielding.predation` | with `private`: `DIGEST` may eat an established cell, but only whole (n at least its tape length): the tape is erased, the eater gains its monomers and the cell dies at the end of the epoch; writes stay blocked and ordinary shielding and `bonds.protect` still apply | M18's full world of protected cells could only turn over through old age; killing (unlike overwriting) keeps genomes inherited or destroyed whole and lets a cell make room for its offspring |
+| `shielding.parent_only` | with `private`: a cell under construction is open only to its parent (the lineage it records as parent); others can at most eat it whole | under plain privacy every copier sprayed its genome, misaligned, into all young neighbours (M19: 99% unique tapes) |
+| `shielding.gestation` | a cell with a parent does not execute until its construction window is over (it still absorbs and pays upkeep) | a half-built child ran its partial program, `ALLOC` included, and multiplied incomplete genomes |
 
 The last three are new in M17 and default off (`copy_rest` 0). Options added after configuration hashes
 were recorded are left out of the serialized configuration at their defaults, so older configurations and
@@ -266,7 +268,18 @@ predation (`shielding.predation`). Its first run (79k epochs, kept as `runs/live
 M19 had mostly half-built genomes: parents copy slowly (the reproduction rest period starves them), and
 children were ~37% filled when the 256-epoch construction window closed and privacy locked them. Two
 thirds of cells were under half full, 231k of 245k tapes were unique, and the only bonds were birth
-bonds between parent and child (bodies of at most 12). M19 restarted with a 2,000-epoch window. (Without NVIDIA's Vulkan driver, `wgpu` silently
+bonds between parent and child (bodies of at most 12). M19 restarted with a 2,000-epoch window.
+
+**Heredity sweeps (November 2026).** 201² worlds from the `ALLOC` ancestor (`runs/seed-m17-201.jsonl`),
+20 days, two seeds per variant, measured with `primordia analyze`. M19's rules (any neighbour may build a
+newborn) collapsed to ~400 cells with two of three seeds and kept 95% of tapes unique. Parent-only
+construction kept 33k–40k cells; adding gestation (256-epoch window) gave the best high-order entropy
+(1.0 / 1.4). Neither the reproduction rest period nor copy errors (÷10) changed much. Ambient damage
+did: at M19's rate a 35-byte genome took ~17 hits per lifetime. Dividing it by 10 raised HOE to ~2.5 at
+day 20, with ~50% unique tapes and ~40% related neighbours (copy errors unchanged; ÷10 copy errors as
+well gave 2.7 / 3.0). Over 60 days HOE then drifts down (3.4 → 1.5) as lineages diversify, while programs
+lengthen (20 → 28 bytes) and self-copiers triple. `runs/live-m20.toml` is M19 with parent-only
+construction, gestation, a 256-epoch window and ambient damage ÷10. (Without NVIDIA's Vulkan driver, `wgpu` silently
 falls back to llvmpipe, Mesa's CPU renderer: identical results, ~8 epochs/s. The run manifest's
 `gpu_adapter` shows which device ran.)
 

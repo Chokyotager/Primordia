@@ -76,6 +76,8 @@ pub mod flag {
     pub const BOND_PROTECT: u32 = 65536;
     pub const PRIVATE: u32 = 131072;
     pub const PREDATION: u32 = 262144;
+    pub const PARENT_ONLY: u32 = 524288;
+    pub const GESTATION: u32 = 1048576;
 }
 
 /// Static (per-config) part of the parameter buffer. EPOCH, MIRRORED, COLOR
@@ -114,6 +116,8 @@ pub fn param_words(p: &Params) -> Vec<u32> {
         (p.bond_protect, flag::BOND_PROTECT),
         (p.private_tape, flag::PRIVATE),
         (p.predation, flag::PREDATION),
+        (p.parent_only, flag::PARENT_ONLY),
+        (p.gestation, flag::GESTATION),
     ] {
         if on {
             f |= b;
@@ -282,6 +286,8 @@ pub fn constants() -> String {
         ("F_BOND_PROTECT", flag::BOND_PROTECT),
         ("F_PRIVATE", flag::PRIVATE),
         ("F_PREDATION", flag::PREDATION),
+        ("F_PARENT_ONLY", flag::PARENT_ONLY),
+        ("F_GESTATION", flag::GESTATION),
     ] {
         s += &format!("const {n}: u32 = {v}u;\n");
     }

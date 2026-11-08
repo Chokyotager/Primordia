@@ -251,12 +251,18 @@ fn flip_frame(v: u32, draw: u32) -> u32 {
     return v ^ (1u << bit);
 }
 
+// shielding.private: t is still being built and this executor may build it
+// (within the construction window; with parent_only, as its parent)
+fn under_construction_for_me(t: u32) -> bool {
+    return g_epoch - H(t, H_BIRTH) < P[P_CONSTRUCT_WINDOW] && (!has(F_PARENT_ONLY) || H(t, H_PARENT) == H(me, H_LINEAGE));
+}
+
 // digest: the access is DIGEST (which shielding.predation lets past privacy)
 fn shield_ok(t: u32, digest: bool) -> bool {
     if (has(F_SLEEP_SHIELD) && t != me && (hdr[t * HDR + H_SLEEP] > 0u || (flags(t) & FL_SLEEPING) != 0u)) { return false; }
     // shielding.private: past its construction window a cell's tape is closed
     // to every other cell
-    if (has(F_PRIVATE) && !(digest && has(F_PREDATION)) && t != me && g_epoch - H(t, H_BIRTH) >= P[P_CONSTRUCT_WINDOW]) { return false; }
+    if (has(F_PRIVATE) && !(digest && has(F_PREDATION)) && t != me && !under_construction_for_me(t)) { return false; }
     // bonds.protect: past its construction window a cell's tape is closed to
     // its bonded neighbours (they still share energy and shield it)
     if (has(F_BOND_PROTECT) && t != me && g_dims > 0u && !fixed_mode) {
@@ -643,7 +649,7 @@ fn step() -> i32 {
         if (g_err) { return END; }
         let n = u32(clamp(v, 0, ti));
         if (!pay(cost * n)) { _ = push(v); return END; }
-        if (pt != NONE && has(F_PREDATION) && g_epoch - H(pt, H_BIRTH) >= P[P_CONSTRUCT_WINDOW]) {
+        if (pt != NONE && has(F_PREDATION) && !under_construction_for_me(pt)) {
             // shielding.predation: an established (private) cell is eaten
             // whole or not at all; it dies at the end of the epoch
             let pc = pt;
@@ -1050,6 +1056,8 @@ fn exec_slice(c: u32, fp: u32) {
     let fl = flags(c);
     if ((fl & FL_OCC) == 0u || (fl & (FL_EXEC | FL_SLEEPING)) != 0u || H(c, H_SLEEP) > 0u) { return; }
     if (has(F_ENERGY) && (fl & FL_HALT) != 0u) { return; }
+    // shielding.gestation: a cell under construction does not run yet
+    if (has(F_GESTATION) && H(c, H_PARENT) != 0u && g_epoch - H(c, H_BIRTH) < P[P_CONSTRUCT_WINDOW]) { return; }
     // a slice withdraws this cell's earlier bond requests (bonds.mutual)
     hdr[c * HDR + H_FLAGS] = (fl & ~REQ_MASK) | FL_EXEC;
     me = c;

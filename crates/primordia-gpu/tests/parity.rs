@@ -456,6 +456,8 @@ fn private_tapes_match_cpu() {
     let mut c = cfg(2);
     c.shielding.private = true;
     c.shielding.predation = predation;
+    c.shielding.parent_only = predation;
+    c.shielding.gestation = predation;
     c.bonds.construct_window = 12;
     c.individual.resume = true;
     c.individual.step_budget = 48;

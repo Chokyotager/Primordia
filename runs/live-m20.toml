@@ -1,0 +1,123 @@
+# Live world M20: M19 with parent-only construction, gestation and 10x less
+# ambient damage, chosen by 201^2 sweeps (2 seeds, 20 days each; see DESIGN.md):
+# - shielding.parent_only: a cell under construction is open only to its parent.
+#   M18/M19 let any neighbour write into newborns, so copiers sprayed their
+#   genomes, misaligned, into every young cell (M19: 99% unique tapes).
+# - shielding.gestation: a newborn does not run until its 256-epoch
+#   construction window is over, so a half-built child cannot copy itself.
+# - bonds.construct_window 256 (M19: 2000).
+# - mutation.background and radiation 1e-6, hand_flip 1e-7, decay.rate 5e-7
+#   (M19: 1e-5, 1e-5, 1e-6, 5e-6): at M19's rate a 35-byte genome took ~17
+#   hits per lifetime, so no genome was inherited intact. Copy errors unchanged.
+# In the sweeps this raised high-order entropy from ~0.5-1.2 to ~2.5 at day 20,
+# with ~50% unique tapes and ~40% related neighbours.
+# Seeded with M17's ALLOC ancestor: --events runs/seed-m17.jsonl
+preset = "primordia-2d-sun"
+seed = 2
+epochs = 1000000000
+
+[world]
+size = [501, 501]
+init_occupancy = 0.0  # no random soup: under privacy it could not be overwritten
+
+[individual]
+l_max = 256
+step_budget = 128  # with resume a longer copy continues next epoch (day-3 speed: 1024 9 ep/s, 256 21, 128 ~24)
+starve_after = 800
+max_age = 20000  # 10 days on average
+max_age_spread = 0.25  # each cell lives 7.5-12.5 days, fixed at birth
+sleep_scale = 4  # PUSH31 SLEEP = 124 epochs
+sleep_shield = false
+sleep_absorb = 0.0
+sleep_upkeep = 0.5
+pair_order = "self_first"
+random_initial_facing = false
+resume = true
+
+[energy]
+share_beta = 0.125
+copy_rest = 100
+copy_absorb = 0.2
+
+[energy.sun]
+i0 = 150
+moon = 0.04
+
+[energy.upkeep]
+base = 3.5
+per_byte = 0.06
+
+[energy.vents]
+enabled = true
+count = 6
+rate = 200000  # 500x the default; heat stays 400
+lifetime = 200000  # 100 days
+spawn_rate = 4e-5  # with the longer lifetime, keeps ~8 vents
+stagger = true  # founding vents start at random ages
+floor_only = false
+drift = 0.01
+
+[shielding]
+s_bond = 0.4
+private = true
+predation = true
+parent_only = true
+gestation = true
+
+[bonds]
+mutual = true
+birth_bond = 0.5
+kin_only = true  # like-with-like adhesion
+protect = true
+construct_window = 256
+
+[mutation]
+background = 1e-6
+radiation = 1e-6
+hand_flip = 1e-7
+
+[chemistry]
+init = [400, 400, 200, 0]  # X1, X2, X3, X4 per hand: 10x the default store
+n_cat = 16  # events per CAT at full folding (4 by default)
+
+[[chemistry.reactions]]
+r = ["X1", "X2"]
+p = ["X3"]
+energy = 12
+catalyzable = true
+kind = "mass"
+rate = 1e-6
+activation = 0.5
+
+[[chemistry.reactions]]  # light recharges the store: 10x the default
+r = ["X3"]
+p = ["X1", "X2"]
+energy = 0
+catalyzable = false
+kind = "photolysis"
+rate = 2e-2
+activation = 0.0
+
+[[chemistry.reactions]]
+r = ["X4"]
+p = ["X3"]
+energy = 20
+catalyzable = true
+kind = "mass"
+rate = 1e-5
+activation = 0.5
+
+[[chemistry.reactions]]
+r = ["X3"]
+p = ["X1", "X2"]
+energy = -12
+catalyzable = false
+kind = "mass"
+rate = 1e-4
+activation = 0.6
+
+[decay]
+rate = 5e-7
+
+[telemetry]
+snapshot_every = 11000  # alternates midday / dawn

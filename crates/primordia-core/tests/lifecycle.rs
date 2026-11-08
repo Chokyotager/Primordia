@@ -246,7 +246,7 @@ fn reproduction_reduces_absorption_for_the_rest_period() {
 #[test]
 fn new_options_keep_old_hashes_and_snapshots_keep_contexts() {
     let base = Config::preset("primordia-2d-sun").unwrap().to_toml();
-    for key in ["resume", "protect", "construct_window", "copy_rest", "copy_absorb", "private", "max_age_spread", "predation"] {
+    for key in ["resume", "protect", "construct_window", "copy_rest", "copy_absorb", "private", "max_age_spread", "predation", "parent_only", "gestation"] {
         assert!(!base.contains(key), "{key} serialized at its default");
     }
     let mut c = cfg();
@@ -511,4 +511,60 @@ fn predators_eat_established_cells_whole() {
     put(&mut s, &p, b, &[], 4);
     slice(&mut s, &p, a, 100);
     assert_eq!(nonzero(&s, b), 0);
+}
+
+/// shielding.parent_only: a cell under construction is open to its parent
+/// only; any other neighbour can at most eat it whole (with predation).
+#[test]
+fn only_the_parent_builds_a_newborn() {
+    let copier = [op::CPY, op::H0INC, op::H1INC, 0xC2];
+    for (is_parent, predation, prog, want_left) in [
+        (true, false, &copier[..], None),          // the parent copies into it
+        (false, false, &copier[..], Some(0usize)), // a stranger cannot write
+        (false, true, &[0x5F, op::DIGEST, op::HALT][..], Some(0)), // ... but can eat it whole
+        (false, false, &[0x5F, op::DIGEST, op::HALT][..], Some(6)), // not without predation
+    ] {
+        let mut c = cfg();
+        c.shielding.private = true;
+        c.shielding.parent_only = true;
+        c.shielding.predation = predation;
+        let p = Params::new(&c);
+        let mut s = State::init(&c, &p);
+        s.epoch = 1000;
+        let a = p.geom.index([4, 4, 0]);
+        put(&mut s, &p, a, prog, prog.len());
+        *s.hm(a, H_LINEAGE) = 77;
+        let b = facing_cell(&s, &p, a);
+        let tape: &[u8] = if want_left == Some(6) || predation { &[0x20, 0x22, 0x24, 0x26, 0x28, 0x2A] } else { &[] };
+        put(&mut s, &p, b, tape, 6);
+        *s.hm(b, H_BIRTH) = 990; // under construction
+        *s.hm(b, H_PARENT) = if is_parent { 77 } else { 5 };
+        slice(&mut s, &p, a, 1000);
+        match want_left {
+            None => assert!(nonzero(&s, b) > 0, "the parent writes"),
+            Some(k) => assert_eq!(nonzero(&s, b), k, "parent {is_parent} predation {predation}"),
+        }
+    }
+}
+
+/// shielding.gestation: a newborn does not execute until its construction
+/// window is over; a cell without a parent (seeded) runs at once.
+#[test]
+fn newborns_do_not_run_during_gestation() {
+    let mut c = cfg();
+    c.shielding.gestation = true;
+    c.bonds.construct_window = 100;
+    let p = Params::new(&c);
+    for (parent, age, runs) in [(5u32, 50u32, false), (5, 150, true), (0, 50, true)] {
+        let mut s = State::init(&c, &p);
+        s.epoch = 1000;
+        let a = p.geom.index([4, 4, 0]);
+        put(&mut s, &p, a, &[0x45, op::HALT], 2);
+        *s.hm(a, H_PARENT) = parent;
+        *s.hm(a, H_BIRTH) = 1000 - age;
+        let flags = exec::flag_snapshot(&s);
+        let mut tr = vec![];
+        exec::exec_slice(&mut s, &p, &flags, a, None, Some(&mut tr));
+        assert_eq!(!tr.is_empty(), runs, "parent {parent} age {age}");
+    }
 }

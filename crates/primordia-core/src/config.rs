@@ -339,6 +339,16 @@ pub struct ShieldCfg {
     /// blocked, so genomes are inherited or destroyed whole, never mixed.
     #[serde(skip_serializing_if = "is_false")]
     pub predation: bool,
+    /// With `private`: a cell under construction is open only to its parent
+    /// (the cell whose lineage ID it records as parent), not to every
+    /// neighbour; other cells can at most eat it whole (with `predation`).
+    #[serde(skip_serializing_if = "is_false")]
+    pub parent_only: bool,
+    /// Gestation: a cell does not execute until its construction window
+    /// (bonds.construct_window) is over, so a half-built child cannot run,
+    /// and copy, its incomplete program. It still absorbs and pays upkeep.
+    #[serde(skip_serializing_if = "is_false")]
+    pub gestation: bool,
 }
 
 // Options added after configuration hashes were recorded are omitted from the
@@ -618,7 +628,7 @@ impl Default for ChiralCfg {
 }
 impl Default for ShieldCfg {
     fn default() -> Self {
-        ShieldCfg { enabled: true, s_bond: 0.25, s_occupied: 0.10, w_occupied: 0.5, granularity: Granularity::Slice, light_cover: 1.0, private: false, predation: false }
+        ShieldCfg { enabled: true, s_bond: 0.25, s_occupied: 0.10, w_occupied: 0.5, granularity: Granularity::Slice, light_cover: 1.0, private: false, predation: false, parent_only: false, gestation: false }
     }
 }
 impl Default for BondCfg {

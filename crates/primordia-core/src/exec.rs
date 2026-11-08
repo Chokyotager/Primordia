@@ -152,6 +152,13 @@ impl<'a> Cpu<'a> {
     }
 
     /// Soft geometric shielding for a write into foreign cell `t`.
+    /// shielding.private: `t` is still being built and this executor may build
+    /// it (within the construction window; with parent_only, as its parent).
+    fn under_construction_for_me(&self, st: &State, t: usize) -> bool {
+        let p = self.p;
+        (st.epoch as u32).wrapping_sub(st.h(t, H_BIRTH)) < p.construct_window && (!p.parent_only || st.h(t, H_PARENT) == st.h(self.me, H_LINEAGE))
+    }
+
     /// `digest`: the access is DIGEST (which shielding.predation lets past privacy).
     fn shield_ok(&mut self, st: &State, t: usize, digest: bool) -> bool {
         let p = self.p;
@@ -160,7 +167,7 @@ impl<'a> Cpu<'a> {
         }
         // shielding.private: past its construction window a cell's tape is closed
         // to every other cell
-        if p.private_tape && !(digest && p.predation) && t != self.me && (st.epoch as u32).wrapping_sub(st.h(t, H_BIRTH)) >= p.construct_window {
+        if p.private_tape && !(digest && p.predation) && t != self.me && !self.under_construction_for_me(st, t) {
             return false;
         }
         // bonds.protect: past its construction window a cell's tape is closed to
@@ -623,7 +630,7 @@ impl<'a> Cpu<'a> {
                 let v = pop!();
                 let n = v.clamp(0, ti) as usize;
                 pay_or_unpop!(cost * n as u32, v);
-                if let Some(pc) = pt.filter(|&pc| p.predation && (st.epoch as u32).wrapping_sub(st.h(pc, H_BIRTH)) >= p.construct_window) {
+                if let Some(pc) = pt.filter(|&pc| p.predation && !self.under_construction_for_me(st, pc)) {
                     // shielding.predation: an established (private) cell is
                     // eaten whole or not at all; it dies at the end of the epoch
                     let len = st.len(pc);
@@ -972,6 +979,11 @@ pub fn exec_slice(st: &mut State, p: &Params, snap: &[u32], c: usize, fixed_part
         return;
     }
     if p.energy_on && fl & FL_HALT != 0 {
+        return;
+    }
+    // shielding.gestation: a cell under construction does not run yet (cells
+    // without a parent, i.e. seeded or initial ones, are not under construction)
+    if p.gestation && st.h(c, H_PARENT) != 0 && (st.epoch as u32).wrapping_sub(st.h(c, H_BIRTH)) < p.construct_window {
         return;
     }
     // a slice withdraws this cell's earlier bond requests (bonds.mutual)
