@@ -859,7 +859,6 @@ fn binom_two_sided(k: usize, n: usize) -> f64 {
 /// One line of heredity / body measures for a snapshot (under its effective config).
 fn analyze(path: &Path) -> Result<()> {
     use primordia_core::exec;
-    use primordia_core::isa::op;
     let cfg = snapshot_config(path)?;
     let p = Params::new(&cfg);
     let (st, _) = State::read_snapshot(path, &p)?;
@@ -884,11 +883,11 @@ fn analyze(path: &Path) -> Result<()> {
     let bodies = phases::components(&st, &p);
     let largest = bodies.sizes.iter().map(|x| x.1).max().unwrap_or(0);
     let big = bodies.sizes.iter().filter(|x| x.1 >= 10).count();
-    let has = |ops: &[u8]| 100.0 * occ.iter().filter(|&&c| st.tape(c).iter().any(|b| ops.contains(b))).count() as f64 / n;
+    let x = primordia_telemetry::analysis::executed_profile(&cfg, &st, 2000);
     println!(
-        "{}: epoch {}, {} cells | HOE {:.3} | unique tapes {:.1}% | kin neighbours {:.1}% | tape fill {:.2}, length {:.1} | bodies of 10+ {}, largest {} | ALLOC {:.0}%, BOND {:.1}%, DIGEST {:.1}%",
+        "{}: epoch {}, {} cells | HOE {:.3} | unique tapes {:.1}% | kin neighbours {:.1}% | tape length {:.1} (fill {:.2}), executed {:.1} | bodies of 10+ {}, largest {} | executing: IN+OUT {:.1}%, HARDEN {:.1}%, DIGEST {:.1}%, CAT {:.1}%, conditionals {:.1}%",
         path.display(), st.epoch, occ.len(), hoe, 100.0 * tapes.len() as f64 / n, 100.0 * kin as f64 / pairs.max(1) as f64,
-        fill, len, big, largest, has(&[op::ALLOC]), has(&[op::BOND, 0x26, 0x27]), has(&[op::DIGEST])
+        len, fill, x.size, big, largest, 100.0 * x.io, 100.0 * x.harden, 100.0 * x.digest, 100.0 * x.cat, 100.0 * x.conditional
     );
     Ok(())
 }

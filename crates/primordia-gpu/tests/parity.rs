@@ -30,7 +30,7 @@ fn cfg(dims: u32) -> Config {
 }
 
 fn seed(sim: &mut Sim) {
-    let progs: [&[u8]; 6] = [
+    let progs: [&[u8]; 7] = [
         &[op::BOND, 0x26, op::MOVE, 0x60, 0x43, op::SHARE, 0x41, 0x2C, 0x40, 0x2D, op::CPY, op::H0INC, op::H1INC, 0xC2],
         &[0x45, op::ALLOC, op::CPY, op::H0INC, op::H1INC, 0xC2],
         &[0x2A, 0x27, op::BOND, 0x60, 0x2B, 0x20, 0x60, op::TUMBLE, 0x60, 0x22, 0x24, 0x25],
@@ -38,6 +38,8 @@ fn seed(sim: &mut Sim) {
         &[op::RAND, op::WR, op::H1INC, op::RD, op::SLEEP, op::ENRG, op::TEMP, op::FREE, op::POOL, 0x28, 0x29, op::SENSE, op::GROW, op::SHRINK, op::LEN, op::PLEN, 0xC8],
         // predator: DIGEST 496 bytes of a random neighbour, forever
         &[0x5F, op::SHL4, op::TUMBLE, op::DIGEST, 0xC3],
+        // tasks and armour (fillers unless enabled): IN IN AND OUT, IN NEG DEC OUT, HARDEN, loop
+        &[0x7D, 0x7D, op::AND, 0x7E, 0x7D, op::NEG, op::DEC, 0x7E, 0x7F, 0xC9],
     ];
     let l = sim.st.lmax;
     for c in 0..sim.st.n {
@@ -484,5 +486,36 @@ fn spread_lifespans_match_cpu() {
         let old: Vec<u32> = (0..st.n).filter(|&i| st.occupied(i) && st.h(i, primordia_core::params::H_BIRTH) == 0).map(|_| st.epoch as u32).collect();
         // at epoch 80 some founders (lifespan up to 70) are gone, and none older than 70 remain
         assert!(old.is_empty(), "{} founders outlived the longest lifespan", old.len());
+    }
+}
+
+/// M22's environment options together: tasks (IN/OUT rewards from the field),
+/// armour, colony generations, the travelling light band, with privacy,
+/// predation, parent-only construction and gestation.
+#[test]
+fn environment_options_match_cpu() {
+    let mut c = cfg(2);
+    c.tasks.enabled = true;
+    c.tasks.reward = 8;
+    c.shielding.private = true;
+    c.shielding.predation = true;
+    c.shielding.parent_only = true;
+    c.shielding.gestation = true;
+    c.shielding.armor = true;
+    c.bonds.construct_window = 12;
+    c.bonds.birth_bond = 1.0;
+    c.bonds.colony_generations = 2;
+    c.energy.sun.season_period = 60;
+    c.energy.sun.season_band = 0.8;
+    c.individual.resume = true;
+    c.individual.step_budget = 48;
+    c.validate().unwrap();
+    for resident in [false, true] {
+        let a = check(c.clone(), 60, true, resident);
+        let st = &a.st;
+        let armoured = (0..st.n).filter(|&i| st.flags(i) & primordia_core::params::FL_ARMOR != 0).count();
+        let colony = (0..st.n).filter(|&i| st.flags(i) & primordia_core::params::COLONY_MASK != 0).count();
+        eprintln!("environment options, resident {resident}: {armoured} armoured, {colony} in colony generations");
+        assert!(armoured > 0);
     }
 }

@@ -218,6 +218,10 @@ pub fn mnemonic(b: u8) -> String {
         RAND => "RAND",
         SLEEP => "SLEEP",
         HALT => "HALT",
+        // IN / OUT (tasks.enabled) and HARDEN (shielding.armor); fillers otherwise
+        0x7D => return "IN".into(),
+        0x7E => return "OUT".into(),
+        0x7F => return "HARDEN".into(),
         0x70..=0x7F => return format!("FILL{:X}", b & 0xF),
         0x80..=0xBF => return format!("JMP +{}", 2 + (b & 0x3F) as u32),
         _ => return format!("JMP -{}", 1 + (b & 0x3F) as u32),

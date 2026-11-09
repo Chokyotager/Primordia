@@ -49,7 +49,7 @@ The current long-running experiment is a 501² world with day and night, seeded 
 ancestor that turns, allocates a child of its own length and copies itself:
 
 ```
-./target/release/primordia run runs/live-m21.toml --events runs/seed-m17.jsonl --autorun --web 0.0.0.0:8765
+./target/release/primordia run runs/live-m22.toml --events runs/seed-m22.jsonl --autorun --web 0.0.0.0:8765
 ```
 
 It adds moonlight, a 10-day lifespan, longer sleeps, sleepers that absorb no light and pay half
@@ -61,7 +61,9 @@ construction, and make cells that just reproduced absorb less, so that absorbers
 M18 also makes genomes private (only a cell under construction can be written by others), cuts
 ambient damage tenfold and starts from an empty world; M19 lets cells eat established neighbours whole; M20 lets only a parent build its child, keeps
 children dormant until built and cuts ambient damage tenfold again; M21 bonds every child to its parent
-and cuts ambient damage tenfold once more. `primordia analyze <snapshot>` reports
+and cuts ambient damage tenfold once more. M22 rewards work: little passive absorption, energy for
+computing logic functions (`IN`/`OUT`), armour against predators (`HARDEN`), colonies that release
+propagules, and a band of light that crosses the world each season. `primordia analyze <snapshot>` reports
 high-order entropy, unique tapes, related neighbours, tape fill and bodies for a saved state
 (see [DESIGN.md](DESIGN.md#rules-added-beyond-the-spec)). The question is whether cells and bodies learn to
 survive the night and divide their labour.

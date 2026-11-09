@@ -1,0 +1,141 @@
+# Live world M22: M21 with an environment that rewards doing more (A-E):
+# - A. energy from work: energy.absorb_alpha 0.0005 (M21: 0.05). Light still
+#   fills each site's free-energy field, but passive absorption takes ~20% of
+#   it instead of ~95%; the rest is left for tasks and catalysis.
+# - B. a band of extra light (energy.sun.season_band 0.8) crosses the world
+#   once per season (season_period 40,000 epochs, 20 days).
+# - C. arms race: shielding.armor; HARDEN (0x7F, cost 20) arms a cell, and a
+#   whole-cell attack only strips the armour.
+# - D. colony life cycle: bonds.colony_generations 2 (children stay bonded
+#   for two generations, then the next is born free and founds a colony);
+#   shielding.light_cover 0 (bonded neighbours no longer shade a cell).
+# - E. computation: [tasks] IN (0x7D) / OUT (0x7E); a logic function of the
+#   last two inputs (NOT; AND, ADD, SUB; OR, NAND; XOR, NOR) earns
+#   reward x 2^(level-1) new energy (booked like catalysis).
+# Tuned in 201^2 competitions (half plain ancestors, half ancestors with an
+# IN IN SUB OUT stub): rewards drawn from the site field, or paid in extra
+# steps, lost to the plain copier; new energy at reward 128 won (50/50 ->
+# 56/44 by day 10). Seeded the same way: --events runs/seed-m22.jsonl
+preset = "primordia-2d-sun"
+seed = 2
+epochs = 1000000000
+
+[world]
+size = [501, 501]
+init_occupancy = 0.0  # no random soup: under privacy it could not be overwritten
+
+[individual]
+l_max = 256
+step_budget = 128  # with resume a longer copy continues next epoch (day-3 speed: 1024 9 ep/s, 256 21, 128 ~24)
+starve_after = 800
+max_age = 20000  # 10 days on average
+max_age_spread = 0.25  # each cell lives 7.5-12.5 days, fixed at birth
+sleep_scale = 4  # PUSH31 SLEEP = 124 epochs
+sleep_shield = false
+sleep_absorb = 0.0
+sleep_upkeep = 0.5
+pair_order = "self_first"
+random_initial_facing = false
+resume = true
+
+[energy]
+share_beta = 0.125
+absorb_alpha = 0.0005
+copy_rest = 100
+copy_absorb = 0.2
+
+[energy.sun]
+season_period = 40000
+season_band = 0.8
+i0 = 150
+moon = 0.04
+
+[energy.upkeep]
+base = 3.5
+per_byte = 0.06
+
+[energy.vents]
+enabled = true
+count = 6
+rate = 200000  # 500x the default; heat stays 400
+lifetime = 200000  # 100 days
+spawn_rate = 4e-5  # with the longer lifetime, keeps ~8 vents
+stagger = true  # founding vents start at random ages
+floor_only = false
+drift = 0.01
+
+[shielding]
+s_bond = 0.4
+private = true
+predation = true
+parent_only = true
+gestation = true
+armor = true
+light_cover = 0.0
+
+[bonds]
+mutual = true
+birth_bond = 1.0
+colony_generations = 2
+kin_only = true  # like-with-like adhesion
+protect = true
+construct_window = 256
+
+[mutation]
+background = 1e-7
+radiation = 1e-7
+hand_flip = 1e-8
+
+[chemistry]
+init = [400, 400, 200, 0]  # X1, X2, X3, X4 per hand: 10x the default store
+n_cat = 16  # events per CAT at full folding (4 by default)
+
+[[chemistry.reactions]]
+r = ["X1", "X2"]
+p = ["X3"]
+energy = 12
+catalyzable = true
+kind = "mass"
+rate = 1e-6
+activation = 0.5
+
+[[chemistry.reactions]]  # light recharges the store: 10x the default
+r = ["X3"]
+p = ["X1", "X2"]
+energy = 0
+catalyzable = false
+kind = "photolysis"
+rate = 2e-2
+activation = 0.0
+
+[[chemistry.reactions]]
+r = ["X4"]
+p = ["X3"]
+energy = 20
+catalyzable = true
+kind = "mass"
+rate = 1e-5
+activation = 0.5
+
+[[chemistry.reactions]]
+r = ["X3"]
+p = ["X1", "X2"]
+energy = -12
+catalyzable = false
+kind = "mass"
+rate = 1e-4
+activation = 0.6
+
+[decay]
+rate = 5e-8
+
+[telemetry]
+lineage_every = 100  # birth log: one birth in 100 (all births: ~70 GB/day at 501^2)
+snapshot_every = 11000  # alternates midday / dawn
+
+[costs]
+"0x7F" = 20  # HARDEN
+
+[tasks]
+enabled = true
+reward = 128  # SUB (level 2) earns 256 new energy per slice, XOR/NOR 1024

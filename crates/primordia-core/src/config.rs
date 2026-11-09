@@ -26,6 +26,30 @@ pub struct Config {
     pub decay: DecayCfg,
     pub telemetry: TelemetryCfg,
     pub gpu: GpuCfg,
+    #[serde(skip_serializing_if = "TaskCfg::is_off")]
+    pub tasks: TaskCfg,
+}
+
+/// Computation tasks (Avida-style): IN (0x7D) pushes an 8-bit input, OUT
+/// (0x7E) pops a value; a correct logic function of the last two inputs
+/// (NOT; AND, ADD, SUB; OR, NAND; XOR, NOR) earns reward x 2^(level-1) new
+/// energy (booked like catalysis, so the ledger balances), each task once per
+/// slice. Drawing it from the site's field instead made tasks zero-sum with
+/// passive absorption, and selection ran against them.
+/// IN/OUT are fillers when this is off.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TaskCfg {
+    pub enabled: bool,
+    pub reward: u32,
+    /// Extra steps for the current slice per task, x 2^(level-1) like the
+    /// energy reward (Avida's merit: computation buys execution time).
+    pub steps: u32,
+}
+impl TaskCfg {
+    fn is_off(&self) -> bool {
+        *self == TaskCfg::default()
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -128,6 +152,11 @@ pub struct SunCfg {
     pub day_period: u64,
     pub season_period: u64,
     pub season_amplitude: f64,
+    /// Travelling light band: row y gets 1 + season_band * cos(2 pi (y/ny -
+    /// epoch/season_period)), so the bright region crosses the world once per
+    /// season (2D and 3D; needs season_period > 0). 0 = uniform.
+    #[serde(skip_serializing_if = "is_zero_f64")]
+    pub season_band: f64,
     /// Heat (0.01 K) per unit of light per epoch.
     pub heat: f64,
     /// Moonlight: the day/night cycle never falls below this fraction of
@@ -349,6 +378,10 @@ pub struct ShieldCfg {
     /// and copy, its incomplete program. It still absorbs and pays upkeep.
     #[serde(skip_serializing_if = "is_false")]
     pub gestation: bool,
+    /// HARDEN (0x7F, otherwise a filler) arms the executing cell: an attack
+    /// that would eat it whole (shielding.predation) only strips the armour.
+    #[serde(skip_serializing_if = "is_false")]
+    pub armor: bool,
 }
 
 // Options added after configuration hashes were recorded are omitted from the
@@ -388,6 +421,11 @@ pub struct BondCfg {
     pub protect: bool,
     #[serde(skip_serializing_if = "is_default_window")]
     pub construct_window: u32,
+    /// Colony life cycle (1..=3; 0 = off): a birth bond joins a child to its
+    /// parent only within this many generations of the colony's founder; the
+    /// next child is born free and founds a colony of its own (a propagule).
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    pub colony_generations: u32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -475,6 +513,7 @@ impl Default for Config {
             decay: DecayCfg::default(),
             telemetry: TelemetryCfg::default(),
             gpu: GpuCfg { exec: true },
+            tasks: TaskCfg::default(),
         }
     }
 }
@@ -528,6 +567,7 @@ impl Default for SunCfg {
             day_period: 2000,
             season_period: 0,
             season_amplitude: 0.0,
+            season_band: 0.0,
             heat: 0.02,
             moon: 0.0,
         }
@@ -634,12 +674,12 @@ impl Default for ChiralCfg {
 }
 impl Default for ShieldCfg {
     fn default() -> Self {
-        ShieldCfg { enabled: true, s_bond: 0.25, s_occupied: 0.10, w_occupied: 0.5, granularity: Granularity::Slice, light_cover: 1.0, private: false, predation: false, parent_only: false, gestation: false }
+        ShieldCfg { enabled: true, s_bond: 0.25, s_occupied: 0.10, w_occupied: 0.5, granularity: Granularity::Slice, light_cover: 1.0, private: false, predation: false, parent_only: false, gestation: false, armor: false }
     }
 }
 impl Default for BondCfg {
     fn default() -> Self {
-        BondCfg { enabled: true, gamma: 4.0, break_rate: 1e-4, break_activation: 0.5, max_body_move: 4096, vote_threshold: 0.5, mutual: false, birth_bond: 0.0, kin_only: false, protect: false, construct_window: 256 }
+        BondCfg { enabled: true, gamma: 4.0, break_rate: 1e-4, break_activation: 0.5, max_body_move: 4096, vote_threshold: 0.5, mutual: false, birth_bond: 0.0, kin_only: false, protect: false, construct_window: 256, colony_generations: 0 }
     }
 }
 impl Default for CopyErr {
@@ -957,6 +997,10 @@ impl Config {
         ensure!(self.energy.sense_energy_scale > 0 && self.energy.sense_free_scale > 0, "sense scales must be positive");
         ensure!(self.temperature.t_ref.is_finite() && self.temperature.t_ref > 0.0, "temperature.t_ref must be positive");
         ensure!((0.0..1.0).contains(&self.individual.max_age_spread), "individual.max_age_spread must be in 0..1");
+        ensure!((0.0..=1.0).contains(&self.energy.sun.season_band), "energy.sun.season_band must be in 0..=1");
+        ensure!(self.bonds.colony_generations <= 3, "bonds.colony_generations must be 0..=3");
+        ensure!(self.tasks.reward <= 1 << 20, "tasks.reward must be at most 2^20");
+        ensure!(self.tasks.steps <= 1 << 12, "tasks.steps must be at most 4096");
         ensure!(self.bonds.gamma.is_finite() && (0.0..=1000.0).contains(&self.bonds.gamma), "bonds.gamma must be in 0..=1000");
         let w = &self.world;
         ensure!(w.dims <= 3, "dims must be 0..=3");

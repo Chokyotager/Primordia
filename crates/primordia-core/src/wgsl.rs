@@ -48,6 +48,9 @@ pub mod pi {
     pub const CONSTRUCT_WINDOW: usize = 37;
     pub const COPY_REST: usize = 38;
     pub const DEAD_AFTER: usize = 39;
+    pub const TASK_REWARD: usize = 40;
+    pub const COLONY_GENS: usize = 41;
+    pub const TASK_STEPS: usize = 42;
     pub const COSTS: usize = 64;
     pub const PWRITE: usize = 320;
     pub const CAT: usize = 384;
@@ -78,6 +81,8 @@ pub mod flag {
     pub const PREDATION: u32 = 262144;
     pub const PARENT_ONLY: u32 = 524288;
     pub const GESTATION: u32 = 1048576;
+    pub const TASKS: u32 = 1 << 21;
+    pub const ARMOR: u32 = 1 << 22;
 }
 
 /// Static (per-config) part of the parameter buffer. EPOCH, MIRRORED, COLOR
@@ -118,6 +123,8 @@ pub fn param_words(p: &Params) -> Vec<u32> {
         (p.predation, flag::PREDATION),
         (p.parent_only, flag::PARENT_ONLY),
         (p.gestation, flag::GESTATION),
+        (p.tasks_on, flag::TASKS),
+        (p.armor, flag::ARMOR),
     ] {
         if on {
             f |= b;
@@ -143,6 +150,9 @@ pub fn param_words(p: &Params) -> Vec<u32> {
     w[pi::CONSTRUCT_WINDOW] = p.construct_window;
     w[pi::COPY_REST] = p.copy_rest;
     w[pi::DEAD_AFTER] = p.dead_after;
+    w[pi::TASK_REWARD] = p.task_reward;
+    w[pi::COLONY_GENS] = p.colony_gens;
+    w[pi::TASK_STEPS] = p.task_steps;
     w[pi::SIG_EMIT] = p.sig_emit;
     let ncat = p.cat.len().min(pi::MAX_CAT);
     w[pi::NCAT] = if p.chem_on { ncat as u32 } else { 0 };
@@ -207,6 +217,9 @@ pub fn constants() -> String {
         ("FL_NEWBORN", FL_NEWBORN),
         ("FL_SLEEPING", FL_SLEEPING),
         ("FL_CTX", FL_CTX),
+        ("FL_ARMOR", FL_ARMOR),
+        ("COLONY_SHIFT", COLONY_SHIFT),
+        ("COLONY_MASK", COLONY_MASK),
         ("ORIENT_SHIFT", ORIENT_SHIFT),
         ("ORIENT_MASK", ORIENT_MASK),
         ("BOND_SHIFT", BOND_SHIFT),
@@ -259,6 +272,9 @@ pub fn constants() -> String {
         ("P_CONSTRUCT_WINDOW", pi::CONSTRUCT_WINDOW),
         ("P_COPY_REST", pi::COPY_REST),
         ("P_DEAD_AFTER", pi::DEAD_AFTER),
+        ("P_TASK_REWARD", pi::TASK_REWARD),
+        ("P_COLONY_GENS", pi::COLONY_GENS),
+        ("P_TASK_STEPS", pi::TASK_STEPS),
         ("P_COSTS", pi::COSTS),
         ("P_PWRITE", pi::PWRITE),
         ("P_CAT", pi::CAT),
@@ -288,6 +304,8 @@ pub fn constants() -> String {
         ("F_PREDATION", flag::PREDATION),
         ("F_PARENT_ONLY", flag::PARENT_ONLY),
         ("F_GESTATION", flag::GESTATION),
+        ("F_TASKS", flag::TASKS),
+        ("F_ARMOR", flag::ARMOR),
     ] {
         s += &format!("const {n}: u32 = {v}u;\n");
     }

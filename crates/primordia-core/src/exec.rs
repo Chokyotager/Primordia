@@ -70,7 +70,36 @@ struct Cpu<'a> {
     home: usize,
     /// individual.resume: IP to continue from next slice; None = start afresh.
     save: Option<i32>,
+    /// tasks: inputs read this slice, the last two inputs, tasks rewarded.
+    io_n: u32,
+    io_a: i32,
+    io_b: i32,
+    tasks_done: u32,
+    /// tasks.steps earned this slice.
+    bonus: u32,
 }
+
+/// tasks: (level, matches) of each task for output `x` and inputs `a`, `b`
+/// (8-bit; b is the latest input). Shared with exec.wgsl.
+pub fn task_matches(x: i32, a: i32, b: i32, n: u32) -> u32 {
+    let (x, a, b) = (x & 0xFF, a & 0xFF, b & 0xFF);
+    let mut m = 0;
+    if n >= 1 && x == !b & 0xFF {
+        m |= 1; // NOT
+    }
+    if n >= 2 && x != a && x != b {
+        let t = [a & b, (a + b) & 0xFF, (a - b) & 0xFF, (b - a) & 0xFF, a | b, !(a & b) & 0xFF, a ^ b, !(a | b) & 0xFF];
+        let bit = [2, 4, 8, 8, 16, 32, 64, 128];
+        for k in 0..8 {
+            if x == t[k] {
+                m |= bit[k];
+            }
+        }
+    }
+    m
+}
+/// tasks: reward level of each task bit (NOT 1; AND, ADD, SUB 2; OR, NAND 3; XOR, NOR 4).
+pub const TASK_LEVEL: [u32; 8] = [1, 2, 2, 2, 3, 3, 4, 4];
 
 enum Flow {
     Next(i32),
@@ -634,7 +663,10 @@ impl<'a> Cpu<'a> {
                     // shielding.predation: an established (private) cell is
                     // eaten whole or not at all; it dies at the end of the epoch
                     let len = st.len(pc);
-                    if len > 0 && n >= len && self.shield_ok(st, pc, true) {
+                    if p.armor && len > 0 && n >= len && st.flags(pc) & FL_ARMOR != 0 && self.shield_ok(st, pc, true) {
+                        // shielding.armor: the attack only strips the armour
+                        st.hdr[pc * HDR + H_FLAGS] &= !FL_ARMOR;
+                    } else if len > 0 && n >= len && self.shield_ok(st, pc, true) {
                         for o in 0..len {
                             let byte = st.tapes[pc * st.lmax + o];
                             if byte != 0 {
@@ -916,6 +948,30 @@ impl<'a> Cpu<'a> {
                 }
             }
             op::HALT => return Flow::End,
+            0x7D if p.tasks_on => {
+                // IN: an 8-bit input, keyed by cell, epoch and input count
+                let v = (self.rng.u32(self.canon, 1, self.io_n) & 0xFF) as i32;
+                self.io_n += 1;
+                self.io_a = self.io_b;
+                self.io_b = v;
+                push!(v);
+            }
+            0x7E if p.tasks_on => {
+                // OUT: a correct task earns new energy (booked like catalysis,
+                // through the site's reaction counter, so the ledger balances)
+                let x = pop!();
+                let m = task_matches(x, self.io_a, self.io_b, self.io_n) & !self.tasks_done;
+                for k in 0..8 {
+                    if m & (1 << k) != 0 {
+                        self.tasks_done |= 1 << k;
+                        let gain = p.task_reward << (TASK_LEVEL[k] - 1);
+                        st.hdr[me * HDR + H_E] = st.hdr[me * HDR + H_E].wrapping_add(gain);
+                        st.site[me * SITE + S_RXN] = st.site[me * SITE + S_RXN].wrapping_add(gain);
+                        self.bonus += p.task_steps << (TASK_LEVEL[k] - 1);
+                    }
+                }
+            }
+            0x7F if p.armor => st.hdr[me * HDR + H_FLAGS] |= FL_ARMOR,
             0x70..=0x7F => {}
             0x80..=0xBF => next = 2 + (b & 0x3F) as i32,
             _ => next = -1 - (b & 0x3F) as i32,
@@ -966,8 +1022,17 @@ impl<'a> Cpu<'a> {
         if p.birth_bond_q32 == 0 || p.geom.dims == 0 || self.rnd() >= p.birth_bond_q32 {
             return;
         }
+        // bonds.colony_generations: past the colony's last generation the
+        // child is born free (a propagule; its colony generation stays 0)
+        let colony_gen = (st.flags(self.me) & COLONY_MASK) >> COLONY_SHIFT;
+        if p.colony_gens > 0 && colony_gen >= p.colony_gens {
+            return;
+        }
         st.hdr[self.me * HDR + H_FLAGS] |= 1 << (BOND_SHIFT + d);
         st.hdr[t * HDR + H_FLAGS] |= 1 << (BOND_SHIFT + opposite(d));
+        if p.colony_gens > 0 {
+            st.hdr[t * HDR + H_FLAGS] = (st.hdr[t * HDR + H_FLAGS] & !COLONY_MASK) | (colony_gen + 1) << COLONY_SHIFT;
+        }
     }
 }
 
@@ -1009,6 +1074,11 @@ pub fn exec_slice(st: &mut State, p: &Params, snap: &[u32], c: usize, fixed_part
         shield: [0; 7],
         home: c,
         save: None,
+        io_n: 0,
+        io_a: 0,
+        io_b: 0,
+        tasks_done: 0,
+        bonus: 0,
     };
     let dims = p.geom.dims;
     if dims >= 1 && p.random_facing {
@@ -1044,7 +1114,7 @@ pub fn exec_slice(st: &mut State, p: &Params, snap: &[u32], c: usize, fixed_part
     }
     let mut steps = 0;
     let mut ended = false;
-    while steps < p.budget {
+    while steps < p.budget + cpu.bonus {
         steps += 1;
         match cpu.step(st, epoch, &mut trace) {
             Flow::Next(d) => cpu.ip += d,

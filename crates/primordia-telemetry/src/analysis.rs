@@ -113,7 +113,7 @@ pub fn conserved_information(st: &State) -> (f64, f64, usize) {
 /// each count once, L/D twins count once, and NOP and fillers not at all.
 fn op_kind(b: u8) -> Option<u8> {
     match b {
-        0x00 | 0x36..=0x3F | 0x70..=0x7F => None,
+        0x00 | 0x36..=0x3F | 0x70..=0x7C => None,
         0x20..=0x35 => Some(b & !1),
         0x40..=0x5F => Some(0x40),
         0x80..=0xBF => Some(0x80),
@@ -127,6 +127,59 @@ fn op_kind(b: u8) -> Option<u8> {
 /// copy of itself as partner, and count the distinct instruction kinds it
 /// executes and how many of them are behaviour instructions (`TRACKED_OPS`
 /// other than CPY and SKIPZ). Returns the two means.
+/// What sampled programs actually run, one generous sandbox slice each:
+/// mean number of distinct own-tape instructions executed (padding and dead
+/// code do not count), and the share of programs that execute IN and OUT,
+/// HARDEN, DIGEST, CAT, and a conditional (SKIPZ / SKIPNZ / JNZ).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ExecProfile {
+    pub size: f64,
+    pub io: f64,
+    pub harden: f64,
+    pub digest: f64,
+    pub cat: f64,
+    pub conditional: f64,
+}
+pub fn executed_profile(cfg: &Config, st: &State, samples: usize) -> ExecProfile {
+    let occ: Vec<usize> = (0..st.n).filter(|&c| st.occupied(c) && st.len(c) > 0).collect();
+    if occ.is_empty() {
+        return ExecProfile::default();
+    }
+    let p = sandbox_params(cfg, cfg.individual.l_max as usize);
+    let picks: Vec<usize> = spread(&occ, samples);
+    let r: Vec<[f64; 6]> = picks
+        .par_iter()
+        .map(|&c| {
+            let g = st.tape(c);
+            let mut sb = State::empty(&p);
+            let l = sb.lmax;
+            let n = g.len().min(l);
+            sb.tapes[..n].copy_from_slice(&g[..n]);
+            sb.tapes[l..l + n].copy_from_slice(&g[..n]);
+            for k in 0..2 {
+                sb.hdr[k * HDR + H_LEN] = n as u32;
+                sb.hdr[k * HDR + H_FLAGS] = FL_OCC;
+            }
+            let snap = flag_snapshot(&sb);
+            let mut tr = vec![];
+            exec_slice(&mut sb, &p, &snap, 0, Some(1), Some(&mut tr));
+            let mut ips = vec![false; n];
+            let mut ops = [false; 256];
+            for s in &tr {
+                if (s.ip as usize) < n {
+                    ips[s.ip as usize] = true;
+                }
+                ops[s.op as usize] = true;
+            }
+            let f = |b: bool| if b { 1.0 } else { 0.0 };
+            [ips.iter().filter(|&&x| x).count() as f64, f(ops[0x7D] && ops[0x7E]), f(ops[0x7F]), f(ops[0x69]), f(ops[0x2C] || ops[0x2D]), f(ops[0x0C] || ops[0x0D] || ops[0x0F])]
+        })
+        .collect();
+    let k = r.len() as f64;
+    let m = |i: usize| r.iter().map(|x| x[i]).sum::<f64>() / k;
+    ExecProfile { size: m(0), io: m(1), harden: m(2), digest: m(3), cat: m(4), conditional: m(5) }
+}
+
 pub fn executed_repertoire(cfg: &Config, st: &State, samples: usize, tracked: &[u8]) -> (f64, f64) {
     let occ: Vec<usize> = (0..st.n).filter(|&c| st.occupied(c) && st.len(c) > 0).collect();
     if occ.is_empty() {
@@ -189,6 +242,9 @@ fn sandbox_params(cfg: &Config, len: usize) -> Params {
     // length, so one slice at the world's budget missed long replicators.
     c.individual.step_budget = cfg.individual.step_budget.max(16 * c.individual.l_max);
     c.individual.pair_order = PairOrder::SelfFirst;
+    // IN/OUT and HARDEN act as in the world (fillers when off there)
+    c.tasks = cfg.tasks.clone();
+    c.shielding.armor = cfg.shielding.armor;
     c.mutation.enabled = false;
     c.seed = 1;
     Params::new(&c)

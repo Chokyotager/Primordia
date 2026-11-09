@@ -184,6 +184,32 @@ var<private> dirty: bool;
 var<private> home: u32;
 var<private> save_ip: i32;
 var<private> saved: bool;
+// tasks: inputs read this slice, the last two inputs, tasks rewarded
+var<private> io_n: u32;
+var<private> io_a: i32;
+var<private> io_b: i32;
+var<private> tasks_done: u32;
+var<private> bonus: u32;
+
+// tasks: matching task bits for output x (exec::task_matches)
+fn task_matches(x_in: i32, a_in: i32, b_in: i32, n: u32) -> u32 {
+    let x = x_in & 0xFF;
+    let a = a_in & 0xFF;
+    let b = b_in & 0xFF;
+    var m = 0u;
+    if (n >= 1u && x == (~b & 0xFF)) { m = m | 1u; }
+    if (n >= 2u && x != a && x != b) {
+        if (x == (a & b)) { m = m | 2u; }
+        if (x == ((a + b) & 0xFF)) { m = m | 4u; }
+        if (x == ((a - b) & 0xFF) || x == ((b - a) & 0xFF)) { m = m | 8u; }
+        if (x == (a | b)) { m = m | 16u; }
+        if (x == (~(a & b) & 0xFF)) { m = m | 32u; }
+        if (x == (a ^ b)) { m = m | 64u; }
+        if (x == (~(a | b) & 0xFF)) { m = m | 128u; }
+    }
+    return m;
+}
+const TASK_LEVEL: array<u32, 8> = array<u32, 8>(1u, 2u, 2u, 2u, 3u, 3u, 4u, 4u);
 
 fn rnd() -> u32 {
     let r = philox(P[P_SEED_LO], P[P_SEED_HI], vec4<u32>(canon_id, g_epoch, (PHASE_EXEC << 24u), draw)).x;
@@ -654,7 +680,10 @@ fn step() -> i32 {
             // whole or not at all; it dies at the end of the epoch
             let pc = pt;
             let len = tlen(pc);
-            if (len > 0u && n >= len && shield_ok(pc, true)) {
+            if (has(F_ARMOR) && len > 0u && n >= len && (flags(pc) & FL_ARMOR) != 0u && shield_ok(pc, true)) {
+                // shielding.armor: the attack only strips the armour
+                hdr[pc * HDR + H_FLAGS] = hdr[pc * HDR + H_FLAGS] & ~FL_ARMOR;
+            } else if (len > 0u && n >= len && shield_ok(pc, true)) {
                 for (var o = 0u; o < len; o = o + 1u) {
                     let byte = tb(pc, o);
                     if (byte != 0u) {
@@ -980,7 +1009,35 @@ fn step() -> i32 {
     case 0x6Fu: {
         return END;
     }
-    case 0x70u, 0x71u, 0x72u, 0x73u, 0x74u, 0x75u, 0x76u, 0x77u, 0x78u, 0x79u, 0x7Au, 0x7Bu, 0x7Cu, 0x7Du, 0x7Eu, 0x7Fu: {
+    case 0x7Du: { // IN (tasks), else a filler
+        if (has(F_TASKS)) {
+            let v = i32(philox(P[P_SEED_LO], P[P_SEED_HI], vec4<u32>(canon_id, g_epoch, (PHASE_EXEC << 24u) | 1u, io_n)).x & 0xFFu);
+            io_n = io_n + 1u;
+            io_a = io_b;
+            io_b = v;
+            if (!push(v)) { return END; }
+        }
+    }
+    case 0x7Eu: { // OUT (tasks), else a filler
+        if (has(F_TASKS)) {
+            let x = pop(); if (g_err) { return END; }
+            let m = task_matches(x, io_a, io_b, io_n) & ~tasks_done;
+            for (var k = 0u; k < 8u; k = k + 1u) {
+                if ((m & (1u << k)) != 0u) {
+                    tasks_done = tasks_done | (1u << k);
+                    // new energy, booked like catalysis through the site's reaction counter
+                    let gain = P[P_TASK_REWARD] << (TASK_LEVEL[k] - 1u);
+                    g_e = g_e + gain;
+                    site[me * SITE + S_RXN] = site[me * SITE + S_RXN] + gain;
+                    bonus = bonus + (P[P_TASK_STEPS] << (TASK_LEVEL[k] - 1u));
+                }
+            }
+        }
+    }
+    case 0x7Fu: { // HARDEN (shielding.armor), else a filler
+        if (has(F_ARMOR)) { hdr[me * HDR + H_FLAGS] = hdr[me * HDR + H_FLAGS] | FL_ARMOR; }
+    }
+    case 0x70u, 0x71u, 0x72u, 0x73u, 0x74u, 0x75u, 0x76u, 0x77u, 0x78u, 0x79u, 0x7Au, 0x7Bu, 0x7Cu: {
     }
     case 0x80u, 0x81u, 0x82u, 0x83u, 0x84u, 0x85u, 0x86u, 0x87u, 0x88u, 0x89u, 0x8Au, 0x8Bu, 0x8Cu, 0x8Du, 0x8Eu, 0x8Fu, 0x90u, 0x91u, 0x92u, 0x93u, 0x94u, 0x95u, 0x96u, 0x97u, 0x98u, 0x99u, 0x9Au, 0x9Bu, 0x9Cu, 0x9Du, 0x9Eu, 0x9Fu, 0xA0u, 0xA1u, 0xA2u, 0xA3u, 0xA4u, 0xA5u, 0xA6u, 0xA7u, 0xA8u, 0xA9u, 0xAAu, 0xABu, 0xACu, 0xADu, 0xAEu, 0xAFu, 0xB0u, 0xB1u, 0xB2u, 0xB3u, 0xB4u, 0xB5u, 0xB6u, 0xB7u, 0xB8u, 0xB9u, 0xBAu, 0xBBu, 0xBCu, 0xBDu, 0xBEu, 0xBFu: {
         next = 2 + i32(b & 0x3Fu);
@@ -1048,8 +1105,14 @@ fn bond(d: u32, on: bool) {
 // bonds.birth_bond: the newborn at t (direction d) stays bonded to its parent
 fn birth_bond(t: u32, d: u32) {
     if (P[P_BIRTH_BOND] == 0u || g_dims == 0u || rnd() >= P[P_BIRTH_BOND]) { return; }
+    // bonds.colony_generations: past the colony's last generation the child is born free
+    let gen = (flags(me) & COLONY_MASK) >> COLONY_SHIFT;
+    if (P[P_COLONY_GENS] > 0u && gen >= P[P_COLONY_GENS]) { return; }
     hdr[me * HDR + H_FLAGS] = hdr[me * HDR + H_FLAGS] | (1u << (BOND_SHIFT + d));
     hdr[t * HDR + H_FLAGS] = hdr[t * HDR + H_FLAGS] | (1u << (BOND_SHIFT + (d ^ 1u)));
+    if (P[P_COLONY_GENS] > 0u) {
+        hdr[t * HDR + H_FLAGS] = (hdr[t * HDR + H_FLAGS] & ~COLONY_MASK) | ((gen + 1u) << COLONY_SHIFT);
+    }
 }
 
 fn exec_slice(c: u32, fp: u32) {
@@ -1074,6 +1137,11 @@ fn exec_slice(c: u32, fp: u32) {
     for (var i = 0u; i < 7u; i = i + 1u) { shield[i] = 0u; }
     home = c;
     saved = false;
+    io_n = 0u;
+    io_a = 0;
+    io_b = 0;
+    tasks_done = 0u;
+    bonus = 0u;
     save_ip = 0;
     if (g_dims >= 1u && has(F_RANDOM_FACING)) {
         let r = rnd();
@@ -1110,7 +1178,7 @@ fn exec_slice(c: u32, fp: u32) {
     let budget = P[P_BUDGET];
     g_e = H(c, H_E);
     loop {
-        if (steps >= budget) { break; }
+        if (steps >= budget + bonus) { break; }
         steps = steps + 1u;
         let d = step();
         if (d == END) { ended = true; break; }

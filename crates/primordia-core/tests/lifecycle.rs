@@ -246,7 +246,7 @@ fn reproduction_reduces_absorption_for_the_rest_period() {
 #[test]
 fn new_options_keep_old_hashes_and_snapshots_keep_contexts() {
     let base = Config::preset("primordia-2d-sun").unwrap().to_toml();
-    for key in ["resume", "protect", "construct_window", "copy_rest", "copy_absorb", "private", "max_age_spread", "predation", "parent_only", "gestation", "lineage_every"] {
+    for key in ["resume", "protect", "construct_window", "copy_rest", "copy_absorb", "private", "max_age_spread", "predation", "parent_only", "gestation", "lineage_every", "armor", "colony_generations", "season_band", "tasks"] {
         assert!(!base.contains(key), "{key} serialized at its default");
     }
     let mut c = cfg();
@@ -567,4 +567,112 @@ fn newborns_do_not_run_during_gestation() {
         exec::exec_slice(&mut s, &p, &flags, a, None, Some(&mut tr));
         assert_eq!(!tr.is_empty(), runs, "parent {parent} age {age}");
     }
+}
+
+// ---- environment options for M22: tasks, armour, colony life cycle, light band
+
+#[test]
+fn task_functions_match_their_definitions() {
+    use primordia_core::exec::task_matches;
+    let (a, b) = (0b1100_1010, 0b1010_0110);
+    for (x, want) in [
+        (!b & 0xFF, 1), (a & b, 2), ((a + b) & 0xFF, 4), ((a - b) & 0xFF, 8), ((b - a) & 0xFF, 8),
+        (a | b, 16), (!(a & b) & 0xFF, 32), (a ^ b, 64), (!(a | b) & 0xFF, 128),
+    ] {
+        assert_eq!(task_matches(x, a, b, 2) & want, want, "x {x:#x}");
+    }
+    assert_eq!(task_matches(a, a, b, 2), 0, "echoing an input earns nothing");
+    assert_eq!(task_matches(a & b, a, b, 1), 0, "binary tasks need two inputs");
+}
+
+/// tasks: IN IN AND OUT earns new energy, booked in the site's reaction
+/// counter, once per slice; with tasks off the opcodes are fillers.
+#[test]
+fn computing_a_task_earns_energy() {
+    for on in [true, false] {
+        let mut c = cfg();
+        c.tasks.enabled = on;
+        c.tasks.reward = 10;
+        let p = Params::new(&c);
+        let mut s = State::init(&c, &p);
+        let a = p.geom.index([4, 4, 0]);
+        // IN IN AND OUT IN IN AND OUT HALT: AND twice, rewarded once
+        put(&mut s, &p, a, &[0x7D, 0x7D, op::AND, 0x7E, 0x7D, 0x7D, op::AND, 0x7E, op::HALT], 9);
+        slice(&mut s, &p, a, 1000);
+        let earned = s.site[a * SITE + S_RXN];
+        if on {
+            // AND (level 2) pays 20; other tasks may match by chance, each at most once
+            assert!((20..=20 + 10 + 20 + 20).contains(&earned), "earned {earned}");
+            assert_eq!(s.h(a, H_E), 1000 - 8 + earned, "eight 1-energy steps, HALT free");
+        } else {
+            assert_eq!(earned, 0);
+        }
+    }
+}
+
+/// shielding.armor: HARDEN arms a cell; a whole-cell attack strips the armour,
+/// a second one eats it.
+#[test]
+fn armour_survives_one_attack() {
+    let mut c = cfg();
+    c.shielding.private = true;
+    c.shielding.predation = true;
+    c.shielding.armor = true;
+    let p = Params::new(&c);
+    let mut s = State::init(&c, &p);
+    s.epoch = 1000;
+    let a = p.geom.index([4, 4, 0]);
+    put(&mut s, &p, a, &[0x5F, op::DIGEST, op::HALT], 3);
+    let b = facing_cell(&s, &p, a);
+    put(&mut s, &p, b, &[0x7F, op::HALT, 0x20, 0x22], 4);
+    slice(&mut s, &p, b, 100);
+    assert!(s.flags(b) & FL_ARMOR != 0, "HARDEN arms the cell");
+    slice(&mut s, &p, a, 1000);
+    assert!(s.flags(b) & FL_ARMOR == 0 && nonzero(&s, b) == 4, "first attack strips the armour");
+    slice(&mut s, &p, a, 1000);
+    assert_eq!(nonzero(&s, b), 0, "second attack eats it");
+}
+
+/// bonds.colony_generations 1: the founder's child stays bonded, the child's
+/// own child is born free and founds a new colony.
+#[test]
+fn colonies_release_propagules() {
+    let mut c = cfg();
+    c.bonds.birth_bond = 1.0;
+    c.bonds.colony_generations = 1;
+    let p = Params::new(&c);
+    let mut s = State::init(&c, &p);
+    let a = p.geom.index([4, 4, 0]);
+    put(&mut s, &p, a, &[0x44, op::ALLOC, op::HALT], 3);
+    let b = facing_cell(&s, &p, a);
+    slice(&mut s, &p, a, 1000);
+    assert!(s.occupied(b) && s.bonds(a) != 0, "first generation bonded");
+    assert_eq!((s.flags(b) & COLONY_MASK) >> COLONY_SHIFT, 1);
+    put(&mut s, &p, b, &[0x44, op::ALLOC, op::HALT], 3);
+    *s.hm(b, H_FLAGS) |= 1 << COLONY_SHIFT | 1 << (BOND_SHIFT + 1);
+    let c2 = facing_cell(&s, &p, b);
+    slice(&mut s, &p, b, 1000);
+    assert!(s.occupied(c2), "grandchild born");
+    assert_eq!(s.bonds(c2), 0, "born free: a propagule");
+    assert_eq!(s.flags(c2) & COLONY_MASK, 0);
+}
+
+/// energy.sun.season_band: light varies across rows, the bright band moves
+/// with the season, and 0 leaves the rows unchanged.
+#[test]
+fn the_light_band_travels() {
+    let mut c = Config::preset("primordia-2d-sun").unwrap();
+    c.world.size = vec![30, 30];
+    c.energy.sun.gradient_y = 0.0;
+    c.energy.sun.day_period = 0;
+    c.energy.sun.season_period = 100;
+    let flat = phases::row_lights(&Params::new(&c), 0);
+    assert!(flat.iter().all(|&v| v == flat[0]));
+    c.energy.sun.season_band = 0.8;
+    let p = Params::new(&c);
+    let (r0, r25) = (phases::row_lights(&p, 0), phases::row_lights(&p, 25));
+    let peak = |r: &Vec<u32>| r.iter().enumerate().max_by_key(|x| x.1).unwrap().0;
+    assert_eq!(peak(&r0), 0);
+    assert!((peak(&r25) as i64 - 8).abs() <= 1, "a quarter season later the peak is a quarter of the way: {}", peak(&r25));
+    assert!(r0[15] < flat[0] / 4, "the far side is dim");
 }

@@ -81,7 +81,7 @@ pub fn row_lights(p: &Params, epoch: u64) -> Vec<u32> {
             if !p.sun_on {
                 return 0;
             }
-            let v = if g.dims < 2 || ny < 2 {
+            let mut v = if g.dims < 2 || ny < 2 {
                 base
             } else {
                 // 1 + g * (2y/(ny-1) - 1)
@@ -89,6 +89,12 @@ pub fn row_lights(p: &Params, epoch: u64) -> Vec<u32> {
                 let fac = 65536 + (p.sun_grad_q16 * num) / (ny as i64 - 1);
                 ((base as i64 * fac.max(0)) >> 16) as u64
             };
+            if p.season_band > 0.0 && g.dims >= 2 {
+                // travelling band: cos(2 pi (y/ny - epoch/season)) = sin(... + pi/2)
+                let ph = y as f64 / ny as f64 - (epoch % p.season_period) as f64 / p.season_period as f64;
+                let band = 1.0 + p.season_band * det_sin(TWO_PI * ph + TWO_PI / 4.0);
+                v = (v * to_q16(band.max(0.0)) as u64) >> 16;
+            }
             sat32(v)
         })
         .collect()

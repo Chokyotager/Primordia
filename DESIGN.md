@@ -169,6 +169,10 @@ by golden and parity tests. They came out of the long live runs, in this order:
 | `shielding.predation` | with `private`: `DIGEST` may eat an established cell, but only whole (n at least its tape length): the tape is erased, the eater gains its monomers and the cell dies at the end of the epoch; writes stay blocked and ordinary shielding and `bonds.protect` still apply | M18's full world of protected cells could only turn over through old age; killing (unlike overwriting) keeps genomes inherited or destroyed whole and lets a cell make room for its offspring |
 | `shielding.parent_only` | with `private`: a cell under construction is open only to its parent (the lineage it records as parent); others can at most eat it whole | under plain privacy every copier sprayed its genome, misaligned, into all young neighbours (M19: 99% unique tapes) |
 | `shielding.gestation` | a cell with a parent does not execute until its construction window is over (it still absorbs and pays upkeep) | a half-built child ran its partial program, `ALLOC` included, and multiplied incomplete genomes |
+| `[tasks]` `enabled`, `reward` | `IN` (0x7D) pushes an 8-bit input (keyed by cell, epoch and count); `OUT` (0x7E) pops a value, and a correct logic function of the last two inputs (NOT; AND, ADD, SUB; OR, NAND; XOR, NOR; echoing an input earns nothing) earns reward × 2^(level−1) new energy, booked like catalysis through the site's reaction counter so the ledger balances, each task once per slice; `tasks.steps` can also extend the slice. Fillers when off | Avida-style computation rewards, the best-documented route to open-ended growth in digital evolution |
+| `shielding.armor` | `HARDEN` (0x7F, cost via `[costs]`) arms the executing cell; an attack that would eat it whole only strips the armour. A filler when off | an arms race: M21 evolved a whole-cell predator, but prey had no defence |
+| `bonds.colony_generations` | a birth bond joins a child to its parent only within this many generations of the colony's founder (colony generation in flag bits 30–31); the next child is born free and founds a colony | a colony life cycle: colonies grow, then release propagules, so they can compete as units |
+| `energy.sun.season_band` | a band of extra light, 1 + band·cos(2π(y/ny − t/season_period)), crosses the world once per season | a changing environment that rewards sensing and moving |
 
 The last three are new in M17 and default off (`copy_rest` 0). Options added after configuration hashes
 were recorded are left out of the serialized configuration at their defaults, so older configurations and
@@ -291,7 +295,19 @@ design (HOE 2.9 → 2.1); then a predator evolved and spread to ~37% of cells:
 tape with `PLEN` (exactly what whole-cell predation requires), raises a child in the freed site, and runs
 catalysis inside its copy loop. The other dominant genomes are 8-byte copiers padded with `NOP`s (68% of
 all tape bytes were padding, so mean tape length overstates program size). With every birth logged,
-`lineage.parquet` grew ~70 GB/day; `telemetry.lineage_every` now thins it (live configs: 1 in 100). (Without NVIDIA's Vulkan driver, `wgpu` silently
+`lineage.parquet` grew ~70 GB/day; `telemetry.lineage_every` now thins it (live configs: 1 in 100).
+
+**M22: rewarding work (A–E).** `runs/live-m22.toml` adds all five environment changes (rows above):
+passive absorption cut to α = 0.0005 (cells keep ~20% of the light instead of ~95%), a travelling light
+band (season 20 days), armour, a two-generation colony life cycle with `light_cover` 0, and computation
+tasks. Tuning on 201² (`primordia analyze` now reports executed program size and which behaviours
+actually run): with the plain ancestor `IN`/`OUT` never appeared in 15 days; a neutral `IN IN NOP OUT`
+stub mutated to everything except the rewarded `SUB`. In head-to-head competitions (half plain, half
+`IN IN SUB OUT` ancestors) the task-doers lost when rewards came from the site's field (zero-sum with
+passive absorption: larger rewards did worse) or as extra steps, held ~40% with new energy at reward 32,
+and won with new energy at reward 128 (50/50 → 56/44 by day 10, ledger exact). M22 is seeded the same
+way (`runs/seed-m22.jsonl`), so the live world starts with that competition and harder tasks pay 2–4×
+more. (Without NVIDIA's Vulkan driver, `wgpu` silently
 falls back to llvmpipe, Mesa's CPU renderer: identical results, ~8 epochs/s. The run manifest's
 `gpu_adapter` shows which device ran.)
 

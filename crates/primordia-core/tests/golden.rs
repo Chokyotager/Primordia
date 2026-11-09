@@ -403,6 +403,12 @@ fn t7_twin_lifecycle_mechanisms() {
         cfg.shielding.predation = dims == 3;
         cfg.shielding.parent_only = dims == 3;
         cfg.shielding.gestation = dims == 3;
+        cfg.shielding.armor = dims == 3;
+        cfg.tasks.enabled = dims == 3;
+        cfg.tasks.reward = 8;
+        cfg.bonds.colony_generations = if dims == 3 { 2 } else { 0 };
+        cfg.energy.sun.season_period = 50;
+        cfg.energy.sun.season_band = 0.5;
         cfg.individual.max_age = 40;
         cfg.individual.max_age_spread = 0.5;
         cfg.bonds.protect = true;
