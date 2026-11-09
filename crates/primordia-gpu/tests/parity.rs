@@ -497,11 +497,13 @@ fn environment_options_match_cpu() {
     let mut c = cfg(2);
     c.tasks.enabled = true;
     c.tasks.reward = 8;
+    c.tasks.ladder = 4;
     c.shielding.private = true;
     c.shielding.predation = true;
     c.shielding.parent_only = true;
     c.shielding.gestation = true;
     c.shielding.armor = true;
+    c.shielding.armor_shared = true;
     c.bonds.construct_window = 12;
     c.bonds.birth_bond = 1.0;
     c.bonds.colony_generations = 2;

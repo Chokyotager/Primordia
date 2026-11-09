@@ -169,8 +169,10 @@ by golden and parity tests. They came out of the long live runs, in this order:
 | `shielding.predation` | with `private`: `DIGEST` may eat an established cell, but only whole (n at least its tape length): the tape is erased, the eater gains its monomers and the cell dies at the end of the epoch; writes stay blocked and ordinary shielding and `bonds.protect` still apply | M18's full world of protected cells could only turn over through old age; killing (unlike overwriting) keeps genomes inherited or destroyed whole and lets a cell make room for its offspring |
 | `shielding.parent_only` | with `private`: a cell under construction is open only to its parent (the lineage it records as parent); others can at most eat it whole | under plain privacy every copier sprayed its genome, misaligned, into all young neighbours (M19: 99% unique tapes) |
 | `shielding.gestation` | a cell with a parent does not execute until its construction window is over (it still absorbs and pays upkeep) | a half-built child ran its partial program, `ALLOC` included, and multiplied incomplete genomes |
-| `[tasks]` `enabled`, `reward` | `IN` (0x7D) pushes an 8-bit input (keyed by cell, epoch and count); `OUT` (0x7E) pops a value, and a correct logic function of the last two inputs (NOT; AND, ADD, SUB; OR, NAND; XOR, NOR; echoing an input earns nothing) earns reward × 2^(level−1) new energy, booked like catalysis through the site's reaction counter so the ledger balances, each task once per slice; `tasks.steps` can also extend the slice. Fillers when off | Avida-style computation rewards, the best-documented route to open-ended growth in digital evolution |
+| `[tasks]` `enabled`, `reward` | `IN` (0x7D) pushes a 16-bit input (keyed by cell, epoch and count); `OUT` (0x7E) pops a value, and a correct logic function of the last two inputs (NOT; AND, ADD, SUB; OR, NAND; XOR, NOR; echoing an input earns nothing) earns reward × 2^(level−1) new energy, booked like catalysis through the site's reaction counter so the ledger balances, each task once per slice; `tasks.steps` can also extend the slice. Fillers when off | Avida-style computation rewards, the best-documented route to open-ended growth in digital evolution |
 | `shielding.armor` | `HARDEN` (0x7F, cost via `[costs]`) arms the executing cell; an attack that would eat it whole only strips the armour. A filler when off | an arms race: M21 evolved a whole-cell predator, but prey had no defence |
+| `shielding.armor_shared` | with `armor`: a bonded cell cannot be eaten whole while any bonded neighbour is armoured (read from the sub-step's flag snapshot, so it stays race-free) | lets a colony's armoured members protect the rest, a reason to live in colonies and to divide labour |
+| `tasks.ladder` | task reward × ladder^(level−1) (default 2) | a steeper payoff for harder functions |
 | `bonds.colony_generations` | a birth bond joins a child to its parent only within this many generations of the colony's founder (colony generation in flag bits 30–31); the next child is born free and founds a colony | a colony life cycle: colonies grow, then release propagules, so they can compete as units |
 | `energy.sun.season_band` | a band of extra light, 1 + band·cos(2π(y/ny − t/season_period)), crosses the world once per season | a changing environment that rewards sensing and moving |
 
@@ -307,7 +309,21 @@ stub mutated to everything except the rewarded `SUB`. In head-to-head competitio
 passive absorption: larger rewards did worse) or as extra steps, held ~40% with new energy at reward 32,
 and won with new energy at reward 128 (50/50 → 56/44 by day 10, ledger exact). M22 is seeded the same
 way (`runs/seed-m22.jsonl`), so the live world starts with that competition and harder tasks pay 2–4×
-more. (Without NVIDIA's Vulkan driver, `wgpu` silently
+more.
+
+M22 ran 1.0M epochs (503 days). The task-doers held 30–60% for ~200 days while a mobile catalytic copier
+(`TUMBLE UNBOND UNBOND STEP LEN ALLOC LEN CPY H0+ H1+ DUP CAT JMP -6`) evolved; colonies peaked at 742
+cells (day 230). Then a predator that also catalyses (`FREE FREE TUMBLE UNBOND DIGEST LEN ALLOC ...
+CAT ...`, its bite sized by `FREE`) swept the world: computation went extinct by day 250. Armour then
+rose from 0.1% to 53% of programs within 80 days and predator and prey cycled for the next 250 days,
+with HOE swinging 1.4–2.4 and executed programs at 10–13 instructions. In 201² arenas seeded with M22's
+day-220 genomes, shared armour and larger rewards did not save computation; predation costing 8 per byte
+did (computation 55–88%, predators 1–20%, a 221-cell colony). Tasks were 8-bit, so a random output
+matched some task 3% of the time: with a steep ladder lineages of huge, mostly empty tapes bred by
+guessing; tasks are now 16-bit. No task beyond the seeded `SUB` evolved within 30 days: harder ones need
+several new instructions with no reward in between, and mutations flip single bits.
+`runs/live-m23.toml` is M22 with predation at 8 per byte, a ×4 ladder and shared armour; the live run
+continues M22's world from day 220 under these rules. (Without NVIDIA's Vulkan driver, `wgpu` silently
 falls back to llvmpipe, Mesa's CPU renderer: identical results, ~8 epochs/s. The run manifest's
 `gpu_adapter` shows which device ran.)
 

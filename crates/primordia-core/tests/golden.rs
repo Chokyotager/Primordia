@@ -404,6 +404,7 @@ fn t7_twin_lifecycle_mechanisms() {
         cfg.shielding.parent_only = dims == 3;
         cfg.shielding.gestation = dims == 3;
         cfg.shielding.armor = dims == 3;
+        cfg.shielding.armor_shared = dims == 3;
         cfg.tasks.enabled = dims == 3;
         cfg.tasks.reward = 8;
         cfg.bonds.colony_generations = if dims == 3 { 2 } else { 0 };

@@ -30,14 +30,14 @@ pub struct Config {
     pub tasks: TaskCfg,
 }
 
-/// Computation tasks (Avida-style): IN (0x7D) pushes an 8-bit input, OUT
+/// Computation tasks (Avida-style): IN (0x7D) pushes a 16-bit input, OUT
 /// (0x7E) pops a value; a correct logic function of the last two inputs
 /// (NOT; AND, ADD, SUB; OR, NAND; XOR, NOR) earns reward x 2^(level-1) new
 /// energy (booked like catalysis, so the ledger balances), each task once per
 /// slice. Drawing it from the site's field instead made tasks zero-sum with
 /// passive absorption, and selection ran against them.
 /// IN/OUT are fillers when this is off.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct TaskCfg {
     pub enabled: bool,
@@ -45,6 +45,16 @@ pub struct TaskCfg {
     /// Extra steps for the current slice per task, x 2^(level-1) like the
     /// energy reward (Avida's merit: computation buys execution time).
     pub steps: u32,
+    /// Reward multiplier per task level (energy reward x ladder^(level-1));
+    /// 2 = NOT 1x, AND/ADD/SUB 2x, OR/NAND 4x, XOR/NOR 8x.
+    #[serde(skip_serializing_if = "is_two_u32")]
+    pub ladder: u32,
+}
+fn is_two_u32(v: &u32) -> bool { *v == 2 }
+impl Default for TaskCfg {
+    fn default() -> Self {
+        TaskCfg { enabled: false, reward: 0, steps: 0, ladder: 2 }
+    }
 }
 impl TaskCfg {
     fn is_off(&self) -> bool {
@@ -382,6 +392,11 @@ pub struct ShieldCfg {
     /// that would eat it whole (shielding.predation) only strips the armour.
     #[serde(skip_serializing_if = "is_false")]
     pub armor: bool,
+    /// With `armor`: a bonded cell cannot be eaten whole while any of its
+    /// bonded neighbours is armoured (read from the sub-step's flag snapshot),
+    /// so a colony's armoured members protect the rest.
+    #[serde(skip_serializing_if = "is_false")]
+    pub armor_shared: bool,
 }
 
 // Options added after configuration hashes were recorded are omitted from the
@@ -674,7 +689,7 @@ impl Default for ChiralCfg {
 }
 impl Default for ShieldCfg {
     fn default() -> Self {
-        ShieldCfg { enabled: true, s_bond: 0.25, s_occupied: 0.10, w_occupied: 0.5, granularity: Granularity::Slice, light_cover: 1.0, private: false, predation: false, parent_only: false, gestation: false, armor: false }
+        ShieldCfg { enabled: true, s_bond: 0.25, s_occupied: 0.10, w_occupied: 0.5, granularity: Granularity::Slice, light_cover: 1.0, private: false, predation: false, parent_only: false, gestation: false, armor: false, armor_shared: false }
     }
 }
 impl Default for BondCfg {
@@ -1001,6 +1016,8 @@ impl Config {
         ensure!(self.bonds.colony_generations <= 3, "bonds.colony_generations must be 0..=3");
         ensure!(self.tasks.reward <= 1 << 20, "tasks.reward must be at most 2^20");
         ensure!(self.tasks.steps <= 1 << 12, "tasks.steps must be at most 4096");
+        ensure!((1..=8).contains(&self.tasks.ladder), "tasks.ladder must be 1..=8");
+        ensure!((self.tasks.reward as u64) * (self.tasks.ladder as u64).pow(3) <= 1 << 24, "tasks.reward x ladder^3 must be at most 2^24");
         ensure!(self.bonds.gamma.is_finite() && (0.0..=1000.0).contains(&self.bonds.gamma), "bonds.gamma must be in 0..=1000");
         let w = &self.world;
         ensure!(w.dims <= 3, "dims must be 0..=3");

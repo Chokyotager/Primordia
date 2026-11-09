@@ -193,19 +193,19 @@ var<private> bonus: u32;
 
 // tasks: matching task bits for output x (exec::task_matches)
 fn task_matches(x_in: i32, a_in: i32, b_in: i32, n: u32) -> u32 {
-    let x = x_in & 0xFF;
-    let a = a_in & 0xFF;
-    let b = b_in & 0xFF;
+    let x = x_in & 0xFFFF;
+    let a = a_in & 0xFFFF;
+    let b = b_in & 0xFFFF;
     var m = 0u;
-    if (n >= 1u && x == (~b & 0xFF)) { m = m | 1u; }
+    if (n >= 1u && x == (~b & 0xFFFF)) { m = m | 1u; }
     if (n >= 2u && x != a && x != b) {
         if (x == (a & b)) { m = m | 2u; }
-        if (x == ((a + b) & 0xFF)) { m = m | 4u; }
-        if (x == ((a - b) & 0xFF) || x == ((b - a) & 0xFF)) { m = m | 8u; }
+        if (x == ((a + b) & 0xFFFF)) { m = m | 4u; }
+        if (x == ((a - b) & 0xFFFF) || x == ((b - a) & 0xFFFF)) { m = m | 8u; }
         if (x == (a | b)) { m = m | 16u; }
-        if (x == (~(a & b) & 0xFF)) { m = m | 32u; }
+        if (x == (~(a & b) & 0xFFFF)) { m = m | 32u; }
         if (x == (a ^ b)) { m = m | 64u; }
-        if (x == (~(a | b) & 0xFF)) { m = m | 128u; }
+        if (x == (~(a | b) & 0xFFFF)) { m = m | 128u; }
     }
     return m;
 }
@@ -680,7 +680,20 @@ fn step() -> i32 {
             // whole or not at all; it dies at the end of the epoch
             let pc = pt;
             let len = tlen(pc);
-            if (has(F_ARMOR) && len > 0u && n >= len && (flags(pc) & FL_ARMOR) != 0u && shield_ok(pc, true)) {
+            // shielding.armor_shared: a bonded neighbour's armour (as of the
+            // sub-step's start) shields the victim too
+            var guarded = false;
+            if (has(F_ARMOR_SHARED)) {
+                for (var d = 0u; d < 6u; d = d + 1u) {
+                    if ((bonds(pc) & (1u << d)) != 0u) {
+                        let x = nbr[pc * 6u + d];
+                        if (x != NONE && (snap[x] & FL_ARMOR) != 0u) { guarded = true; }
+                    }
+                }
+            }
+            if (guarded) {
+                // the attack fails; the attacker has paid
+            } else if (has(F_ARMOR) && len > 0u && n >= len && (flags(pc) & FL_ARMOR) != 0u && shield_ok(pc, true)) {
                 // shielding.armor: the attack only strips the armour
                 hdr[pc * HDR + H_FLAGS] = hdr[pc * HDR + H_FLAGS] & ~FL_ARMOR;
             } else if (len > 0u && n >= len && shield_ok(pc, true)) {
@@ -1011,7 +1024,7 @@ fn step() -> i32 {
     }
     case 0x7Du: { // IN (tasks), else a filler
         if (has(F_TASKS)) {
-            let v = i32(philox(P[P_SEED_LO], P[P_SEED_HI], vec4<u32>(canon_id, g_epoch, (PHASE_EXEC << 24u) | 1u, io_n)).x & 0xFFu);
+            let v = w16(i32(philox(P[P_SEED_LO], P[P_SEED_HI], vec4<u32>(canon_id, g_epoch, (PHASE_EXEC << 24u) | 1u, io_n)).x & 0xFFFFu));
             io_n = io_n + 1u;
             io_a = io_b;
             io_b = v;
@@ -1026,7 +1039,7 @@ fn step() -> i32 {
                 if ((m & (1u << k)) != 0u) {
                     tasks_done = tasks_done | (1u << k);
                     // new energy, booked like catalysis through the site's reaction counter
-                    let gain = P[P_TASK_REWARD] << (TASK_LEVEL[k] - 1u);
+                    let gain = P[P_TASK_GAIN + TASK_LEVEL[k] - 1u];
                     g_e = g_e + gain;
                     site[me * SITE + S_RXN] = site[me * SITE + S_RXN] + gain;
                     bonus = bonus + (P[P_TASK_STEPS] << (TASK_LEVEL[k] - 1u));

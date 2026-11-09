@@ -51,6 +51,7 @@ pub mod pi {
     pub const TASK_REWARD: usize = 40;
     pub const COLONY_GENS: usize = 41;
     pub const TASK_STEPS: usize = 42;
+    pub const TASK_GAIN: usize = 43; // 4 words
     pub const COSTS: usize = 64;
     pub const PWRITE: usize = 320;
     pub const CAT: usize = 384;
@@ -83,6 +84,7 @@ pub mod flag {
     pub const GESTATION: u32 = 1048576;
     pub const TASKS: u32 = 1 << 21;
     pub const ARMOR: u32 = 1 << 22;
+    pub const ARMOR_SHARED: u32 = 1 << 23;
 }
 
 /// Static (per-config) part of the parameter buffer. EPOCH, MIRRORED, COLOR
@@ -125,6 +127,7 @@ pub fn param_words(p: &Params) -> Vec<u32> {
         (p.gestation, flag::GESTATION),
         (p.tasks_on, flag::TASKS),
         (p.armor, flag::ARMOR),
+        (p.armor_shared, flag::ARMOR_SHARED),
     ] {
         if on {
             f |= b;
@@ -153,6 +156,7 @@ pub fn param_words(p: &Params) -> Vec<u32> {
     w[pi::TASK_REWARD] = p.task_reward;
     w[pi::COLONY_GENS] = p.colony_gens;
     w[pi::TASK_STEPS] = p.task_steps;
+    w[pi::TASK_GAIN..pi::TASK_GAIN + 4].copy_from_slice(&p.task_gain);
     w[pi::SIG_EMIT] = p.sig_emit;
     let ncat = p.cat.len().min(pi::MAX_CAT);
     w[pi::NCAT] = if p.chem_on { ncat as u32 } else { 0 };
@@ -275,6 +279,7 @@ pub fn constants() -> String {
         ("P_TASK_REWARD", pi::TASK_REWARD),
         ("P_COLONY_GENS", pi::COLONY_GENS),
         ("P_TASK_STEPS", pi::TASK_STEPS),
+        ("P_TASK_GAIN", pi::TASK_GAIN),
         ("P_COSTS", pi::COSTS),
         ("P_PWRITE", pi::PWRITE),
         ("P_CAT", pi::CAT),
@@ -306,6 +311,7 @@ pub fn constants() -> String {
         ("F_GESTATION", flag::GESTATION),
         ("F_TASKS", flag::TASKS),
         ("F_ARMOR", flag::ARMOR),
+        ("F_ARMOR_SHARED", flag::ARMOR_SHARED),
     ] {
         s += &format!("const {n}: u32 = {v}u;\n");
     }

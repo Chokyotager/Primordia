@@ -246,7 +246,7 @@ fn reproduction_reduces_absorption_for_the_rest_period() {
 #[test]
 fn new_options_keep_old_hashes_and_snapshots_keep_contexts() {
     let base = Config::preset("primordia-2d-sun").unwrap().to_toml();
-    for key in ["resume", "protect", "construct_window", "copy_rest", "copy_absorb", "private", "max_age_spread", "predation", "parent_only", "gestation", "lineage_every", "armor", "colony_generations", "season_band", "tasks"] {
+    for key in ["resume", "protect", "construct_window", "copy_rest", "copy_absorb", "private", "max_age_spread", "predation", "parent_only", "gestation", "lineage_every", "armor", "colony_generations", "season_band", "tasks", "armor_shared", "ladder"] {
         assert!(!base.contains(key), "{key} serialized at its default");
     }
     let mut c = cfg();
@@ -574,14 +574,15 @@ fn newborns_do_not_run_during_gestation() {
 #[test]
 fn task_functions_match_their_definitions() {
     use primordia_core::exec::task_matches;
-    let (a, b) = (0b1100_1010, 0b1010_0110);
+    let (a, b) = (0x5C3A, 0x3A96);
     for (x, want) in [
-        (!b & 0xFF, 1), (a & b, 2), ((a + b) & 0xFF, 4), ((a - b) & 0xFF, 8), ((b - a) & 0xFF, 8),
-        (a | b, 16), (!(a & b) & 0xFF, 32), (a ^ b, 64), (!(a | b) & 0xFF, 128),
+        (!b & 0xFFFF, 1), (a & b, 2), ((a + b) & 0xFFFF, 4), ((a - b) & 0xFFFF, 8), ((b - a) & 0xFFFF, 8),
+        (a | b, 16), (!(a & b) & 0xFFFF, 32), (a ^ b, 64), (!(a | b) & 0xFFFF, 128),
     ] {
         assert_eq!(task_matches(x, a, b, 2) & want, want, "x {x:#x}");
     }
     assert_eq!(task_matches(a, a, b, 2), 0, "echoing an input earns nothing");
+    assert_eq!(task_matches((a + b) - 0x10000, a, b, 2) & 4, 4, "a 16-bit stack value matches modulo 2^16");
     assert_eq!(task_matches(a & b, a, b, 1), 0, "binary tasks need two inputs");
 }
 
@@ -675,4 +676,48 @@ fn the_light_band_travels() {
     assert_eq!(peak(&r0), 0);
     assert!((peak(&r25) as i64 - 8).abs() <= 1, "a quarter season later the peak is a quarter of the way: {}", peak(&r25));
     assert!(r0[15] < flat[0] / 4, "the far side is dim");
+}
+
+/// shielding.armor_shared: an unarmoured cell bonded to an armoured one
+/// cannot be eaten whole; without the bond (or the option) it can.
+#[test]
+fn colonies_share_their_armour() {
+    for (shared, bonded, eaten) in [(true, true, false), (true, false, true), (false, true, true)] {
+        let mut c = cfg();
+        c.shielding.private = true;
+        c.shielding.predation = true;
+        c.shielding.armor = true;
+        c.shielding.armor_shared = shared;
+        let p = Params::new(&c);
+        let mut s = State::init(&c, &p);
+        s.epoch = 1000;
+        let a = p.geom.index([4, 4, 0]);
+        put(&mut s, &p, a, &[0x5F, op::DIGEST, op::HALT], 3);
+        let b = facing_cell(&s, &p, a);
+        put(&mut s, &p, b, &[0x20, 0x22, 0x24, 0x26], 4);
+        // b's guard: the cell beyond b, armoured
+        let d = p.orient.f[s.orient(a) as usize];
+        let g = exec::nb(&s, &p, b, d).unwrap();
+        put(&mut s, &p, g, &[0x20, 0x22], 2);
+        *s.hm(g, H_FLAGS) |= FL_ARMOR;
+        if bonded {
+            *s.hm(b, H_FLAGS) |= 1 << (BOND_SHIFT + d);
+            *s.hm(g, H_FLAGS) |= 1 << (BOND_SHIFT + (d ^ 1));
+        }
+        slice(&mut s, &p, a, 1000);
+        assert_eq!(nonzero(&s, b) == 0, eaten, "shared {shared} bonded {bonded}");
+    }
+}
+
+/// tasks.ladder: reward x ladder^(level-1) per task level.
+#[test]
+fn the_task_ladder_scales_rewards() {
+    let mut c = cfg();
+    c.tasks.enabled = true;
+    c.tasks.reward = 10;
+    assert_eq!(Params::new(&c).task_gain, [10, 20, 40, 80]);
+    c.tasks.ladder = 4;
+    assert_eq!(Params::new(&c).task_gain, [10, 40, 160, 640]);
+    c.tasks.reward = 1 << 20;
+    assert!(c.validate().is_err(), "reward x ladder^3 is bounded");
 }

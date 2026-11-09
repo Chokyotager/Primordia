@@ -203,10 +203,13 @@ pub struct Params {
     /// shielding.gestation: no execution within construct_window of birth.
     pub gestation: bool,
     pub armor: bool,
+    pub armor_shared: bool,
     pub colony_gens: u32,
     pub tasks_on: bool,
     pub task_reward: u32,
     pub task_steps: u32,
+    /// Energy reward per task level 1..=4: reward x ladder^(level-1).
+    pub task_gain: [u32; 4],
     pub season_band: f64,
     pub construct_window: u32,
     /// energy.copy_rest / copy_absorb: after a reproductive act (a write into
@@ -419,10 +422,12 @@ impl Params {
             parent_only: c.shielding.private && c.shielding.parent_only,
             gestation: c.shielding.gestation,
             armor: c.shielding.armor,
+            armor_shared: c.shielding.armor && c.shielding.armor_shared,
             colony_gens: if c.bonds.enabled { c.bonds.colony_generations } else { 0 },
             tasks_on: c.tasks.enabled,
             task_reward: c.tasks.reward,
             task_steps: c.tasks.steps,
+            task_gain: [0, 1, 2, 3].map(|l| c.tasks.reward.saturating_mul(c.tasks.ladder.pow(l))),
             season_band: if c.energy.sun.season_period > 0 { c.energy.sun.season_band } else { 0.0 },
             construct_window: c.bonds.construct_window,
             copy_rest: if energy_on { c.energy.copy_rest } else { 0 },

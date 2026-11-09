@@ -79,16 +79,19 @@ struct Cpu<'a> {
     bonus: u32,
 }
 
-/// tasks: (level, matches) of each task for output `x` and inputs `a`, `b`
-/// (8-bit; b is the latest input). Shared with exec.wgsl.
+/// tasks: matching task bits for output `x` and inputs `a`, `b` (16-bit, the
+/// stack's width, so a guess matches ~1 time in 8,000; with 8-bit values a
+/// random output matched some task 3% of the time and guessing paid; b is the
+/// latest input). Shared with exec.wgsl.
 pub fn task_matches(x: i32, a: i32, b: i32, n: u32) -> u32 {
-    let (x, a, b) = (x & 0xFF, a & 0xFF, b & 0xFF);
+    const M: i32 = 0xFFFF;
+    let (x, a, b) = (x & M, a & M, b & M);
     let mut m = 0;
-    if n >= 1 && x == !b & 0xFF {
+    if n >= 1 && x == !b & M {
         m |= 1; // NOT
     }
     if n >= 2 && x != a && x != b {
-        let t = [a & b, (a + b) & 0xFF, (a - b) & 0xFF, (b - a) & 0xFF, a | b, !(a & b) & 0xFF, a ^ b, !(a | b) & 0xFF];
+        let t = [a & b, (a + b) & M, (a - b) & M, (b - a) & M, a | b, !(a & b) & M, a ^ b, !(a | b) & M];
         let bit = [2, 4, 8, 8, 16, 32, 64, 128];
         for k in 0..8 {
             if x == t[k] {
@@ -663,7 +666,15 @@ impl<'a> Cpu<'a> {
                     // shielding.predation: an established (private) cell is
                     // eaten whole or not at all; it dies at the end of the epoch
                     let len = st.len(pc);
-                    if p.armor && len > 0 && n >= len && st.flags(pc) & FL_ARMOR != 0 && self.shield_ok(st, pc, true) {
+                    // shielding.armor_shared: a bonded neighbour's armour (as of
+                    // the sub-step's start) shields the victim too
+                    let guarded = p.armor_shared && (0..6).any(|d| st.bonds(pc) & (1 << d) != 0 && {
+                        let x = p.nbr[pc * 6 + d];
+                        x != NONE && self.snap[x as usize] & FL_ARMOR != 0
+                    });
+                    if guarded {
+                        // the attack fails; the attacker has paid
+                    } else if p.armor && len > 0 && n >= len && st.flags(pc) & FL_ARMOR != 0 && self.shield_ok(st, pc, true) {
                         // shielding.armor: the attack only strips the armour
                         st.hdr[pc * HDR + H_FLAGS] &= !FL_ARMOR;
                     } else if len > 0 && n >= len && self.shield_ok(st, pc, true) {
@@ -949,8 +960,9 @@ impl<'a> Cpu<'a> {
             }
             op::HALT => return Flow::End,
             0x7D if p.tasks_on => {
-                // IN: an 8-bit input, keyed by cell, epoch and input count
-                let v = (self.rng.u32(self.canon, 1, self.io_n) & 0xFF) as i32;
+                // IN: a 16-bit input (as the stack holds it), keyed by cell,
+                // epoch and input count
+                let v = w16((self.rng.u32(self.canon, 1, self.io_n) & 0xFFFF) as i32);
                 self.io_n += 1;
                 self.io_a = self.io_b;
                 self.io_b = v;
@@ -964,7 +976,7 @@ impl<'a> Cpu<'a> {
                 for k in 0..8 {
                     if m & (1 << k) != 0 {
                         self.tasks_done |= 1 << k;
-                        let gain = p.task_reward << (TASK_LEVEL[k] - 1);
+                        let gain = p.task_gain[TASK_LEVEL[k] as usize - 1];
                         st.hdr[me * HDR + H_E] = st.hdr[me * HDR + H_E].wrapping_add(gain);
                         st.site[me * SITE + S_RXN] = st.site[me * SITE + S_RXN].wrapping_add(gain);
                         self.bonus += p.task_steps << (TASK_LEVEL[k] - 1);
