@@ -357,6 +357,7 @@ pub struct ShieldCfg {
 fn is_false(v: &bool) -> bool { !*v }
 fn is_zero_u32(v: &u32) -> bool { *v == 0 }
 fn is_one(v: &f64) -> bool { *v == 1.0 }
+fn is_one_u32(v: &u32) -> bool { *v == 1 }
 fn is_zero_f64(v: &f64) -> bool { *v == 0.0 }
 fn is_default_window(v: &u32) -> bool { *v == 256 }
 
@@ -439,6 +440,11 @@ pub struct TelemetryCfg {
     pub ecology_every: u64,
     /// Cluster persistence tracking (bodies and kin clusters across nights).
     pub cluster_every: u64,
+    /// lineage.parquet keeps one birth in this many (chosen by the newborn's
+    /// lineage ID, so deterministic); 0 = no birth log, 1 = every birth.
+    /// Daily birth counts use every birth regardless.
+    #[serde(skip_serializing_if = "is_one_u32")]
+    pub lineage_every: u32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -678,6 +684,7 @@ impl Default for TelemetryCfg {
             census_every: 1000,
             ecology_every: 100,
             cluster_every: 250,
+            lineage_every: 1,
         }
     }
 }

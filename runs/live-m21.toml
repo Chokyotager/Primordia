@@ -117,4 +117,5 @@ activation = 0.6
 rate = 5e-8
 
 [telemetry]
+lineage_every = 100  # birth log: one birth in 100 (all births: ~70 GB/day at 501^2)
 snapshot_every = 11000  # alternates midday / dawn

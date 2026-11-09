@@ -330,9 +330,13 @@ impl Recorder {
 
     pub fn record_births(&mut self, births: &[primordia_core::world::Birth]) -> Result<()> {
         anyhow::ensure!(births.iter().all(|b| b[0] as u64 >= self.births_closed_through), "birth arrived after its accounting interval was closed");
+        let every = self.cfg.lineage_every;
         for b in births {
             *self.births_by_epoch.entry(b[0] as u64).or_default() += 1;
-            self.lineage.push(vec![V::I(b[0] as i64), V::I(b[1] as i64), V::I(b[2] as i64), V::I(b[3] as i64), V::I(b[4] as i64), V::I(b[5] as i64)])?;
+            // telemetry.lineage_every: keep one birth in `every`, by lineage ID
+            if every > 0 && (b[2] >> 1) % every == 0 {
+                self.lineage.push(vec![V::I(b[0] as i64), V::I(b[1] as i64), V::I(b[2] as i64), V::I(b[3] as i64), V::I(b[4] as i64), V::I(b[5] as i64)])?;
+            }
         }
         Ok(())
     }

@@ -109,3 +109,25 @@ fn empty_newborns_are_not_a_role() {
     let bt = primordia_telemetry::body_types(&st, &p, &bodies);
     assert_eq!((bt.bodies, bt.types_max, bt.roles_max), (1, 1, 1));
 }
+
+/// telemetry.lineage_every: the birth log keeps one birth in N (by lineage
+/// ID), 0 none; daily birth counts still see every birth.
+#[test]
+fn the_birth_log_can_be_thinned() {
+    use parquet::file::reader::{FileReader, SerializedFileReader};
+    for (every, want) in [(1u32, 8i64), (4, 2), (0, 0)] {
+        let mut c = cfg(); c.telemetry.lineage_every = every;
+        let sim = Sim::new(c.clone(), Box::new(CpuExec)).unwrap();
+        let dir = std::env::temp_dir().join(format!("primordia-{}-lineage-{every}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut rec = Recorder::new(Some(&dir), &sim).unwrap();
+        let births: Vec<[u32; 6]> = (0..8u32).map(|i| [1, 1, 2 * i + 1, i, 1, 0]).collect(); // lineage IDs 1, 3, ..., 15
+        rec.record_births(&births).unwrap();
+        let mut st = sim.st.clone(); st.epoch = 4; rec.record_state(&st, &sim.p, &c).unwrap();
+        assert_eq!(rec.summary.births_last_day, 8);
+        rec.finish().unwrap();
+        let rows = SerializedFileReader::new(std::fs::File::open(dir.join("lineage.parquet")).unwrap()).unwrap().metadata().file_metadata().num_rows();
+        assert_eq!(rows, want, "lineage_every {every}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}

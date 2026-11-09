@@ -285,7 +285,13 @@ at M20's damage HOE eroded 2.7 → 2.3 while programs grew 22 → 26 bytes (the 
 75); with ambient damage ÷10 again it held at ~3.0 (~30% unique tapes, ~50% related neighbours, programs
 flat at ~21 bytes); cutting copy errors as well froze the world into clones (HOE 3.6, 7% unique).
 High HOE trades against evolution. `runs/live-m21.toml` is M20 with `birth_bond` 1.0 and ambient damage
-÷10 (background and radiation 10⁻⁷). (Without NVIDIA's Vulkan driver, `wgpu` silently
+÷10 (background and radiation 10⁻⁷). M21 ran 1.21M epochs (606 days). For ~500 days it kept the ancestor's
+design (HOE 2.9 → 2.1); then a predator evolved and spread to ~37% of cells:
+`TUMBLE PLEN DIGEST PUSH 22 ALLOC LEN CPY H0+ H1+ DUP CAT JMP -6`. It sizes its bite to its neighbour's
+tape with `PLEN` (exactly what whole-cell predation requires), raises a child in the freed site, and runs
+catalysis inside its copy loop. The other dominant genomes are 8-byte copiers padded with `NOP`s (68% of
+all tape bytes were padding, so mean tape length overstates program size). With every birth logged,
+`lineage.parquet` grew ~70 GB/day; `telemetry.lineage_every` now thins it (live configs: 1 in 100). (Without NVIDIA's Vulkan driver, `wgpu` silently
 falls back to llvmpipe, Mesa's CPU renderer: identical results, ~8 epochs/s. The run manifest's
 `gpu_adapter` shows which device ran.)
 

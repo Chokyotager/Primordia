@@ -246,7 +246,7 @@ fn reproduction_reduces_absorption_for_the_rest_period() {
 #[test]
 fn new_options_keep_old_hashes_and_snapshots_keep_contexts() {
     let base = Config::preset("primordia-2d-sun").unwrap().to_toml();
-    for key in ["resume", "protect", "construct_window", "copy_rest", "copy_absorb", "private", "max_age_spread", "predation", "parent_only", "gestation"] {
+    for key in ["resume", "protect", "construct_window", "copy_rest", "copy_absorb", "private", "max_age_spread", "predation", "parent_only", "gestation", "lineage_every"] {
         assert!(!base.contains(key), "{key} serialized at its default");
     }
     let mut c = cfg();
