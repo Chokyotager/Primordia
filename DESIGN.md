@@ -279,7 +279,13 @@ did: at M19's rate a 35-byte genome took ~17 hits per lifetime. Dividing it by 1
 day 20, with ~50% unique tapes and ~40% related neighbours (copy errors unchanged; ÷10 copy errors as
 well gave 2.7 / 3.0). Over 60 days HOE then drifts down (3.4 → 1.5) as lineages diversify, while programs
 lengthen (20 → 28 bytes) and self-copiers triple. `runs/live-m20.toml` is M19 with parent-only
-construction, gestation, a 256-epoch window and ambient damage ÷10. (Without NVIDIA's Vulkan driver, `wgpu` silently
+construction, gestation, a 256-epoch window and ambient damage ÷10. Follow-up sweeps (M20 rules): bonding every child to its parent
+(`birth_bond` 1.0) gave dozens of 10+-cell colonies (M20 rules: 1–2) and slightly higher HOE. Over 40 days
+at M20's damage HOE eroded 2.7 → 2.3 while programs grew 22 → 26 bytes (the live M20 fell to 1.4 by day
+75); with ambient damage ÷10 again it held at ~3.0 (~30% unique tapes, ~50% related neighbours, programs
+flat at ~21 bytes); cutting copy errors as well froze the world into clones (HOE 3.6, 7% unique).
+High HOE trades against evolution. `runs/live-m21.toml` is M20 with `birth_bond` 1.0 and ambient damage
+÷10 (background and radiation 10⁻⁷). (Without NVIDIA's Vulkan driver, `wgpu` silently
 falls back to llvmpipe, Mesa's CPU renderer: identical results, ~8 epochs/s. The run manifest's
 `gpu_adapter` shows which device ran.)
 
